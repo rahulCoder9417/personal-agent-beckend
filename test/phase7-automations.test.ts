@@ -1,0 +1,404 @@
+import { randomUUID } from 'node:crypto';
+import type { Worker } from 'bullmq';
+import { eq } from 'drizzle-orm';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { DeliverEventType, DeliverKind } from '../proto-gen/vm/v1/vm_pb.ts';
+import { automations } from '../src/modules/automations/schema.ts';
+import {
+  createAutomation,
+  reregisterAll,
+  setMinIntervalMs,
+} from '../src/modules/automations/automations.ts';
+import { connections } from '../src/modules/integrations/tables.ts';
+import { closeQueues } from '../src/modules/events/queues.ts';
+import { setTurnHooks } from '../src/modules/orchestrator/turn.ts';
+import { setVmClient, type VmClient } from '../src/modules/orchestrator/vm.ts';
+import { config } from '../src/shared/config.ts';
+import { db } from '../src/shared/db/client.ts';
+import { newId } from '../src/shared/ids.ts';
+import { redis } from '../src/shared/redis.ts';
+import { wireModules } from '../src/wiring.ts';
+import { processors } from '../src/worker/processors.ts';
+import { startWorkers } from '../src/worker/runner.ts';
+import {
+  installFakeComposio,
+  installFakeTelegram,
+  installFakeVm,
+  mcpCall,
+  telegramUpdate,
+  type SentTelegram,
+} from './fakes.ts';
+import { call, createUser, expectContract, waitFor } from './helpers.ts';
+
+let workers: Worker[] = [];
+let tg: { sent: SentTelegram[] };
+let vmFake: ReturnType<typeof installFakeVm>;
+
+const start = () => {
+  workers = startWorkers(processors(), { retryDelaysMs: [50, 50, 50, 50] });
+};
+const stop = async () => {
+  await Promise.all(workers.map((w) => w.close()));
+  workers = [];
+};
+/** "Redis wipe": delete every BullMQ key of this test file's prefix. */
+async function wipeQueues() {
+  const keys = await redis().keys(`${config().QUEUE_PREFIX}:*`);
+  if (keys.length) await redis().del(...keys);
+}
+
+beforeAll(() => {
+  wireModules();
+  setMinIntervalMs(1000);
+  start();
+});
+afterAll(async () => {
+  await stop();
+  await closeQueues();
+});
+beforeEach(async () => {
+  tg = installFakeTelegram();
+  await installFakeComposio();
+  setTurnHooks({ hasCredits: async () => true });
+  // The fake agent announces what it was asked to do.
+  vmFake = installFakeVm(async (d, mcp) => {
+    const tag =
+      d.kind === DeliverKind.AUTOMATION
+        ? 'AUTO'
+        : d.kind === DeliverKind.APP_EVENT
+          ? 'EVENT'
+          : 'MSG';
+    await mcp('send_message', { text: `${tag}: ${d.text}`, session_key: d.sessionKey });
+  });
+});
+
+const chat = () => Math.floor(Math.random() * 1e9);
+const tgPost = (update: unknown) =>
+  call('/webhooks/telegram', {
+    method: 'POST',
+    body: update,
+    headers: { 'x-telegram-bot-api-secret-token': 'tg-secret' },
+  });
+
+async function linkedUser(plan: 'free' | 'pro' | 'max' = 'pro') {
+  const user = await createUser({ plan } as never);
+  const chatId = chat();
+  const lc = (await (
+    await call('/v1/channels/link-codes', {
+      method: 'POST',
+      token: user.token,
+      body: { channel: 'telegram' },
+    })
+  ).json()) as { code: string };
+  await tgPost(telegramUpdate(chatId, lc.code));
+  await waitFor(async () =>
+    tg.sent.find((m) => m.chatId === String(chatId) && m.text.startsWith('✅')),
+  );
+  return { ...user, chatId, sessionKey: `telegram:${chatId}` };
+}
+
+const fired = (title: string) =>
+  tg.sent.filter((m) => m.text.startsWith('AUTO:') && m.text.includes(title));
+
+describe('Phase 7: automations and reminders', () => {
+  it('the agent schedules a reminder with a tool and it fires once, to the right chat', async () => {
+    const u = await linkedUser();
+    vmFake.state.agent = async (d, mcp) => {
+      if (d.kind === DeliverKind.MESSAGE) {
+        const r = await mcp('schedule_reminder', {
+          text: 'call mom',
+          run_at: new Date(Date.now() + 1500).toISOString(),
+          session_key: d.sessionKey,
+        });
+        expect(r.isError).toBeFalsy();
+        await mcp('send_message', { text: 'OK, I will remind you.', session_key: d.sessionKey });
+      } else {
+        await mcp('send_message', { text: `AUTO: ${d.text}`, session_key: d.sessionKey });
+      }
+    };
+    await tgPost(telegramUpdate(u.chatId, 'remind me to call mom in a moment'));
+    await waitFor(async () => tg.sent.find((m) => m.text === 'OK, I will remind you.'));
+    const reminder = await waitFor(async () => fired('call mom')[0], 15_000);
+    expect(reminder.chatId).toBe(String(u.chatId));
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(fired('call mom')).toHaveLength(1);
+    const [row] = await db().select().from(automations).where(eq(automations.userId, u.id));
+    expect(row!.completedAt).not.toBeNull();
+  });
+
+  it('a once automation fires across a worker restart and a Redis wipe', async () => {
+    const u = await linkedUser();
+    await createAutomation({
+      userId: u.id,
+      title: 'restart-once',
+      instruction: 'say hi',
+      sessionKey: u.sessionKey,
+      runAt: new Date(Date.now() + 2500),
+    });
+    await stop();
+    await wipeQueues();
+    start();
+    await reregisterAll();
+    await waitFor(async () => fired('restart-once')[0], 15_000);
+    await new Promise((r) => setTimeout(r, 800));
+    expect(fired('restart-once')).toHaveLength(1);
+  });
+
+  it('a repeating automation keeps firing across a Redis wipe, and stops when deleted', async () => {
+    const u = await linkedUser();
+    const a = await createAutomation({
+      userId: u.id,
+      title: 'every-2s',
+      instruction: 'tick',
+      sessionKey: u.sessionKey,
+      cron: '*/2 * * * * *',
+      timezone: 'Asia/Kolkata',
+    });
+    await waitFor(async () => fired('every-2s').length >= 2, 15_000);
+    await stop();
+    await wipeQueues();
+    const before = fired('every-2s').length;
+    start();
+    await reregisterAll();
+    await waitFor(async () => fired('every-2s').length >= before + 2, 15_000);
+    await expectContract(
+      'deleteAutomation',
+      await call(`/v1/automations/${a.id}`, { method: 'DELETE', token: u.token }),
+      204,
+    );
+    await new Promise((r) => setTimeout(r, 2500));
+    const after = fired('every-2s').length;
+    await new Promise((r) => setTimeout(r, 3000));
+    expect(fired('every-2s').length).toBe(after);
+  });
+
+  it('an app-event automation fires from a Composio trigger, only for its owner', async () => {
+    const u = await linkedUser();
+    await db()
+      .insert(connections)
+      .values({
+        id: newId('con'),
+        userId: u.id,
+        app: 'gmail',
+        composioAccountId: `ca_${randomUUID()}`,
+        status: 'active',
+      });
+    vmFake.state.agent = async (d, mcp) => {
+      if (d.kind === DeliverKind.MESSAGE) {
+        const r = await mcp('create_automation', {
+          title: 'boss mail',
+          instruction: 'Summarise the email from my boss',
+          trigger: { app: 'gmail', event: 'GMAIL_NEW_GMAIL_MESSAGE' },
+          session_key: d.sessionKey,
+        });
+        expect(r.isError).toBeFalsy();
+      } else if (d.kind === DeliverKind.APP_EVENT) {
+        await mcp('send_message', { text: `EVENT: ${d.text}`, session_key: d.sessionKey });
+      }
+    };
+    await tgPost(telegramUpdate(u.chatId, 'when my boss emails me, summarise it'));
+    const [a] = await waitFor(async () => {
+      const rows = await db().select().from(automations).where(eq(automations.userId, u.id));
+      return rows.length ? rows : undefined;
+    });
+    expect(a!.kind).toBe('event');
+    const webhook = (userId: string) => ({
+      kind: 'trigger',
+      event: {
+        triggerSlug: 'GMAIL_NEW_GMAIL_MESSAGE',
+        toolkit: 'gmail',
+        userId,
+        connectedAccountId: null,
+        triggerId: a!.triggerRef,
+        payload: { from: 'boss@acme.com', subject: 'Q3' },
+      },
+    });
+    // A trigger payload claiming another user is ignored.
+    await call('/webhooks/composio', {
+      method: 'POST',
+      body: webhook('usr_someone_else'),
+      headers: {
+        'webhook-signature': 'valid',
+        'webhook-id': `w-${randomUUID()}`,
+        'webhook-timestamp': '1',
+      },
+    });
+    await call('/webhooks/composio', {
+      method: 'POST',
+      body: webhook(u.id),
+      headers: {
+        'webhook-signature': 'valid',
+        'webhook-id': `w-${randomUUID()}`,
+        'webhook-timestamp': '1',
+      },
+    });
+    const ev = await waitFor(async () => tg.sent.find((m) => m.text.startsWith('EVENT:')));
+    expect(ev.text).toContain('boss@acme.com');
+    await new Promise((r) => setTimeout(r, 500));
+    expect(tg.sent.filter((m) => m.text.startsWith('EVENT:'))).toHaveLength(1);
+  });
+
+  it('pauses at 0 credits', async () => {
+    const u = await linkedUser();
+    await createAutomation({
+      userId: u.id,
+      title: 'broke',
+      instruction: 'x',
+      sessionKey: u.sessionKey,
+      runAt: new Date(Date.now() + 500),
+    });
+    setTurnHooks({ hasCredits: async () => false });
+    const row = await waitFor(async () => {
+      const [r] = await db().select().from(automations).where(eq(automations.userId, u.id));
+      return r?.pausedReason === 'out_of_credits' ? r : undefined;
+    });
+    expect(row.enabled).toBe(false);
+    expect(fired('broke')).toHaveLength(0);
+    await waitFor(async () =>
+      tg.sent.find((m) => m.chatId === String(u.chatId) && m.text.includes('out of credits')),
+    );
+  });
+
+  it('pauses after 3 failures in a row', async () => {
+    const u = await linkedUser();
+    setVmClient(makeFailingVm());
+    const a = await createAutomation({
+      userId: u.id,
+      title: 'flaky',
+      instruction: 'x',
+      sessionKey: u.sessionKey,
+      cron: '*/2 * * * * *',
+    });
+    const row = await waitFor(async () => {
+      const [r] = await db().select().from(automations).where(eq(automations.id, a.id));
+      return r?.pausedReason === 'failures' ? r : undefined;
+    }, 20_000);
+    expect(row.failCount).toBeGreaterThanOrEqual(3);
+    await waitFor(async () =>
+      tg.sent.find((m) => m.text.includes('paused the automation "flaky"')),
+    );
+  });
+
+  it('enforces plan limits, the 15-minute minimum and valid timezones', async () => {
+    const u = await linkedUser('free');
+    for (let i = 0; i < 3; i++) {
+      await createAutomation({
+        userId: u.id,
+        title: `r${i}`,
+        instruction: 'x',
+        sessionKey: u.sessionKey,
+        runAt: new Date(Date.now() + 3600_000),
+      });
+    }
+    await expect(
+      createAutomation({
+        userId: u.id,
+        title: 'r4',
+        instruction: 'x',
+        sessionKey: u.sessionKey,
+        runAt: new Date(Date.now() + 3600_000),
+      }),
+    ).rejects.toThrow(/allows 3/);
+    setMinIntervalMs(15 * 60 * 1000);
+    try {
+      const p = await linkedUser('pro');
+      await expect(
+        createAutomation({
+          userId: p.id,
+          title: 'fast',
+          instruction: 'x',
+          sessionKey: p.sessionKey,
+          cron: '*/5 * * * *',
+        }),
+      ).rejects.toThrow(/15 minutes/);
+      await expect(
+        createAutomation({
+          userId: p.id,
+          title: 'tz',
+          instruction: 'x',
+          sessionKey: p.sessionKey,
+          cron: '0 9 * * 1',
+          timezone: 'Mars/Base',
+        }),
+      ).rejects.toThrow(/timezone/);
+      const ok = await createAutomation({
+        userId: p.id,
+        title: 'monday',
+        instruction: 'plan my week',
+        sessionKey: p.sessionKey,
+        cron: '0 9 * * 1',
+        timezone: 'Asia/Kolkata',
+      });
+      expect(ok.nextRunAt!.getUTCHours()).toBe(3);
+      expect(ok.nextRunAt!.getUTCMinutes()).toBe(30);
+
+      const list = await expectContract<{ items: Array<{ id: string; enabled: boolean }> }>(
+        'listAutomations',
+        await call('/v1/automations', { token: p.token }),
+        200,
+      );
+      expect(list.items.map((i) => i.id)).toContain(ok.id);
+      const paused = await expectContract<{ enabled: boolean; pausedReason: string }>(
+        'updateAutomation',
+        await call(`/v1/automations/${ok.id}`, {
+          method: 'PATCH',
+          token: p.token,
+          body: { enabled: false },
+        }),
+        200,
+      );
+      expect(paused).toMatchObject({ enabled: false, pausedReason: 'user' });
+      await expectContract(
+        'updateAutomation',
+        await call(`/v1/automations/${ok.id}`, {
+          method: 'PATCH',
+          token: u.token,
+          body: { enabled: true },
+        }),
+        404,
+      );
+      await expectContract(
+        'updateAutomation',
+        await call(`/v1/automations/${ok.id}`, { method: 'PATCH', token: p.token, body: {} }),
+        400,
+      );
+      // Tools see only the caller's automations.
+      const token =
+        vmFake.tokens.get(p.id) ??
+        (await (async () => {
+          await tgPost(telegramUpdate(p.chatId, 'hi'));
+          return waitFor(async () => vmFake.tokens.get(p.id));
+        })());
+      const mine = JSON.parse((await mcpCall(token, 'list_automations', {})).text) as Array<{
+        id: string;
+      }>;
+      expect(mine.map((m) => m.id)).toContain(ok.id);
+      const theirs = await mcpCall(token, 'cancel_automation', {
+        automation_id: (
+          await db().select().from(automations).where(eq(automations.userId, u.id))
+        )[0]!.id,
+      });
+      expect(theirs.isError).toBe(true);
+    } finally {
+      setMinIntervalMs(1000);
+    }
+  });
+});
+
+function makeFailingVm(): VmClient {
+  return {
+    async createSandbox() {
+      return { sandbox: {}, mcpTokenHash: `h-${randomUUID()}` };
+    },
+    async wakeSandbox() {
+      return { sandbox: {}, wasStopped: false };
+    },
+    async *deliver() {
+      yield { type: DeliverEventType.ACCEPTED, message: '', platformFault: false };
+      yield { type: DeliverEventType.ERROR, message: 'tool broke', platformFault: false };
+    },
+    async touch() {
+      return {};
+    },
+  } as unknown as VmClient;
+}

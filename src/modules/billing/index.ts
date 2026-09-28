@@ -7,3 +7,5 @@ export { planLimits, type PlanLimits, type PlanId } from './plans.ts';
 export { redeemCoupon, type RedeemResult } from './coupons.ts';
 export { reverseTurn, syncUsageForUser, type SyncResult } from './usage.ts';
 export { canUseModel } from './models.ts';
+export { getBalance, listBalanceGrants } from './credits.ts';
+export { CHAT_COUPON_PATTERN, redeemFromChat } from './chat.ts';

@@ -22,6 +22,13 @@
       "when": 1790592009658,
       "tag": "0002_phase4_apps_approvals",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790592343725,
+      "tag": "0003_phase7_automations",
+      "breakpoints": true
     }
   ]
 }

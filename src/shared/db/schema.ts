@@ -6,3 +6,4 @@ export * from '../../modules/channels/schema.ts';
 export * from '../../modules/events/schema.ts';
 export * from '../../modules/orchestrator/schema.ts';
 export * from '../../modules/integrations/tables.ts';
+export * from '../../modules/automations/schema.ts';

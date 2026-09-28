@@ -37,6 +37,7 @@
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "bullmq": "^6.3.9",
+    "cron-parser": "^5.10.1",
     "drizzle-orm": "^0.45.3",
     "hono": "^4.13.10",
     "ioredis": "^6.0.0",

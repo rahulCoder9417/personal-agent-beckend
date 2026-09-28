@@ -56,13 +56,21 @@ export async function ingestEvent(
   return { eventId: existing!.id, duplicate: true };
 }
 
+/** Plan → inbound priority (HLD 7.1: Max gets priority in the queue). Filled by wiring. */
+let priorityFor: (userId: string) => Promise<number | undefined> = async () => undefined;
+export function setInboundPriority(fn: (userId: string) => Promise<number | undefined>): void {
+  priorityFor = fn;
+}
+
 async function enqueueEvent(row: EventRow, jobData?: Record<string, unknown>): Promise<void> {
   if (!row.queue || !row.jobName) return;
+  const priority =
+    row.queue === 'inbound' && row.userId ? await priorityFor(row.userId) : undefined;
   await addJob(
     row.queue as QueueName,
     row.jobName,
     { ...jobData, eventId: row.id, userId: row.userId },
-    { jobId: row.id },
+    { jobId: row.id, ...(priority ? { priority } : {}) },
   );
   await db().update(events).set({ status: 'queued' }).where(eq(events.id, row.id));
 }

@@ -1,6 +1,7 @@
 // Composition root: connects modules through their exported hooks. Imported by api and worker.
 import { toBalance } from './api/billing-presenters.ts';
 import { markBlocked } from './modules/auth/links.ts';
+import { getActiveUser } from './modules/auth/users.ts';
 import {
   deleteUserAutomations,
   pauseAllForCredits,
@@ -21,12 +22,12 @@ import {
   reverseTurn,
   syncUsageForUser,
 } from './modules/billing/index.ts';
-import { queueOutbound } from './modules/channels/outbound.ts';
-import { setBlockedHandler } from './modules/channels/outbound.ts';
+import { queueOutbound, setBlockedHandler } from './modules/channels/outbound.ts';
 import { wireChannels } from './modules/channels/register.ts';
 import { publish } from './modules/channels/stream.ts';
 import { parseSessionKey } from './modules/channels/types.ts';
 import { activeConnections, deleteUserConnections } from './modules/integrations/apps.ts';
+import { setInboundPriority } from './modules/events/intake.ts';
 import { deleteUserMcpServers, sandboxMcpConfig } from './modules/integrations/mcp-servers.ts';
 import { handleApprovalReply } from './modules/orchestrator/approvals.ts';
 import { setLifecycleHooks } from './modules/orchestrator/lifecycle.ts';
@@ -88,6 +89,12 @@ export function wireModules(): void {
     await publishCredits(userId);
   });
   setAutomationLimit((plan) => planLimits(plan).automations);
+
+  // Max plan: priority in the inbound queue (lower number runs first; FIFO within a priority).
+  setInboundPriority(async (userId) => {
+    const plan = (await getActiveUser(userId))?.plan;
+    return plan === 'max' ? 1 : plan === 'pro' ? 2 : 3;
+  });
 
   // A blocked chat is marked; the agent is told to use the web app instead.
   setBlockedHandler(async (userId, sessionKey) => {

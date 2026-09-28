@@ -1,11 +1,43 @@
+import { Code, ConnectError } from '@connectrpc/connect';
 import type { Job } from 'bullmq';
+import { deleteUserLinks } from '../auth/links.ts';
+import { getActiveUser } from '../auth/users.ts';
+import { deleteUserChannelData } from '../channels/messages.ts';
+import { deleteSandboxRecord, ensureSandbox } from './sandbox.ts';
+import { vm } from './vm.ts';
 
-/** system/onboard-user: sign-up grant (Phase 5), LiteLLM key (Phase 5), sandbox (Phase 3). */
-export async function handleOnboardUser(_job: Job): Promise<unknown> {
+/** Extra onboarding/offboarding steps from other modules (billing: grant + LiteLLM key). */
+export interface LifecycleHooks {
+  onboard(userId: string): Promise<void>;
+  offboard(userId: string): Promise<void>;
+}
+
+let hooks: LifecycleHooks = { onboard: async () => {}, offboard: async () => {} };
+
+export function setLifecycleHooks(h: Partial<LifecycleHooks>): void {
+  hooks = { ...hooks, ...h };
+}
+
+/** system/onboard-user: sign-up grant + LiteLLM key (billing), then the sandbox. Safe to re-run. */
+export async function handleOnboardUser(job: Job): Promise<unknown> {
+  const { userId } = job.data as { userId: string };
+  if (!(await getActiveUser(userId))) return null;
+  await hooks.onboard(userId);
+  await ensureSandbox(userId);
   return null;
 }
 
-/** system/delete-user: delete sandbox + data, revoke LiteLLM key, remove links. */
-export async function handleDeleteUser(_job: Job): Promise<unknown> {
+/** system/delete-user: delete the container and data, revoke the LiteLLM key, remove links. */
+export async function handleDeleteUser(job: Job): Promise<unknown> {
+  const { userId } = job.data as { userId: string };
+  try {
+    await vm().deleteSandbox({ userId });
+  } catch (err) {
+    if (!(err instanceof ConnectError && err.code === Code.NotFound)) throw err;
+  }
+  await deleteSandboxRecord(userId);
+  await hooks.offboard(userId);
+  await deleteUserLinks(userId);
+  await deleteUserChannelData(userId);
   return null;
 }

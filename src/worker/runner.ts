@@ -5,12 +5,12 @@ import { acquireUserLock, releaseUserLock } from '../modules/orchestrator/lock.t
 import { config } from '../shared/config.ts';
 import { logger } from '../shared/logger.ts';
 import { createRedis } from '../shared/redis.ts';
+import { IGNORED } from './ignored.ts';
+
+export { IGNORED };
 
 export type JobHandler = (job: Job) => Promise<unknown>;
 export type Processors = Partial<Record<QueueName, Record<string, JobHandler>>>;
-
-/** Returned by a handler to mark its event "ignored" instead of "done". */
-export const IGNORED = Symbol('ignored');
 
 export interface RunnerOptions {
   concurrency?: Partial<Record<QueueName, number>>;

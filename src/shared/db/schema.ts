@@ -4,3 +4,4 @@ export * from '../../modules/admin/schema.ts';
 export * from '../../modules/auth/schema.ts';
 export * from '../../modules/channels/schema.ts';
 export * from '../../modules/events/schema.ts';
+export * from '../../modules/orchestrator/schema.ts';

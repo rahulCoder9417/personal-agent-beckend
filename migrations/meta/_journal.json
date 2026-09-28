@@ -8,6 +8,13 @@
       "when": 1790588994622,
       "tag": "0000_phase1_core",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1790591504480,
+      "tag": "0001_phase3_chat",
+      "breakpoints": true
     }
   ]
 }

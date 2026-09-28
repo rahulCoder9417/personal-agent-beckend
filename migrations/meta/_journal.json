@@ -36,6 +36,13 @@
       "when": 1790593850500,
       "tag": "0004_phase5_billing",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790604351138,
+      "tag": "0005_waitlist",
+      "breakpoints": true
     }
   ]
 }

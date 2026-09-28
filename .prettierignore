@@ -5,3 +5,4 @@ proto-gen
 docs
 openapi
 *.md
+src/api/openapi/schema.d.ts

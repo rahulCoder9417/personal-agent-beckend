@@ -1,4 +1,5 @@
 import js from '@eslint/js';
+import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
@@ -15,5 +16,6 @@ export default tseslint.config(
       'no-console': 'error',
     },
   },
+  { languageOptions: { globals: globals.node } },
   { files: ['scripts/**', 'test/**'], rules: { 'no-console': 'off' } },
 );

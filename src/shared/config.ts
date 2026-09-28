@@ -44,6 +44,10 @@ export const configSchema = z.object({
   LITELLM_CHEAP_MODEL: z.string().default('cheap'),
   /** Comma-separated model names allowed on paid plans (plus the cheap one). */
   LITELLM_PAID_MODELS: z.string().default('cheap,claude,gpt'),
+  /** The model name every container calls (vm-manager LITELLM_MODEL); a per-key alias. */
+  LITELLM_AGENT_MODEL: z.string().default('agent-default'),
+  /** What the agent model means on paid plans (Free: LITELLM_CHEAP_MODEL). */
+  LITELLM_PREMIUM_MODEL: z.string().default('claude'),
 
   TELEGRAM_BOT_TOKEN: optional,
   TELEGRAM_WEBHOOK_SECRET: optional,

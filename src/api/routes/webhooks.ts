@@ -6,6 +6,7 @@ import {
   type TelegramUpdate,
 } from '../../modules/channels/adapters/telegram.ts';
 import { ingestEvent, recordEventOnce } from '../../modules/events/intake.ts';
+import { composio } from '../../modules/integrations/composio.ts';
 import { route } from '../router.ts';
 
 // Every webhook: verify the signature on the raw body → save the event → add a job → 200.
@@ -53,6 +54,51 @@ export const webhookRoutes = [
       queue: 'inbound',
       jobName: 'process-message',
     });
+    return c.body(null, 200);
+  }),
+
+  route('webhookComposio', async (c, { rawBody }) => {
+    const webhookId = c.req.header('webhook-id') ?? '';
+    let verified: Awaited<ReturnType<ReturnType<typeof composio>['verifyWebhook']>>;
+    try {
+      verified = await composio().verifyWebhook({
+        rawBody,
+        signature: c.req.header('webhook-signature') ?? '',
+        webhookId,
+        webhookTimestamp: c.req.header('webhook-timestamp') ?? '',
+      });
+    } catch {
+      throw webhookUnauthorized();
+    }
+    if (!webhookId) throw webhookUnauthorized();
+    if (verified.kind === 'trigger') {
+      // App-event automations run like a normal message (HLD 0.4).
+      await ingestEvent({
+        source: 'composio',
+        externalId: webhookId,
+        type: `trigger:${verified.event.triggerSlug}`,
+        userId: verified.event.userId,
+        payload: verified.event as unknown as Record<string, unknown>,
+        queue: 'inbound',
+        jobName: 'composio-trigger',
+      });
+    } else if (verified.kind === 'connection') {
+      await ingestEvent({
+        source: 'composio',
+        externalId: webhookId,
+        type: 'connection',
+        payload: verified as unknown as Record<string, unknown>,
+        queue: 'system',
+        jobName: 'composio-event',
+      });
+    } else {
+      await recordEventOnce({
+        source: 'composio',
+        externalId: webhookId,
+        type: verified.type,
+        payload: verified,
+      });
+    }
     return c.body(null, 200);
   }),
 ];

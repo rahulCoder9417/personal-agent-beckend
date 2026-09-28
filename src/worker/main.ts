@@ -1,3 +1,4 @@
+import { registerBillingSchedules } from '../modules/billing/jobs.ts';
 import { requeuePendingEvents } from '../modules/events/intake.ts';
 import { closeQueues } from '../modules/events/queues.ts';
 import { closeDb } from '../shared/db/client.ts';
@@ -12,6 +13,8 @@ const log = logger();
 const workers = startWorkers(processors());
 // Redis lost: rebuild jobs from `events` (jobIds dedupe anything still queued).
 const requeued = await requeuePendingEvents();
+// Repeatable jobs: sync-usage every 5 min, expire-credits hourly.
+await registerBillingSchedules();
 log.info({ requeued, queues: workers.map((w) => w.name) }, 'worker started');
 
 async function shutdown() {

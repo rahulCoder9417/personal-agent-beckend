@@ -1,4 +1,4 @@
-import { index, jsonb, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 
 export type MediaRef = {
   id: string;
@@ -35,4 +35,19 @@ export const messages = pgTable(
     uniqueIndex().on(t.userId, t.clientMessageId),
     index().on(t.channel, t.externalId),
   ],
+);
+
+/** Files uploaded from the web app (and downloaded channel media). */
+export const attachments = pgTable(
+  'attachments',
+  {
+    id: text().primaryKey(),
+    userId: text().notNull(),
+    name: text().notNull(),
+    mimeType: text().notNull(),
+    sizeBytes: integer().notNull(),
+    path: text().notNull(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index().on(t.userId)],
 );

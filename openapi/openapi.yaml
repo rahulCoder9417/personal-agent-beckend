@@ -726,6 +726,7 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/LedgerEntry" }
                   nextCursor: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /v1/usage:
@@ -933,6 +934,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CreditBalance" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }

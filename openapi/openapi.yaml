@@ -136,6 +136,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LinkCode" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "429": { $ref: "#/components/responses/RateLimited" }
 
@@ -177,6 +178,7 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/Message" }
                   nextCursor: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
     post:
       operationId: sendMessage
@@ -298,6 +300,7 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/Approval" }
                   nextCursor: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /v1/approvals/{approvalId}/decision:
@@ -325,6 +328,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Approval" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
@@ -384,6 +388,7 @@ paths:
                 required: [redirectUrl]
                 properties:
                   redirectUrl: { type: string, format: uri }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/PlanLimit" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -464,6 +469,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/McpServer" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
     delete:
@@ -575,6 +581,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Automation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
     delete:
@@ -726,6 +733,7 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/LedgerEntry" }
                   nextCursor: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /v1/usage:
@@ -818,6 +826,7 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/ActivityEntry" }
                   nextCursor: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   # ---------------------------------------------------------------- admin
@@ -842,6 +851,7 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/Coupon" }
                   nextCursor: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
     post:
@@ -901,6 +911,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Coupon" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -933,6 +944,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CreditBalance" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }

@@ -2,5 +2,7 @@
 // other modules must go through that module's exported functions (CLAUDE.md).
 export * from '../../modules/admin/schema.ts';
 export * from '../../modules/auth/schema.ts';
+export * from '../../modules/billing/schema.ts';
 export * from '../../modules/channels/schema.ts';
 export * from '../../modules/events/schema.ts';
+export * from '../../modules/integrations/schema.ts';

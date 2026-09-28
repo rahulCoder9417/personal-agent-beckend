@@ -4,7 +4,7 @@
 
 ## In short
 
-- All 8 build phases from HLD section 9 are **coded, committed and unit/integration tested** (backend 175 tests, vm-manager Go + Python suites).
+- All 8 build phases from HLD section 9 are **coded, committed and unit/integration tested** (backend 183 tests, vm-manager Go + Python suites).
 - **Nothing has run for real yet.** Docker isn't installed on the dev machine, so no container, no real Hermes, no real Telegram/WhatsApp/Composio/LiteLLM/Dodo call. All of those were replaced by fakes in tests.
 - The MVP is **code-complete, not end-to-end verified**. Section 6 lists what must be run on a Docker machine.
 
@@ -58,6 +58,7 @@ Status words used below:
 | BYOK | Encrypted, tested before saving | Done | ✅ (🔁 see 5.2) |
 | Automations | Once / repeat (cron + timezone) / app event; 15-min minimum; plan limits; auto-pause | Done; survive worker restart + Redis wipe (tested) | ✅ |
 | Web app API | Every endpoint in `openapi.yaml` + SSE | All operations implemented (a test checks this); SSE via Redis pub/sub | ✅ |
+| Waitlist (added after the HLD) | Not in the HLD | Public `POST /v1/waitlist` + admin list / stats / update. Stores IP, forwarded chain, user agent, language, referer, origin, UTM; logs every attempt; flags honeypot, disposable emails, IP bursts, Gmail aliases; rate limited per IP and email | ✅ |
 | Hardening | Backups + restore test, rate limits, logs, metrics, alerts, admin views, load test | Backup job, health check, `/metrics`, JSON logs, per-IP limit, alerts; restore + load test as scripts | ✅ job logic / ⚠️ scripts never run |
 
 ### 1.3 vm-manager (Go) + agent image
@@ -105,7 +106,7 @@ Telegram / WhatsApp / iMessage / web
 
 | Module | What it does | Main files |
 |---|---|---|
-| **auth** | Clerk sessions, users, link codes, channel links | `session.ts`, `users.ts`, `provision.ts`, `links.ts`, `jobs.ts` |
+| **auth** | Clerk sessions, users, link codes, channel links, waitlist | `session.ts`, `users.ts`, `provision.ts`, `links.ts`, `jobs.ts`, `waitlist.ts` |
 | **events** | `events` table, webhook intake, 4 queues, recovery, cleanup | `intake.ts`, `queues.ts`, `cleanup.ts` |
 | **channels** | Adapters (Telegram, WhatsApp, Sendblue, web), messages, outbound queue, SSE, media, attachments | `adapters/*`, `outbound.ts`, `messages.ts`, `stream.ts`, `media.ts`, `files.ts` |
 | **orchestrator** | Per-user lock, turn flow, Jev routing, sandbox tokens, approvals, onboarding/deletion, gRPC client | `turn.ts`, `process-message.ts`, `routing.ts`, `sandbox.ts`, `approvals.ts`, `lifecycle.ts`, `vm.ts`, `lock.ts` |
@@ -117,7 +118,7 @@ Telegram / WhatsApp / iMessage / web
 
 The spec-driven router (`src/api/router.ts`) declares each route by `operationId`. Method, path, auth (`security`), admin role (tag `admin`) and request validation all come from `openapi.yaml`, so the api can't drift from the contract.
 
-### 3.2 Database (23 tables, 5 migrations)
+### 3.2 Database (25 tables, 6 migrations)
 
 | Migration | Tables |
 |---|---|
@@ -126,6 +127,7 @@ The spec-driven router (`src/api/router.ts`) declares each route by `operationId
 | `0002_phase4_apps_approvals` | approvals, connections, user_mcp_servers, composio_triggers |
 | `0003_phase7_automations` | automations |
 | `0004_phase5_billing` | subscriptions, credit_grants, credit_ledger (append-only trigger), usage_periods, coupons, coupon_codes, coupon_redemptions, payments, litellm_keys, byok_keys |
+| `0005_waitlist` | waitlist_entries, waitlist_attempts |
 
 (Migrations are numbered in merge order, which is why billing is `0004`.)
 
@@ -148,7 +150,7 @@ See `docs/security-checklist.md` for each item and its status. In short: secrets
 
 ### 3.6 Tests
 
-- 22 test files, 175 tests, one per phase's "done when" checks plus cross-module tests.
+- 23 test files, 183 tests, one per phase's "done when" checks plus cross-module tests.
 - They use a **real Postgres** (embedded binaries) and a **real Redis**, one database and queue prefix per test file.
 - Outside services are fakes: `setVmClient`, `setTelegramApi`, `setWhatsappApi`, `setSendblueApi`, `setComposioApi`, `setLiteLLMClient`, `setDodoClient`, `setJevClient`, `setTranscriber`, `setCommandRunner`.
 - Every response is checked against `openapi.yaml`, and a test fails if any spec operation isn't implemented.
@@ -223,3 +225,12 @@ Known risk areas when this first runs for real: the Hermes config keys and run A
 - Parallel agents on their own branches/worktrees: **vm-manager** (Phase 2), **billing** (Phase 5), **channels** (Phase 6). Phases 0, 1, 3, 4, 7, 8, merging and wiring were done on `mvp-build`.
 - Merges: `phase6-channels` and `phase5-billing` into `mvp-build`, conflicts resolved, then everything connected in `src/wiring.ts`.
 - One bug found while writing this report: the nightly backup and the 5-minute health check were never scheduled (an edit got lost). Fixed in `f17e141`, with a test.
+
+## 8. Waitlist (added after the build)
+
+- **Public:** `POST /v1/waitlist` `{ email, name?, referralSource?, useCase?, utm?, website? }` → always `202 { status: "ok" }`, so nobody can check whether an email is already on the list. Unknown fields → 400.
+- **Stored per entry:** email + normalized email (lowercase; Gmail dots and `+tags` removed, so aliases of one inbox are one entry), client IP (the proxy-added `X-Forwarded-For` entry), the raw forwarded chain, user agent, accept-language, referer, origin, UTM, submit count, first and last seen.
+- **Stored per attempt (`waitlist_attempts`):** every submission with IP, user agent and outcome: `created`, `duplicate`, `honeypot`, `rate_limited`. Kept 90 days (daily cleanup).
+- **Abuse rules:** 10 per IP per hour and 5 per email per hour (429, still logged). The hidden `website` field is a honeypot: the attempt looks accepted but no entry is made. Flags: `disposable_email`, `ip_burst` (more than 3 entries from one IP in 24 h), `email_alias`, `manual`.
+- **Admin:** `GET /v1/admin/waitlist` (filter by status, flagged, ip), `GET /v1/admin/waitlist/stats` (totals, blocked attempts, busiest IPs in 7 days), `PATCH /v1/admin/waitlist/{id}` (invite / reject / flag).
+- **On the server:** `TRUST_PROXY=true` must be set behind Caddy, or every request shows the proxy's IP.

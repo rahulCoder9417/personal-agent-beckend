@@ -65,3 +65,38 @@ describe('worker', () => {
     }
   });
 });
+
+describe('inbound priority', () => {
+  it('a Max user is processed before waiting Free users', async () => {
+    const { ingestEvent, setInboundPriority } = await import('../src/modules/events/intake.ts');
+    const plans: Record<string, number> = {};
+    setInboundPriority(async (userId) => plans[userId]);
+    const order: string[] = [];
+    const free = Array.from({ length: 3 }, () => `usr_free_${randomUUID()}`);
+    const max = `usr_max_${randomUUID()}`;
+    for (const u of free) plans[u] = 3;
+    plans[max] = 1;
+    for (const u of [...free, max]) {
+      await ingestEvent({
+        source: 'test',
+        externalId: randomUUID(),
+        type: 't',
+        userId: u,
+        payload: {},
+        queue: 'inbound',
+        jobName: 'p',
+      });
+    }
+    const workers = startWorkers(
+      { inbound: { p: async (job: Job) => void order.push(job.data.userId) } },
+      { concurrency: { inbound: 1 } },
+    );
+    try {
+      await waitFor(async () => order.length === 4);
+      expect(order[0]).toBe(max);
+    } finally {
+      await Promise.all(workers.map((w) => w.close()));
+      setInboundPriority(async () => undefined);
+    }
+  });
+});

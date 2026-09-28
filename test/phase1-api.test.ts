@@ -1,11 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { allRoutes } from '../src/api/app.ts';
-import { getOperation } from '../src/api/openapi/spec.ts';
+import { allOperations, getOperation } from '../src/api/openapi/spec.ts';
 import { call, createUser, expectContract, sessionToken } from './helpers.ts';
 
 describe('contract: system + me', () => {
   it('every mounted route is an operation in openapi.yaml', () => {
     for (const r of allRoutes) expect(() => getOperation(r.operationId)).not.toThrow();
+  });
+
+  it('every operation in openapi.yaml is implemented', () => {
+    const mounted = new Set<string>(allRoutes.map((r) => r.operationId));
+    expect(
+      allOperations()
+        .map((o) => o.operationId)
+        .filter((id) => !mounted.has(id)),
+    ).toEqual([]);
   });
 
   it('GET /healthz', async () => {

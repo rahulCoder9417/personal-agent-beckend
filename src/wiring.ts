@@ -1,5 +1,6 @@
 // Composition root: connects modules through their exported hooks. Imported by api and worker.
 import { markBlocked } from './modules/auth/links.ts';
+import { wireChannels } from './modules/channels/register.ts';
 import { setBlockedHandler } from './modules/channels/outbound.ts';
 import { parseSessionKey } from './modules/channels/types.ts';
 
@@ -8,6 +9,8 @@ let wired = false;
 export function wireModules(): void {
   if (wired) return;
   wired = true;
+
+  wireChannels(); // WhatsApp + Sendblue adapters, parsers, receipts
 
   // A blocked chat is marked; the agent is told to use the web app instead.
   setBlockedHandler(async (userId, sessionKey) => {

@@ -12,6 +12,7 @@ import { chatRoutes } from './routes/chat.ts';
 import { meRoutes } from './routes/me.ts';
 import { systemRoutes } from './routes/system.ts';
 import { webhookRoutes } from './routes/webhooks.ts';
+import { channelWebhookRoutes } from './routes/webhooks-channels.ts';
 import type { AppEnv } from './types.ts';
 
 export const allRoutes: RouteDef[] = [
@@ -21,6 +22,7 @@ export const allRoutes: RouteDef[] = [
   ...chatRoutes,
   ...agentRoutes,
   ...webhookRoutes,
+  ...channelWebhookRoutes,
 ];
 
 export function createApp(): Hono<AppEnv> {

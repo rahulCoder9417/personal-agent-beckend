@@ -71,8 +71,13 @@ export const configSchema = z.object({
   COMPOSIO_WEBHOOK_SECRET: optional,
   COMPOSIO_API_URL: z.string().url().default('https://backend.composio.dev'),
 
+  /** TypeSafe API root for Jev routing (default https://api.typesafe.ai, or LiteLLM's /typesafe pass-through). */
   JEV_URL: optional,
+  /** Routing is on only when this is set; without it every message is a task. */
   JEV_API_KEY: optional,
+  JEV_MODEL: z.string().default('jev-latest'),
+  /** Jev is sub-second; past this the message is simply treated as a task. */
+  JEV_TIMEOUT_MS: z.coerce.number().int().positive().default(3000),
   /** Speech-to-text (OpenAI-compatible /audio/transcriptions), via LiteLLM by default. */
   STT_MODEL: z.string().default('whisper'),
 
@@ -88,6 +93,12 @@ export const configSchema = z.object({
 
   BACKUP_DIR: z.string().default('/var/backups/personal-agent'),
   ATTACHMENTS_DIR: z.string().default('.tmp/attachments'),
+  /** Largest chat media file the worker downloads (Whisper's limit is 25 MB). */
+  MEDIA_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(25 * 1024 * 1024),
 
   /** Trust X-Forwarded-For from Caddy. */
   TRUST_PROXY: bool,

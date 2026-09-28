@@ -1,5 +1,6 @@
 import { handleClerkEvent } from '../modules/auth/jobs.ts';
 import { handleSendMessage, handleSendRaw } from '../modules/channels/outbound.ts';
+import { handleMessageStatus } from '../modules/channels/status.ts';
 import { handleDeleteUser, handleOnboardUser } from '../modules/orchestrator/lifecycle.ts';
 import { handleProcessMessage, handleWebMessage } from '../modules/orchestrator/process-message.ts';
 import type { Processors } from './runner.ts';
@@ -14,6 +15,7 @@ export function processors(): Processors {
     outbound: {
       'send-message': handleSendMessage,
       'send-raw': handleSendRaw,
+      'message-status': handleMessageStatus,
     },
     system: {
       'clerk-event': handleClerkEvent,

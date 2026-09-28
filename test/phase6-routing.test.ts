@@ -27,7 +27,7 @@ import {
   waWebhook,
 } from './fakes-channels.ts';
 import { installFakeVm } from './fakes.ts';
-import { createUser, waitFor } from './helpers.ts';
+import { chatUser, waitFor } from './helpers.ts';
 
 useChannelEnv();
 
@@ -83,7 +83,7 @@ beforeEach(() => {
 });
 
 async function linkedUser() {
-  const user = await createUser();
+  const user = await chatUser();
   const number = phone();
   await linkWhatsapp(user.token, number, wa);
   return { user, number };

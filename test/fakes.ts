@@ -1,5 +1,6 @@
 // Fake vm-manager + fake Telegram Bot API for end-to-end tests without Docker.
 import { randomBytes } from 'node:crypto';
+import { setLiteLLMClient } from '../src/modules/billing/litellm.ts';
 import { sha256Hex } from '../src/shared/crypto.ts';
 import { setTelegramApi } from '../src/modules/channels/adapters/telegram.ts';
 import { setVmClient, type VmClient } from '../src/modules/orchestrator/vm.ts';
@@ -122,6 +123,7 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
     },
   };
   setVmClient(fake as unknown as VmClient);
+  installFakeLiteLLM();
   return { tokens, deliveries, created, touches, allowlists, state };
 }
 
@@ -233,4 +235,33 @@ export async function installFakeComposio() {
     },
   });
   return { executed, triggers };
+}
+
+/** No-network LiteLLM (keys, budgets, zero spend) so the real billing path runs in chat tests. */
+export function installFakeLiteLLM() {
+  const keys = new Map<
+    string,
+    { userId: string; aliases: Record<string, string>; maxBudget: number | null }
+  >();
+  setLiteLLMClient({
+    async generateKey(input) {
+      const key = `sk-fake-${randomBytes(8).toString('hex')}`;
+      keys.set(key, { userId: input.userId, aliases: input.aliases, maxBudget: input.maxBudget });
+      return { key };
+    },
+    async updateKey(key, patch) {
+      const k = keys.get(key);
+      if (k && patch.maxBudget !== undefined) k.maxBudget = patch.maxBudget;
+    },
+    async deleteKey(key) {
+      keys.delete(key);
+    },
+    async getKeySpend() {
+      return { spend: 0, modelSpend: {} };
+    },
+    async getSpendBetween() {
+      return { spend: 0, modelSpend: {} };
+    },
+  });
+  return { keys };
 }

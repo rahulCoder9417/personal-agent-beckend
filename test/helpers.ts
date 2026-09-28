@@ -26,7 +26,13 @@ export async function sessionToken(clerkId: string): Promise<string> {
     .sign(key);
 }
 
-export async function createUser(overrides: Partial<User> = {}): Promise<User & { token: string }> {
+/**
+ * A signed-in test user. `credits` seeds a grant (default 0, so billing tests start empty;
+ * chat tests pass credits so turns go through the real balance check).
+ */
+export async function createUser(
+  overrides: Partial<User> & { credits?: number } = {},
+): Promise<User & { token: string }> {
   const clerkId = `user_${randomUUID()}`;
   const { user } = await upsertUserFromClerk({
     clerkId,
@@ -38,6 +44,18 @@ export async function createUser(overrides: Partial<User> = {}): Promise<User & 
   const extra = { ...overrides };
   delete extra.emailVerified;
   delete extra.role;
+  delete extra.credits;
+  if (overrides.credits) {
+    const { createGrant } = await import('../src/modules/billing/credits.ts');
+    await createGrant({
+      userId: user.id,
+      source: 'admin',
+      amount: overrides.credits,
+      expiresAt: null,
+      idempotencyKey: `test-seed:${user.id}`,
+      description: 'test seed',
+    });
+  }
   let row = user;
   if (Object.keys(extra).length) {
     [row] = (await db().update(users).set(extra).where(eq(users.id, user.id)).returning()) as [
@@ -112,4 +130,9 @@ export async function waitFor<T>(
     if (Date.now() - start > timeoutMs) throw new Error('waitFor timed out');
     await new Promise((r) => setTimeout(r, 50));
   }
+}
+
+/** A user with credits (for tests that run agent turns through the real balance check). */
+export function chatUser(overrides: Partial<User> & { credits?: number } = {}) {
+  return createUser({ credits: 1000, ...overrides });
 }

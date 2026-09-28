@@ -29,7 +29,7 @@ import {
   waWebhook,
 } from './fakes-channels.ts';
 import { installFakeVm, type Delivery } from './fakes.ts';
-import { call, createUser, expectContract, waitFor } from './helpers.ts';
+import { call, chatUser, expectContract, waitFor } from './helpers.ts';
 
 useChannelEnv({ TELEGRAM_BOT_TOKEN: '123:test-token', MEDIA_MAX_BYTES: '1000000' });
 
@@ -77,7 +77,7 @@ beforeEach(() => {
 });
 
 async function whatsappUser() {
-  const user = await createUser();
+  const user = await chatUser();
   const number = phone();
   await linkWhatsapp(user.token, number, wa);
   return { user, number };
@@ -156,7 +156,7 @@ describe('Phase 6: media and voice', () => {
       if (method === 'sendMessage') tgSent.push(String(body.text));
       return { message_id: 1 };
     });
-    const user = await createUser();
+    const user = await chatUser();
     const chatId = Math.floor(Math.random() * 1e9);
     const lc = await expectContract<{ code: string }>(
       'createLinkCode',
@@ -196,7 +196,7 @@ describe('Phase 6: media and voice', () => {
   });
 
   it('an iMessage attachment is downloaded from its media_url', async () => {
-    const user = await createUser();
+    const user = await chatUser();
     const number = imessageNumber();
     await linkImessage(user.token, number, sb);
     const mediaUrl = 'https://storage.sendblue.test/files/Audio%20Message.m4a';
@@ -249,7 +249,7 @@ describe('Phase 6: media and voice', () => {
   });
 
   it('re-running the preparation for the same event reuses the same attachment', async () => {
-    const user = await createUser();
+    const user = await chatUser();
     const url = 'https://storage.sendblue.test/files/pic.png';
     downloads.set(url, { data: Buffer.from('png'), mimeType: 'image/png' });
     const msg = {

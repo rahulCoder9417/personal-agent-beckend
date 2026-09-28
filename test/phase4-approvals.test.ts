@@ -23,7 +23,7 @@ import {
   type McpResult,
   type SentTelegram,
 } from './fakes.ts';
-import { call, createUser, expectContract, waitFor } from './helpers.ts';
+import { call, chatUser, expectContract, waitFor } from './helpers.ts';
 
 let workers: Worker[];
 let tg: { sent: SentTelegram[] };
@@ -52,7 +52,7 @@ const tgPost = (update: unknown) =>
   });
 
 async function linkedUser(opts: { plan?: 'free' | 'pro' | 'max' } = {}) {
-  const user = await createUser(opts.plan ? ({ plan: opts.plan } as never) : {});
+  const user = await chatUser(opts.plan ? ({ plan: opts.plan } as never) : {});
   const chatId = chat();
   const lc = await expectContract<{ code: string }>(
     'createLinkCode',
@@ -312,7 +312,7 @@ describe('apps + user MCP servers', () => {
   it('lists the catalog and starts connecting with plan limits', async () => {
     const { resetConfig } = await import('../src/shared/config.ts');
     resetConfig();
-    const u = await createUser();
+    const u = await chatUser();
     const apps = await expectContract<{ items: Array<{ slug: string; availableOnPlan: boolean }> }>(
       'listApps',
       await call('/v1/apps', { token: u.token }),
@@ -389,7 +389,7 @@ describe('apps + user MCP servers', () => {
   });
 
   it('own MCP servers: Max only, https public hosts, allowlist pushed, secret never returned', async () => {
-    const free = await createUser();
+    const free = await chatUser();
     await expectContract(
       'createMcpServer',
       await call('/v1/mcp-servers', {
@@ -399,7 +399,7 @@ describe('apps + user MCP servers', () => {
       }),
       403,
     );
-    const max = await createUser();
+    const max = await chatUser();
     await db().update(users).set({ plan: 'max' }).where(eq(users.id, max.id));
     await expectContract(
       'createMcpServer',

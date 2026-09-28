@@ -28,7 +28,7 @@ import {
   telegramUpdate,
   type SentTelegram,
 } from './fakes.ts';
-import { call, createUser, expectContract, waitFor } from './helpers.ts';
+import { call, chatUser, expectContract, waitFor } from './helpers.ts';
 
 let workers: Worker[] = [];
 let tg: { sent: SentTelegram[] };
@@ -81,7 +81,7 @@ const tgPost = (update: unknown) =>
   });
 
 async function linkedUser(plan: 'free' | 'pro' | 'max' = 'pro') {
-  const user = await createUser({ plan } as never);
+  const user = await chatUser({ plan } as never);
   const chatId = chat();
   const lc = (await (
     await call('/v1/channels/link-codes', {

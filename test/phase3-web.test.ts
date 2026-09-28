@@ -8,7 +8,7 @@ import { wireModules } from '../src/wiring.ts';
 import { processors } from '../src/worker/processors.ts';
 import { startWorkers } from '../src/worker/runner.ts';
 import { installFakeVm } from './fakes.ts';
-import { call, createUser, expectContract, testApp, waitFor } from './helpers.ts';
+import { call, chatUser, expectContract, testApp, waitFor } from './helpers.ts';
 
 let workers: Worker[];
 beforeAll(() => {
@@ -26,7 +26,7 @@ beforeEach(() => {
 
 describe('web chat', () => {
   it('POST /v1/messages queues once per clientMessageId and the reply arrives', async () => {
-    const user = await createUser();
+    const user = await chatUser();
     const clientMessageId = randomUUID();
     const first = await expectContract<{ id: string; status: string }>(
       'sendMessage',
@@ -56,7 +56,7 @@ describe('web chat', () => {
   });
 
   it('validates the body and returns 402 when out of credits', async () => {
-    const user = await createUser();
+    const user = await chatUser();
     await expectContract(
       'sendMessage',
       await call('/v1/messages', {
@@ -89,7 +89,7 @@ describe('web chat', () => {
   });
 
   it('pagination uses cursor/nextCursor', async () => {
-    const user = await createUser();
+    const user = await chatUser();
     for (let i = 0; i < 3; i++) {
       await call('/v1/messages', {
         method: 'POST',
@@ -118,7 +118,7 @@ describe('web chat', () => {
   });
 
   it('uploads an attachment and rejects foreign attachment ids', async () => {
-    const user = await createUser();
+    const user = await chatUser();
     const form = new FormData();
     form.append('file', new File(['hello'], 'note.txt', { type: 'text/plain' }));
     const res = await testApp().request('/v1/attachments', {
@@ -136,7 +136,7 @@ describe('web chat', () => {
       }),
       202,
     );
-    const other = await createUser();
+    const other = await chatUser();
     await expectContract(
       'sendMessage',
       await call('/v1/messages', {
@@ -149,7 +149,7 @@ describe('web chat', () => {
   });
 
   it('GET /v1/agent/status', async () => {
-    const user = await createUser();
+    const user = await chatUser();
     await expectContract(
       'getAgentStatus',
       await call('/v1/agent/status', { token: user.token }),
@@ -158,8 +158,8 @@ describe('web chat', () => {
   });
 
   it('SSE stream delivers events for this user only', async () => {
-    const user = await createUser();
-    const other = await createUser();
+    const user = await chatUser();
+    const other = await chatUser();
     const res = await testApp().request(`/v1/stream?token=${user.token}`);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/event-stream');

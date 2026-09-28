@@ -11,7 +11,7 @@ import {
 import { prepareInboundMedia } from '../src/modules/channels/media.ts';
 import { RecipientBlockedError } from '../src/modules/channels/types.ts';
 import { routeTurn } from '../src/modules/orchestrator/routing.ts';
-import { createUser } from './helpers.ts';
+import { chatUser } from './helpers.ts';
 import { useChannelEnv } from './fakes-channels.ts';
 
 interface Seen {
@@ -141,7 +141,7 @@ describe('Phase 6: real HTTP clients', () => {
   });
 
   it('Jev (TypeSafe SDK) + LiteLLM cheap model: a simple question gets a quick reply', async () => {
-    const user = await createUser();
+    const user = await chatUser();
     const decision = await routeTurn({
       userId: user.id,
       deliveryId: 'evt_http_1',
@@ -168,7 +168,7 @@ describe('Phase 6: real HTTP clients', () => {
   });
 
   it('LiteLLM transcription: multipart upload with STT_MODEL', async () => {
-    const user = await createUser();
+    const user = await chatUser();
     const url = `${base}/files/memo.m4a`;
     const out = await prepareInboundMedia(
       user.id,

@@ -22,7 +22,7 @@ import {
   useChannelEnv,
 } from './fakes-channels.ts';
 import { installFakeVm } from './fakes.ts';
-import { call, createUser, expectContract, waitFor } from './helpers.ts';
+import { call, chatUser, expectContract, waitFor } from './helpers.ts';
 
 useChannelEnv();
 
@@ -44,7 +44,7 @@ beforeEach(() => {
 });
 
 async function linkedUser() {
-  const user = await createUser();
+  const user = await chatUser();
   const number = imessageNumber();
   await linkImessage(user.token, number, sb);
   return { user, number, sessionKey: `imessage:${number}` };
@@ -101,7 +101,7 @@ describe('Phase 6: iMessage via Sendblue', () => {
   });
 
   it('links with a code, then the user chats with their own agent', async () => {
-    const user = await createUser();
+    const user = await chatUser();
     const number = imessageNumber();
     const lc = await linkImessage(user.token, number, sb);
     expect(lc.deepLink).toContain('sms:+15550002222');

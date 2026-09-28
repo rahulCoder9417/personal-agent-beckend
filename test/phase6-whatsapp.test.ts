@@ -27,7 +27,7 @@ import {
   waWebhook,
 } from './fakes-channels.ts';
 import { installFakeVm } from './fakes.ts';
-import { call, createUser, expectContract, waitFor } from './helpers.ts';
+import { call, chatUser, expectContract, waitFor } from './helpers.ts';
 
 useChannelEnv();
 
@@ -58,7 +58,7 @@ async function setLastInbound(userId: string, at: Date) {
 }
 
 async function linkedUser() {
-  const user = await createUser();
+  const user = await chatUser();
   const number = phone();
   await linkWhatsapp(user.token, number, wa);
   return { user, number, sessionKey: `whatsapp:${number}` };
@@ -124,7 +124,7 @@ describe('Phase 6: WhatsApp webhook', () => {
   });
 
   it('links with a code, then the user chats with their own agent', async () => {
-    const user = await createUser();
+    const user = await chatUser();
     const number = phone();
     const lc = await linkWhatsapp(user.token, number, wa);
     expect(lc.deepLink).toContain('wa.me/15550001111');

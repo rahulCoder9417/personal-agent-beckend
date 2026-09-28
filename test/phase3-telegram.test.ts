@@ -16,7 +16,7 @@ import {
   telegramUpdate,
   type SentTelegram,
 } from './fakes.ts';
-import { call, createUser, expectContract, waitFor } from './helpers.ts';
+import { call, chatUser, expectContract, waitFor } from './helpers.ts';
 
 let workers: Worker[];
 let vmFake: ReturnType<typeof installFakeVm>;
@@ -86,7 +86,7 @@ describe('Phase 3: Telegram end to end', () => {
   });
 
   it('links with a code, then the user chats with their own agent', async () => {
-    const user = await createUser();
+    const user = await chatUser();
     const chatId = chat();
     const lc = await linkTelegram(user.token, chatId);
     expect(lc.deepLink).toContain('t.me/agent_bot');
@@ -143,7 +143,7 @@ describe('Phase 3: Telegram end to end', () => {
   });
 
   it('a duplicate Telegram update is processed once', async () => {
-    const user = await createUser();
+    const user = await chatUser();
     const chatId = chat();
     await linkTelegram(user.token, chatId);
     const update = telegramUpdate(chatId, 'only once');
@@ -161,8 +161,8 @@ describe('Phase 3: Telegram end to end', () => {
   });
 
   it("two users' agents never see each other's data", async () => {
-    const alice = await createUser({ name: 'Alice' } as never);
-    const bob = await createUser();
+    const alice = await chatUser({ name: 'Alice' } as never);
+    const bob = await chatUser();
     const aliceChat = chat();
     const bobChat = chat();
     await linkTelegram(alice.token, aliceChat);
@@ -207,7 +207,7 @@ describe('Phase 3: Telegram end to end', () => {
   });
 
   it('unlink removes the link; the chat then gets the link message again', async () => {
-    const user = await createUser();
+    const user = await chatUser();
     const chatId = chat();
     await linkTelegram(user.token, chatId);
     const [link] = await db().select().from(channelLinks).where(eq(channelLinks.userId, user.id));
@@ -228,7 +228,7 @@ describe('Phase 3: Telegram end to end', () => {
   });
 
   it('a user blocking the bot marks the link blocked', async () => {
-    const user = await createUser();
+    const user = await chatUser();
     const chatId = chat();
     await linkTelegram(user.token, chatId);
     const { setTelegramApi } = await import('../src/modules/channels/adapters/telegram.ts');

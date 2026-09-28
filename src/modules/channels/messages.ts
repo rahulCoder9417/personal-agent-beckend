@@ -1,4 +1,4 @@
-import { and, desc, eq, lt } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt } from 'drizzle-orm';
 import { db } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import { messages, type MediaRef } from './schema.ts';
@@ -121,18 +121,61 @@ export async function setMessageStatus(
   return row;
 }
 
-/** Provider status callbacks (sent/delivered/read) by provider message id. */
+/** Statuses a receipt may move a message from (receipts arrive out of order; never go back). */
+const ADVANCE_FROM: Record<'sent' | 'delivered' | 'read' | 'failed', MessageStatus[]> = {
+  sent: ['queued', 'processing'],
+  delivered: ['queued', 'processing', 'sent'],
+  read: ['queued', 'processing', 'sent', 'delivered'],
+  failed: ['queued', 'processing', 'sent'],
+};
+
+/**
+ * Provider status callbacks (sent/delivered/read/failed) by provider message id. Only moves a
+ * status forward, so a late "delivered" never overwrites "read". Returns the updated rows.
+ */
 export async function setStatusByExternalId(
   channel: Channel,
   externalId: string,
-  status: MessageStatus,
-): Promise<void> {
+  status: 'sent' | 'delivered' | 'read' | 'failed',
+): Promise<MessageRow[]> {
   const rows = await db()
     .update(messages)
     .set({ status })
-    .where(and(eq(messages.channel, channel), eq(messages.externalId, externalId)))
+    .where(
+      and(
+        eq(messages.channel, channel),
+        eq(messages.externalId, externalId),
+        eq(messages.direction, 'out'),
+        inArray(messages.status, ADVANCE_FROM[status]),
+      ),
+    )
     .returning();
   for (const row of rows) await publish(row.userId, 'message.status', toApiMessage(row));
+  return rows;
+}
+
+/** The inbound message already saved for an event, if any. */
+export async function getInboundByEvent(eventId: string): Promise<MessageRow | undefined> {
+  const [row] = await db()
+    .select()
+    .from(messages)
+    .where(and(eq(messages.eventId, eventId), eq(messages.direction, 'in')));
+  return row;
+}
+
+/** The last messages of one chat, oldest first (context for routing and quick replies). */
+export async function recentSessionMessages(
+  userId: string,
+  sessionKey: string,
+  limit: number,
+): Promise<MessageRow[]> {
+  const rows = await db()
+    .select()
+    .from(messages)
+    .where(and(eq(messages.userId, userId), eq(messages.sessionKey, sessionKey)))
+    .orderBy(desc(messages.id))
+    .limit(limit);
+  return rows.reverse();
 }
 
 export async function listMessages(

@@ -2,12 +2,14 @@
 import { markBlocked } from './modules/auth/links.ts';
 import { deleteUserAutomations } from './modules/automations/automations.ts';
 import { setBlockedHandler } from './modules/channels/outbound.ts';
+import { wireChannels } from './modules/channels/register.ts';
 import { parseSessionKey } from './modules/channels/types.ts';
-import { deleteUserConnections } from './modules/integrations/apps.ts';
+import { activeConnections, deleteUserConnections } from './modules/integrations/apps.ts';
 import { deleteUserMcpServers, sandboxMcpConfig } from './modules/integrations/mcp-servers.ts';
 import { handleApprovalReply } from './modules/orchestrator/approvals.ts';
 import { setLifecycleHooks } from './modules/orchestrator/lifecycle.ts';
 import { setInboundHooks } from './modules/orchestrator/process-message.ts';
+import { setRoutingAppsProvider, wireRouting } from './modules/orchestrator/routing.ts';
 import { setSandboxConfigProvider } from './modules/orchestrator/sandbox.ts';
 
 let wired = false;
@@ -15,6 +17,13 @@ let wired = false;
 export function wireModules(): void {
   if (wired) return;
   wired = true;
+
+  wireChannels(); // WhatsApp + Sendblue adapters, parsers, receipts, media download
+  wireRouting(); // Jev: simple / task / spam before waking a container
+  // Jev picks from the user's connected apps.
+  setRoutingAppsProvider(async (userId) =>
+    (await activeConnections(userId)).map((c) => ({ slug: c.catalog.slug, name: c.catalog.name })),
+  );
 
   // A blocked chat is marked; the agent is told to use the web app instead.
   setBlockedHandler(async (userId, sessionKey) => {

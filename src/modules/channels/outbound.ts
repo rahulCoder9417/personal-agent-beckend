@@ -74,6 +74,10 @@ let onBlocked: BlockedHandler = async () => {};
 export function setBlockedHandler(fn: BlockedHandler): void {
   onBlocked = fn;
 }
+/** A provider receipt says the recipient can't be reached (e.g. WhatsApp 131026). */
+export function reportBlocked(userId: string, sessionKey: string): Promise<void> {
+  return onBlocked(userId, sessionKey);
+}
 
 export type ContentTransformer = (
   msg: MessageRow,

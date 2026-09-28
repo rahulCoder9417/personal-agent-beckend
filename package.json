@@ -1,0 +1,80 @@
+{
+  "name": "personal-agent-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "concurrently -n api,worker \"pnpm dev:api\" \"pnpm dev:worker\"",
+    "dev:api": "tsx watch src/api/main.ts",
+    "dev:worker": "tsx watch src/worker/main.ts",
+    "start:api": "node --import tsx src/api/main.ts",
+    "start:worker": "node --import tsx src/worker/main.ts",
+    "lint": "eslint . && prettier --check .",
+    "format": "prettier --write .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "openapi:lint": "redocly lint openapi/openapi.yaml",
+    "openapi:gen": "openapi-typescript openapi/openapi.yaml -o src/api/openapi/schema.d.ts",
+    "openapi:sync": "node scripts/openapi-sync.mjs",
+    "proto:gen": "buf generate ../vm-manager/proto --template buf.gen.yaml",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx scripts/migrate.ts"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.15.0",
+    "@bull-board/api": "^9.10.1",
+    "@bull-board/hono": "^9.10.1",
+    "@clerk/backend": "^3.20.1",
+    "@composio/core": "^0.21.0",
+    "@connectrpc/connect": "^2.2.0",
+    "@connectrpc/connect-node": "^2.2.0",
+    "@hono/node-server": "^2.1.1",
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "@typesafe-ai/sdk": "^0.6.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "bullmq": "^6.3.9",
+    "cron-parser": "^5.10.1",
+    "drizzle-orm": "^0.45.3",
+    "hono": "^4.13.10",
+    "ioredis": "^6.0.0",
+    "pg": "^8.23.0",
+    "pino": "^10.3.1",
+    "standardwebhooks": "^1.1.1",
+    "svix": "^2.5.0",
+    "tsx": "^4.23.15",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@bufbuild/buf": "^1.73.0",
+    "@bufbuild/protoc-gen-es": "^2.15.0",
+    "@eslint/js": "^10.0.1",
+    "@redocly/cli": "^2.54.3",
+    "@types/node": "^26.6.3",
+    "@types/pg": "^8.23.1",
+    "concurrently": "^10.0.5",
+    "drizzle-kit": "^0.31.11",
+    "embedded-postgres": "18.4.0-beta.17",
+    "eslint": "^10.11.0",
+    "globals": "^17.12.0",
+    "jose": "^6.2.12",
+    "openapi-typescript": "^7.13.0",
+    "prettier": "^3.9.9",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^5.0.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@bufbuild/buf",
+      "@embedded-postgres/linux-x64",
+      "esbuild",
+      "msgpackr-extract"
+    ]
+  }
+}

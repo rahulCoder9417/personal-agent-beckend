@@ -28,7 +28,8 @@ export interface TurnInput {
   metadata?: Record<string, unknown>;
 }
 
-export type RouteDecision = { kind: 'task' } | { kind: 'simple'; reply: string } | { kind: 'spam' };
+export type RouteDecision =
+  { kind: 'task'; apps?: string[] } | { kind: 'simple'; reply: string } | { kind: 'spam' };
 
 export type TurnOutcome = 'done' | 'out_of_credits' | 'simple' | 'spam' | 'error';
 
@@ -126,7 +127,10 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
       .map((a) => ({ id: a.id, name: a.name, mimeType: a.mimeType, url: signedFileUrl(a.id) })),
     approvalId: input.approval?.id ?? '',
     approved: input.approval?.approved ?? false,
-    metadataJson: JSON.stringify(input.metadata ?? {}),
+    metadataJson: JSON.stringify({
+      ...input.metadata,
+      ...(decision.apps?.length ? { apps: decision.apps } : {}),
+    }),
   });
 
   for await (const ev of stream) {

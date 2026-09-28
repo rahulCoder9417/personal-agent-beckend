@@ -181,10 +181,9 @@ export function setRoutingAppsProvider(fn: AppsProvider): void {
 
 const TASK: RouteDecision = { kind: 'task' };
 
-function taskWithApps(input: TurnInput, apps: string[]): RouteDecision {
-  // turn.ts forwards `metadata` to the agent (Deliver.metadata_json): the likely apps are a hint.
-  if (apps.length) input.metadata = { ...input.metadata, apps };
-  return TASK;
+function taskWithApps(_input: TurnInput, apps: string[]): RouteDecision {
+  // The likely apps reach the agent as a hint (Deliver.metadata_json.apps).
+  return apps.length ? { kind: 'task', apps } : TASK;
 }
 
 async function conversation(input: TurnInput) {

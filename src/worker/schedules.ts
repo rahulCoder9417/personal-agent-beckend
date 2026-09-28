@@ -17,6 +17,12 @@ export async function registerSystemSchedules(): Promise<void> {
     { pattern: '30 3 * * *' },
     { name: 'cleanup', data: {} },
   );
+  await system.upsertJobScheduler('backup', { pattern: '0 2 * * *' }, { name: 'backup', data: {} });
+  await system.upsertJobScheduler(
+    'health-check',
+    { every: 5 * 60 * 1000 },
+    { name: 'health-check', data: {} },
+  );
 }
 
 /** system/cleanup (daily): old events and messages, used link codes. */

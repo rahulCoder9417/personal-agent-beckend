@@ -112,3 +112,24 @@ describe('ops endpoints and limits', () => {
     expect(res.problems.join()).toContain('vm-manager unreachable');
   });
 });
+
+describe('schedules', () => {
+  it('registers every repeating system job', async () => {
+    const { registerSystemSchedules } = await import('../src/worker/schedules.ts');
+    const { registerBillingSchedules } = await import('../src/modules/billing/jobs.ts');
+    const { queue } = await import('../src/modules/events/queues.ts');
+    await registerSystemSchedules();
+    await registerBillingSchedules();
+    const ids = (await queue('system').getJobSchedulers()).map((s) => s.key ?? s.id);
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        'expire-approvals',
+        'cleanup',
+        'backup',
+        'health-check',
+        'sync-usage',
+        'expire-credits',
+      ]),
+    );
+  });
+});

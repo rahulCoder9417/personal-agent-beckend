@@ -29,6 +29,13 @@
       "when": 1790592343725,
       "tag": "0003_phase7_automations",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790593850500,
+      "tag": "0004_phase5_billing",
+      "breakpoints": true
     }
   ]
 }

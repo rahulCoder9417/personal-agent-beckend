@@ -1,6 +1,7 @@
 import { handleBackup } from '../modules/admin/backup.ts';
 import { handleHealthCheck } from '../modules/admin/health.ts';
 import { handleClerkEvent } from '../modules/auth/jobs.ts';
+import { handleDodoEvent, handleExpireCredits, handleSyncUsage } from '../modules/billing/jobs.ts';
 import {
   handleAutomationTurn,
   handleComposioTrigger,
@@ -43,6 +44,9 @@ export function processors(): Processors {
       cleanup: handleCleanup,
       backup: handleBackup,
       'health-check': handleHealthCheck,
+      'dodo-event': handleDodoEvent,
+      'sync-usage': handleSyncUsage,
+      'expire-credits': handleExpireCredits,
     },
   };
 }

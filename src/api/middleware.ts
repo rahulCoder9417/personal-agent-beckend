@@ -1,4 +1,3 @@
-import { getConnInfo } from '@hono/node-server/conninfo';
 import type { MiddlewareHandler } from 'hono';
 import { routePath } from 'hono/route';
 import { inc } from '../modules/admin/metrics.ts';
@@ -6,20 +5,12 @@ import { config } from '../shared/config.ts';
 import { rateLimited } from '../shared/errors.ts';
 import { logger } from '../shared/logger.ts';
 import { hit } from '../shared/rate-limit.ts';
+import { clientIp } from './client-ip.ts';
 import type { AppEnv } from './types.ts';
 
-/** Client IP: Caddy's X-Forwarded-For when TRUST_PROXY, else the socket address. */
-export const clientIp: MiddlewareHandler<AppEnv> = async (c, next) => {
-  let ip = 'unknown';
-  if (config().TRUST_PROXY) ip = c.req.header('x-forwarded-for')?.split(',')[0]?.trim() || ip;
-  if (ip === 'unknown') {
-    try {
-      ip = getConnInfo(c).remote.address ?? ip;
-    } catch {
-      // not running on node-server (tests)
-    }
-  }
-  c.set('ip', ip);
+/** Client IP for rate limits (see client-ip.ts: the proxy-added X-Forwarded-For entry). */
+export const clientIpMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
+  c.set('ip', clientIp(c) ?? 'unknown');
   await next();
 };
 

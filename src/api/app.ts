@@ -5,11 +5,16 @@ import { AppError } from '../shared/errors.ts';
 import { logger } from '../shared/logger.ts';
 import { mountAdminBoard } from './admin-board.ts';
 import { mountMcp } from './mcp.ts';
-import { accessLog, clientIp, ipRateLimit } from './middleware.ts';
+import { accessLog, clientIpMiddleware, ipRateLimit } from './middleware.ts';
 import { renderMetrics } from '../modules/admin/metrics.ts';
 import { config } from '../shared/config.ts';
 import { safeEqual } from '../shared/crypto.ts';
 import { errorResponse, mountRoutes, type RouteDef } from './router.ts';
+import { adminRoutes } from './routes/admin.ts';
+import { billingRoutes } from './routes/billing.ts';
+import { byokRoutes } from './routes/byok.ts';
+import { couponRoutes } from './routes/coupons.ts';
+import { creditRoutes } from './routes/credits.ts';
 import { agentRoutes } from './routes/agent.ts';
 import { appRoutes } from './routes/apps.ts';
 import { approvalRoutes } from './routes/approvals.ts';
@@ -18,6 +23,7 @@ import { channelRoutes } from './routes/channels.ts';
 import { chatRoutes } from './routes/chat.ts';
 import { meRoutes } from './routes/me.ts';
 import { systemRoutes } from './routes/system.ts';
+import { dodoWebhookRoutes } from './routes/webhooks-dodo.ts';
 import { webhookRoutes } from './routes/webhooks.ts';
 import { channelWebhookRoutes } from './routes/webhooks-channels.ts';
 import type { AppEnv } from './types.ts';
@@ -33,6 +39,13 @@ export const allRoutes: RouteDef[] = [
   ...automationRoutes,
   ...webhookRoutes,
   ...channelWebhookRoutes,
+  // Phase 5: billing, credits, coupons, bring-your-own key, admin, Dodo webhook
+  ...billingRoutes,
+  ...creditRoutes,
+  ...couponRoutes,
+  ...byokRoutes,
+  ...adminRoutes,
+  ...dodoWebhookRoutes,
 ];
 
 export function createApp(): Hono<AppEnv> {
@@ -40,7 +53,7 @@ export function createApp(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   app.use(requestId());
   app.use(accessLog);
-  app.use(clientIp);
+  app.use(clientIpMiddleware);
   app.use(ipRateLimit);
 
   app.onError((err, c) => {

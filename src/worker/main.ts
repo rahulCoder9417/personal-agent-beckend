@@ -1,4 +1,5 @@
 import { reregisterAll } from '../modules/automations/automations.ts';
+import { registerBillingSchedules } from '../modules/billing/jobs.ts';
 import { requeuePendingEvents } from '../modules/events/intake.ts';
 import { closeQueues } from '../modules/events/queues.ts';
 import { closeDb } from '../shared/db/client.ts';
@@ -19,6 +20,8 @@ const requeued = await requeuePendingEvents();
 // Automations: Postgres is the source of truth; re-register every enabled timer.
 const automations = await reregisterAll();
 await registerSystemSchedules();
+// Repeatable billing jobs: sync-usage every 5 min, expire-credits hourly.
+await registerBillingSchedules();
 log.info({ requeued, automations, queues: workers.map((w) => w.name) }, 'worker started');
 
 async function shutdown() {

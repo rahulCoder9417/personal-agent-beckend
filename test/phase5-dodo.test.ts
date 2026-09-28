@@ -230,6 +230,36 @@ describe('Dodo events (HLD 7.6)', () => {
     expect(await ledgerMatchesGrants(u.id)).toBe(true);
   });
 
+  it('a refunded subscription payment takes back its share of the monthly credits', async () => {
+    const u = await member(0);
+    const subId = `sub_${randomUUID()}`;
+    await deliver(
+      subscriptionEvent('subscription.active', { userId: u.id, subId, ...periodFromNow() }),
+    );
+    const paymentId = `pay_${randomUUID()}`;
+    await deliver({
+      type: 'payment.succeeded',
+      data: {
+        payment_id: paymentId,
+        subscription_id: subId,
+        total_amount: 1200,
+        product_cart: [{ product_id: 'prod_pro', quantity: 1 }],
+        metadata: { user_id: u.id },
+      },
+    });
+    const [payment] = await db()
+      .select()
+      .from(payments)
+      .where(eq(payments.dodoPaymentId, paymentId));
+    expect(payment).toMatchObject({ kind: 'plan', credits: 1500, amountCents: 1200 });
+    expect(await getBalance(u.id)).toBe(1500); // the payment itself grants nothing extra
+    await deliver({
+      type: 'refund.succeeded',
+      data: { refund_id: `ref_${randomUUID()}`, payment_id: paymentId, amount: 600 },
+    });
+    expect(await getBalance(u.id)).toBe(750);
+  });
+
   it('chargeback → negative grant and the account is flagged', async () => {
     const u = await member(0, 'pro');
     const paymentId = `pay_${randomUUID()}`;

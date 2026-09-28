@@ -29,7 +29,7 @@ type Handler = (data: Data, event: DodoWebhook) => Promise<unknown>;
  * Dodo event → action. Event names are Dodo's (docs.dodopayments.com, "Webhook events").
  * Anything not listed is saved and marked "ignored".
  */
-export const DODO_EVENT_ACTIONS: Record<string, string> = {
+export const DODO_EVENT_ACTIONS = {
   'payment.succeeded': 'Record the payment; a top-up adds 800 credits per pack (12 months)',
   'subscription.active': 'Set the plan → monthly grant → raise the budget',
   'subscription.renewed': 'New monthly grant; the previous monthly grant expires',
@@ -41,7 +41,7 @@ export const DODO_EVENT_ACTIONS: Record<string, string> = {
   'subscription.expired': 'At the end of the period → Free; monthly credits expire, top-ups stay',
   'refund.succeeded': 'Negative grant for the refunded share of the credits bought',
   'dispute.opened': 'Chargeback: negative grant for the credits bought + flag the account',
-};
+} satisfies Record<string, string>;
 
 // --- payload helpers --------------------------------------------------------------------------
 
@@ -73,8 +73,13 @@ async function resolveUserId(d: Data): Promise<string | undefined> {
   return undefined;
 }
 
+/** Subscriptions carry `product_id`; payments a `product_cart`. Falls back to our metadata. */
 function planOf(d: Data): PlanId | undefined {
-  const p = planForProduct(str(d, 'product_id')) ?? (meta(d).plan_id as PlanId | undefined);
+  const cart = Array.isArray(d.product_cart) ? (d.product_cart as Data[]) : [];
+  const p =
+    planForProduct(str(d, 'product_id')) ??
+    cart.map((item) => planForProduct(str(item, 'product_id'))).find(Boolean) ??
+    (meta(d).plan_id as PlanId | undefined);
   return p && PLAN_IDS.includes(p) && p !== 'free' ? p : undefined;
 }
 
@@ -386,7 +391,8 @@ function unresolved(event: DodoWebhook, details: Record<string, unknown>) {
   return IGNORED;
 }
 
-const HANDLERS: Record<string, Handler> = {
+/** Must cover exactly the events in DODO_EVENT_ACTIONS (checked by the type). */
+const HANDLERS: Record<keyof typeof DODO_EVENT_ACTIONS, Handler> = {
   'payment.succeeded': paymentSucceeded,
   'subscription.active': (d, e) => startPeriod(d, e, 'activated'),
   'subscription.renewed': (d, e) => startPeriod(d, e, 'renewed'),
@@ -404,7 +410,10 @@ export async function handleDodoEvent(job: Job): Promise<unknown> {
   const event = await getEvent((job.data as { eventId: string }).eventId);
   if (!event) return null;
   const payload = event.payload as DodoWebhook;
-  const handler = payload.type ? HANDLERS[payload.type] : undefined;
+  const handler =
+    payload.type && payload.type in HANDLERS
+      ? HANDLERS[payload.type as keyof typeof HANDLERS]
+      : undefined;
   if (!handler) return IGNORED;
   return handler(payload.data ?? {}, payload);
 }

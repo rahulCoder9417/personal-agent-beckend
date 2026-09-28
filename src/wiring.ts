@@ -1,5 +1,6 @@
 // Composition root: connects modules through their exported hooks. Imported by api and worker.
 import { markBlocked } from './modules/auth/links.ts';
+import { deleteUserAutomations } from './modules/automations/automations.ts';
 import { setBlockedHandler } from './modules/channels/outbound.ts';
 import { parseSessionKey } from './modules/channels/types.ts';
 import { deleteUserConnections } from './modules/integrations/apps.ts';
@@ -35,6 +36,7 @@ export function wireModules(): void {
     offboard: async (userId) => {
       await deleteUserConnections(userId);
       await deleteUserMcpServers(userId);
+      await deleteUserAutomations(userId);
     },
   });
 }

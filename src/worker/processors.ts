@@ -1,10 +1,16 @@
 import { handleClerkEvent } from '../modules/auth/jobs.ts';
+import {
+  handleAutomationTurn,
+  handleComposioTrigger,
+  handleRunAutomation,
+} from '../modules/automations/jobs.ts';
 import { handleSendMessage, handleSendRaw } from '../modules/channels/outbound.ts';
 import { handleComposioEvent, handleSyncAllowlist } from '../modules/integrations/jobs.ts';
 import { expireApprovals, handleProcessApproval } from '../modules/orchestrator/approvals.ts';
 import { handleDeleteUser, handleOnboardUser } from '../modules/orchestrator/lifecycle.ts';
 import { handleProcessMessage, handleWebMessage } from '../modules/orchestrator/process-message.ts';
 import type { Processors } from './runner.ts';
+import { handleCleanup } from './schedules.ts';
 
 /** Every job the worker runs, by queue and job name. */
 export function processors(): Processors {
@@ -13,6 +19,11 @@ export function processors(): Processors {
       'process-message': handleProcessMessage,
       'web-message': handleWebMessage,
       'process-approval': handleProcessApproval,
+      'automation-turn': handleAutomationTurn,
+      'composio-trigger': handleComposioTrigger,
+    },
+    scheduled: {
+      'run-automation': handleRunAutomation,
     },
     outbound: {
       'send-message': handleSendMessage,
@@ -25,6 +36,7 @@ export function processors(): Processors {
       'sync-allowlist': handleSyncAllowlist,
       'composio-event': handleComposioEvent,
       'expire-approvals': async () => expireApprovals(),
+      cleanup: handleCleanup,
     },
   };
 }

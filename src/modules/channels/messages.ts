@@ -172,3 +172,12 @@ export async function deleteUserChannelData(userId: string): Promise<void> {
   await db().delete(attachments).where(eq(attachments.userId, userId));
   await db().delete(messages).where(eq(messages.userId, userId));
 }
+
+/** Chat history retention. */
+export async function cleanupMessages(olderThanDays = 365): Promise<number> {
+  const rows = await db()
+    .delete(messages)
+    .where(lt(messages.createdAt, new Date(Date.now() - olderThanDays * 86400_000)))
+    .returning({ id: messages.id });
+  return rows.length;
+}

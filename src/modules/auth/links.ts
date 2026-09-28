@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gt, isNull, TransactionRollbackError } from 'drizzle-orm';
+import { and, count, desc, eq, gt, isNull, lt, TransactionRollbackError } from 'drizzle-orm';
 import { config } from '../../shared/config.ts';
 import { randomString, sha256Hex } from '../../shared/crypto.ts';
 import { db } from '../../shared/db/client.ts';
@@ -207,4 +207,13 @@ export function maskDisplayId(link: ChannelLink): string {
   const digits = link.externalId.replace(/\D/g, '');
   if (digits.length < 6) return link.displayId || link.externalId;
   return `+${digits.slice(0, 2)} •••• ••${digits.slice(-4, -2)} ${digits.slice(-2)}`;
+}
+
+/** Used or expired link codes older than a day. */
+export async function cleanupLinkCodes(): Promise<number> {
+  const rows = await db()
+    .delete(linkCodes)
+    .where(lt(linkCodes.expiresAt, new Date(Date.now() - 86400_000)))
+    .returning({ id: linkCodes.id });
+  return rows.length;
 }

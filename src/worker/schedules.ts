@@ -1,4 +1,5 @@
 import { cleanupLinkCodes } from '../modules/auth/links.ts';
+import { cleanupWaitlistAttempts } from '../modules/auth/waitlist.ts';
 import { cleanupMessages } from '../modules/channels/messages.ts';
 import { cleanupEvents } from '../modules/events/cleanup.ts';
 import { queue } from '../modules/events/queues.ts';
@@ -31,6 +32,7 @@ export async function handleCleanup(): Promise<unknown> {
     events: await cleanupEvents(),
     linkCodes: await cleanupLinkCodes(),
     messages: await cleanupMessages(),
+    waitlistAttempts: await cleanupWaitlistAttempts(),
   };
   logger().info(result, 'cleanup done');
   return result;

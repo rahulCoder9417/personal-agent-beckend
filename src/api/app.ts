@@ -23,6 +23,7 @@ import { channelRoutes } from './routes/channels.ts';
 import { chatRoutes } from './routes/chat.ts';
 import { meRoutes } from './routes/me.ts';
 import { systemRoutes } from './routes/system.ts';
+import { waitlistRoutes } from './routes/waitlist.ts';
 import { dodoWebhookRoutes } from './routes/webhooks-dodo.ts';
 import { webhookRoutes } from './routes/webhooks.ts';
 import { channelWebhookRoutes } from './routes/webhooks-channels.ts';
@@ -46,6 +47,7 @@ export const allRoutes: RouteDef[] = [
   ...byokRoutes,
   ...adminRoutes,
   ...dodoWebhookRoutes,
+  ...waitlistRoutes,
 ];
 
 export function createApp(): Hono<AppEnv> {

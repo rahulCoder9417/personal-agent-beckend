@@ -5,7 +5,7 @@ const base = {
   DATABASE_URL: 'postgresql://a:b@localhost:5432/x',
   REDIS_URL: 'redis://localhost:6379',
   ENCRYPTION_KEY: Buffer.alloc(32, 1).toString('base64'),
-  VM_INTERNAL_SECRET: 'x'.repeat(16),
+  VM_INTERNAL_SECRET: 'x'.repeat(32),
 };
 
 describe('loadConfig', () => {

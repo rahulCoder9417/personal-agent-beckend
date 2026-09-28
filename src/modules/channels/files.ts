@@ -19,7 +19,7 @@ function sign(id: string, exp: number): string {
  */
 export function signedFileUrl(id: string, ttlSeconds = 3600): string {
   const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
-  return `${config().PUBLIC_API_URL}/mcp/files/${id}?exp=${exp}&sig=${sign(id, exp)}`;
+  return `${config().INTERNAL_API_URL}/mcp/files/${id}?exp=${exp}&sig=${sign(id, exp)}`;
 }
 
 export function verifyFileSignature(

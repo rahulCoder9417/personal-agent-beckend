@@ -1,6 +1,7 @@
 # Local development stack (HLD sections 3 and 4).
 #   docker compose -f infra/docker-compose.yml up -d            infra only; run api + worker on the host (pnpm dev)
 #   docker compose -f infra/docker-compose.yml --profile app up -d   also runs api + worker in containers
+#   (the vm-manager and the agent image are built from ../vm-manager)
 #   docker compose -f infra/docker-compose.yml --profile egress-test run --rm egress-test
 #
 # Networks:
@@ -114,23 +115,35 @@ services:
     build: ../../vm-manager
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/vm_manager
-      VM_INTERNAL_SECRET: ${VM_INTERNAL_SECRET:-dev-internal-secret-change-me}
+      VM_INTERNAL_SECRET: ${VM_INTERNAL_SECRET:-dev-internal-secret-change-me-0123456789}
       SANDBOX_NETWORK: personal-agent_sandbox
       EGRESS_PROXY_URL: http://172.30.0.2:3128
       EGRESS_PROXY_CONTAINER: egress-proxy
       EGRESS_ALLOWLIST_DIR: /allowlists
       LITELLM_BASE_URL: http://litellm:4000
       PLATFORM_MCP_URL: ${PLATFORM_MCP_URL:-http://api:8080/mcp}
+      AGENT_IMAGE: personal-agent/agent:dev
+      AWAKE_CAP: ${AWAKE_CAP:-15}
+      SNAPSHOT_ROOT: /backups
     volumes:
       # The Docker socket is mounted ONLY here (HLD 10.2).
       - /var/run/docker.sock:/var/run/docker.sock
       - ./egress-proxy/allowlists:/allowlists
+      - ${BACKUP_HOST_DIR:-./.backups}:/backups
     ports: ['127.0.0.1:9090:9090']
     depends_on:
       postgres: { condition: service_healthy }
+      agent-image: { condition: service_completed_successfully }
     networks: [platform, sandbox]
     restart: always
-    profiles: [vm]
+
+  # Builds the Hermes + Bridge image the vm-manager starts per user (not a running service).
+  agent-image:
+    build: ../../vm-manager/agent-image
+    image: personal-agent/agent:dev
+    entrypoint: ['true']
+    network_mode: none
+    restart: 'no'
 
   api:
     build: { context: .., dockerfile: infra/Dockerfile }
@@ -151,6 +164,8 @@ services:
     build: { context: .., dockerfile: infra/Dockerfile }
     command: ['node', '--import', 'tsx', 'src/worker/main.ts']
     env_file: [../.env]
+    volumes:
+      - ${BACKUP_HOST_DIR:-./.backups}:/var/backups/personal-agent
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/agent
       REDIS_URL: redis://redis:6379

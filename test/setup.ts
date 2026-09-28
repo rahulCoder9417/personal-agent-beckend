@@ -18,7 +18,7 @@ Object.assign(process.env, {
   REDIS_URL: inject('redisUrl'),
   QUEUE_PREFIX: `t${suffix}`,
   ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
-  VM_INTERNAL_SECRET: 'test-internal-secret-0123456789',
+  VM_INTERNAL_SECRET: 'test-internal-secret-0123456789-abcdef',
   CLERK_WEBHOOK_SECRET: 'whsec_' + Buffer.from('clerk-test-secret-0123456789').toString('base64'),
   PUBLIC_API_URL: 'http://api.test',
   WEB_APP_URL: 'http://web.test',

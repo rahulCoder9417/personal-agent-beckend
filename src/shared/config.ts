@@ -22,6 +22,8 @@ export const configSchema = z.object({
 
   /** Public https base of the api (used in links sent to users). */
   PUBLIC_API_URL: z.string().url().default('http://localhost:8080'),
+  /** How containers reach the api through the egress proxy (only /mcp is allowed). */
+  INTERNAL_API_URL: z.string().url().default('http://api:8080'),
   /** The web app (link instructions, checkout return, connect return). */
   WEB_APP_URL: z.string().url().default('http://localhost:3000'),
 
@@ -37,7 +39,8 @@ export const configSchema = z.object({
   CLERK_AUTHORIZED_PARTIES: optional,
 
   VM_MANAGER_URL: z.string().url().default('http://localhost:9090'),
-  VM_INTERNAL_SECRET: z.string().min(16),
+  /** Shared with the vm-manager (it requires 32+ chars). */
+  VM_INTERNAL_SECRET: z.string().min(32),
 
   LITELLM_URL: z.string().url().default('http://localhost:4000'),
   LITELLM_MASTER_KEY: optional,
@@ -89,8 +92,8 @@ export const configSchema = z.object({
   FREE_CREDITS_MONTHLY_CAP: z.coerce.number().int().positive().optional(),
 
   BACKUP_DIR: z.string().default('/var/backups/personal-agent'),
-  /** Where the vm-manager writes /data snapshots (a path it can reach). */
-  BACKUP_VOLUMES_DIR: z.string().default('/var/backups/personal-agent/volumes'),
+  /** Where the vm-manager writes /data snapshots, as a path inside ITS SNAPSHOT_ROOT. */
+  BACKUP_VOLUMES_DIR: z.string().default('/backups/volumes'),
   /** Off-server copy, run after each backup. `{dir}` and `{date}` are substituted. e.g. rclone copy {dir} b2crypt:backups/{date} */
   BACKUP_UPLOAD_CMD: optional,
   BACKUP_KEEP_DAYS: z.coerce.number().int().positive().default(7),

@@ -21,7 +21,8 @@ for t in users channel_links events messages approvals automations credit_grants
 done
 [ "$(psql -tAc 'select count(*) from users' "$DB")" -gt 0 ] || { echo "FAIL: no users restored"; exit 1; }
 
-VOLS="${BACKUP_VOLUMES_DIR:-$BACKUP_DIR/volumes}/$(basename "$LATEST")"
+# On the host the vm-manager's /backups is the same folder as BACKUP_DIR.
+VOLS="${RESTORE_VOLUMES_DIR:-$BACKUP_DIR/volumes}/$(basename "$LATEST")"
 if [ -d "$VOLS" ]; then
   for f in "$VOLS"/*.tar.gz; do
     [ -e "$f" ] || continue

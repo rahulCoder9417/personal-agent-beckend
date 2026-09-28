@@ -1,0 +1,10 @@
+extends:
+  - recommended
+rules:
+  # Webhooks are secured by provider signatures, not the bearer scheme.
+  security-defined: off
+  info-license: off
+  tag-description: off
+  # Public endpoints (healthz, plans) have no 4xx.
+  operation-4xx-response: off
+  no-server-example.com: off

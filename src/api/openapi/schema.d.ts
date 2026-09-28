@@ -608,6 +608,79 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/waitlist": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Join the waitlist (public)
+         * @description No auth. The caller's IP, user agent and request headers are stored with the entry for
+         *     abuse monitoring. The answer is the same whether the email is new or already on the list,
+         *     so emails can't be probed. Rate limited per IP and per email.
+         */
+        post: operations["joinWaitlist"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/waitlist": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Waitlist entries with abuse data (admin) */
+        get: operations["adminListWaitlist"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/waitlist/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Waitlist totals and abuse signals (admin) */
+        get: operations["adminWaitlistStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/waitlist/{entryId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Invite, reject or (un)flag an entry (admin) */
+        patch: operations["adminUpdateWaitlistEntry"];
+        trace?: never;
+    };
     "/webhooks/clerk": {
         parameters: {
             query?: never;
@@ -1082,6 +1155,77 @@ export interface components {
             /** @default false */
             newUsersOnly: boolean;
             plans?: components["schemas"]["PlanId"][];
+        };
+        /** @enum {string} */
+        WaitlistStatus: "pending" | "invited" | "rejected";
+        WaitlistJoin: {
+            /** Format: email */
+            email: string;
+            name?: string;
+            /** @description How they heard about us */
+            referralSource?: string;
+            useCase?: string;
+            utm?: {
+                source?: string;
+                medium?: string;
+                campaign?: string;
+                term?: string;
+                content?: string;
+            };
+            /** @description Honeypot. The form hides this field; humans leave it empty. */
+            website?: string;
+        };
+        WaitlistJoined: {
+            /** @enum {string} */
+            status: "ok";
+            /** @example You're on the list. We'll email you when it's your turn. */
+            message: string;
+        };
+        WaitlistEntry: {
+            id: string;
+            email: string;
+            name?: string | null;
+            referralSource?: string | null;
+            useCase?: string | null;
+            utm?: {
+                [key: string]: string;
+            } | null;
+            status: components["schemas"]["WaitlistStatus"];
+            flagged: boolean;
+            flagReasons: ("disposable_email" | "ip_burst" | "email_alias" | "manual")[];
+            ip: string;
+            /** @description Raw X-Forwarded-For chain */
+            forwardedFor?: string | null;
+            userAgent?: string | null;
+            acceptLanguage?: string | null;
+            referer?: string | null;
+            origin?: string | null;
+            /** @description Times this email was submitted */
+            submitCount: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            lastSeenAt: string;
+        };
+        WaitlistStats: {
+            total: number;
+            pending: number;
+            invited: number;
+            rejected: number;
+            flagged: number;
+            last24h: number;
+            /** @description Every submission, including rejected ones */
+            attemptsLast24h: number;
+            /** @description Honeypot hits and rate-limited attempts */
+            blockedLast24h: number;
+            /** @description IPs with more than one entry or attempt in the last 7 days, busiest first */
+            topIps: {
+                ip: string;
+                entries: number;
+                attempts: number;
+                /** Format: date-time */
+                lastAt: string;
+            }[];
         };
         ActivityEntry: {
             id: string;
@@ -2326,6 +2470,119 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    joinWaitlist: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WaitlistJoin"];
+            };
+        };
+        responses: {
+            /** @description Accepted (new or already on the list) */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WaitlistJoined"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    adminListWaitlist: {
+        parameters: {
+            query?: {
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+                status?: components["schemas"]["WaitlistStatus"];
+                flagged?: boolean;
+                ip?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["WaitlistEntry"][];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminWaitlistStats: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WaitlistStats"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminUpdateWaitlistEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    status?: components["schemas"]["WaitlistStatus"];
+                    flagged?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WaitlistEntry"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     webhookClerk: {

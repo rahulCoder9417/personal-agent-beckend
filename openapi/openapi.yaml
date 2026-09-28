@@ -43,6 +43,7 @@ tags:
   - name: coupons
   - name: activity
   - name: admin
+  - name: waitlist
   - name: webhooks
 
 paths:
@@ -979,6 +980,113 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  # ---------------------------------------------------------------- waitlist
+  /v1/waitlist:
+    post:
+      operationId: joinWaitlist
+      tags: [waitlist]
+      summary: Join the waitlist (public)
+      description: |
+        No auth. The caller's IP, user agent and request headers are stored with the entry for
+        abuse monitoring. The answer is the same whether the email is new or already on the list,
+        so emails can't be probed. Rate limited per IP and per email.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WaitlistJoin" }
+      responses:
+        "202":
+          description: Accepted (new or already on the list)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WaitlistJoined" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/admin/waitlist:
+    get:
+      operationId: adminListWaitlist
+      tags: [admin]
+      summary: Waitlist entries with abuse data (admin)
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/WaitlistStatus" }
+        - name: flagged
+          in: query
+          required: false
+          schema: { type: boolean }
+        - name: ip
+          in: query
+          required: false
+          schema: { type: string, maxLength: 64 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/WaitlistEntry" }
+                  nextCursor: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/admin/waitlist/stats:
+    get:
+      operationId: adminWaitlistStats
+      tags: [admin]
+      summary: Waitlist totals and abuse signals (admin)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WaitlistStats" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/admin/waitlist/{entryId}:
+    patch:
+      operationId: adminUpdateWaitlistEntry
+      tags: [admin]
+      summary: Invite, reject or (un)flag an entry (admin)
+      parameters:
+        - name: entryId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                status: { $ref: "#/components/schemas/WaitlistStatus" }
+                flagged: { type: boolean }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WaitlistEntry" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   # ---------------------------------------------------------------- webhooks (called by external services)
   /webhooks/clerk:
     post:
@@ -1533,6 +1641,89 @@ components:
         plans:
           type: array
           items: { $ref: "#/components/schemas/PlanId" }
+
+    WaitlistStatus:
+      type: string
+      enum: [pending, invited, rejected]
+
+    WaitlistJoin:
+      type: object
+      required: [email]
+      additionalProperties: false
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        name: { type: string, maxLength: 80 }
+        referralSource: { type: string, maxLength: 100, description: "How they heard about us" }
+        useCase: { type: string, maxLength: 500 }
+        utm:
+          type: object
+          additionalProperties: false
+          properties:
+            source: { type: string, maxLength: 100 }
+            medium: { type: string, maxLength: 100 }
+            campaign: { type: string, maxLength: 100 }
+            term: { type: string, maxLength: 100 }
+            content: { type: string, maxLength: 100 }
+        website:
+          type: string
+          maxLength: 200
+          description: Honeypot. The form hides this field; humans leave it empty.
+
+    WaitlistJoined:
+      type: object
+      required: [status, message]
+      properties:
+        status: { type: string, enum: [ok] }
+        message: { type: string, examples: ["You're on the list. We'll email you when it's your turn."] }
+
+    WaitlistEntry:
+      type: object
+      required: [id, email, status, flagged, flagReasons, ip, submitCount, createdAt, lastSeenAt]
+      properties:
+        id: { type: string }
+        email: { type: string }
+        name: { type: [string, "null"] }
+        referralSource: { type: [string, "null"] }
+        useCase: { type: [string, "null"] }
+        utm: { type: [object, "null"], additionalProperties: { type: string } }
+        status: { $ref: "#/components/schemas/WaitlistStatus" }
+        flagged: { type: boolean }
+        flagReasons:
+          type: array
+          items: { type: string, enum: [disposable_email, ip_burst, email_alias, manual] }
+        ip: { type: string }
+        forwardedFor: { type: [string, "null"], description: "Raw X-Forwarded-For chain" }
+        userAgent: { type: [string, "null"] }
+        acceptLanguage: { type: [string, "null"] }
+        referer: { type: [string, "null"] }
+        origin: { type: [string, "null"] }
+        submitCount: { type: integer, description: "Times this email was submitted" }
+        createdAt: { type: string, format: date-time }
+        lastSeenAt: { type: string, format: date-time }
+
+    WaitlistStats:
+      type: object
+      required: [total, pending, invited, rejected, flagged, last24h, attemptsLast24h, blockedLast24h, topIps]
+      properties:
+        total: { type: integer }
+        pending: { type: integer }
+        invited: { type: integer }
+        rejected: { type: integer }
+        flagged: { type: integer }
+        last24h: { type: integer }
+        attemptsLast24h: { type: integer, description: "Every submission, including rejected ones" }
+        blockedLast24h: { type: integer, description: "Honeypot hits and rate-limited attempts" }
+        topIps:
+          type: array
+          description: IPs with more than one entry or attempt in the last 7 days, busiest first
+          items:
+            type: object
+            required: [ip, entries, attempts, lastAt]
+            properties:
+              ip: { type: string }
+              entries: { type: integer }
+              attempts: { type: integer }
+              lastAt: { type: string, format: date-time }
 
     ActivityEntry:
       type: object

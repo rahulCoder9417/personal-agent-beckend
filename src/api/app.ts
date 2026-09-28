@@ -4,12 +4,29 @@ import { AppError } from '../shared/errors.ts';
 import { logger } from '../shared/logger.ts';
 import { mountAdminBoard } from './admin-board.ts';
 import { errorResponse, mountRoutes, type RouteDef } from './router.ts';
+import { adminRoutes } from './routes/admin.ts';
+import { billingRoutes } from './routes/billing.ts';
+import { byokRoutes } from './routes/byok.ts';
+import { couponRoutes } from './routes/coupons.ts';
+import { creditRoutes } from './routes/credits.ts';
 import { meRoutes } from './routes/me.ts';
 import { systemRoutes } from './routes/system.ts';
+import { dodoWebhookRoutes } from './routes/webhooks-dodo.ts';
 import { webhookRoutes } from './routes/webhooks.ts';
 import type { AppEnv } from './types.ts';
 
-export const allRoutes: RouteDef[] = [...systemRoutes, ...meRoutes, ...webhookRoutes];
+export const allRoutes: RouteDef[] = [
+  ...systemRoutes,
+  ...meRoutes,
+  ...webhookRoutes,
+  // Phase 5: billing, credits, coupons, bring-your-own key, admin, Dodo webhook
+  ...billingRoutes,
+  ...creditRoutes,
+  ...couponRoutes,
+  ...byokRoutes,
+  ...adminRoutes,
+  ...dodoWebhookRoutes,
+];
 
 export function createApp(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();

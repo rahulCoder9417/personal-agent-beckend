@@ -5,7 +5,7 @@ The backend of the Personal Agent MVP: one TypeScript codebase, run as two proce
 - **api** (`src/api/main.ts`): Hono. Webhooks, REST + SSE for the web app, Platform MCP at `/mcp`, Bull Board at `/admin/queues`.
 - **worker** (`src/worker/main.ts`): BullMQ. Runs every job (4 queues: `inbound`, `outbound`, `scheduled`, `system`).
 
-Design: `docs/mvp-hld.md`. **What was built vs the design: `docs/build-report.md`.** REST contract: `openapi/openapi.yaml`. gRPC contract: `../vm-manager/proto/vm/v1/vm.proto`.
+Design: `docs/mvp-hld.md`. **System guide (requirements, architecture, tech stack, what was built, how it works): `docs/build-report.md`.** REST contract: `openapi/openapi.yaml`. gRPC contract: `../vm-manager/proto/vm/v1/vm.proto`.
 
 ## Run locally
 

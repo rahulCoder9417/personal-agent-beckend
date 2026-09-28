@@ -1,4 +1,6 @@
 import { DelayedError, Worker, type Job } from 'bullmq';
+import { alert } from '../modules/admin/alerts.ts';
+import { inc } from '../modules/admin/metrics.ts';
 import { markEvent } from '../modules/events/intake.ts';
 import { QUEUES, RETRY_DELAYS_MS, type QueueName } from '../modules/events/queues.ts';
 import { acquireUserLock, releaseUserLock } from '../modules/orchestrator/lock.ts';
@@ -83,8 +85,16 @@ export function startWorkers(processors: Processors, opts: RunnerOptions = {}): 
         },
         'job failed',
       );
+      inc('jobs_failed_total', { queue: queueName, job: job.name, final: String(final) });
       const eventId = (job.data as { eventId?: string }).eventId;
       if (final && eventId) void markEvent(eventId, 'failed', err.message).catch(() => {});
+      if (final)
+        void alert('Job failed after all retries', {
+          queue: queueName,
+          job: job.name,
+          jobId: job.id,
+          err: err.message,
+        });
     });
     worker.on('error', (err) => log.error({ queue: queueName, err: err.message }, 'worker error'));
     return worker;

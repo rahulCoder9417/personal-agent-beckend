@@ -1,3 +1,5 @@
+import { handleBackup } from '../modules/admin/backup.ts';
+import { handleHealthCheck } from '../modules/admin/health.ts';
 import { handleClerkEvent } from '../modules/auth/jobs.ts';
 import {
   handleAutomationTurn,
@@ -37,6 +39,8 @@ export function processors(): Processors {
       'composio-event': handleComposioEvent,
       'expire-approvals': async () => expireApprovals(),
       cleanup: handleCleanup,
+      backup: handleBackup,
+      'health-check': handleHealthCheck,
     },
   };
 }

@@ -89,6 +89,17 @@ export const configSchema = z.object({
   FREE_CREDITS_MONTHLY_CAP: z.coerce.number().int().positive().optional(),
 
   BACKUP_DIR: z.string().default('/var/backups/personal-agent'),
+  /** Where the vm-manager writes /data snapshots (a path it can reach). */
+  BACKUP_VOLUMES_DIR: z.string().default('/var/backups/personal-agent/volumes'),
+  /** Off-server copy, run after each backup. `{dir}` and `{date}` are substituted. e.g. rclone copy {dir} b2crypt:backups/{date} */
+  BACKUP_UPLOAD_CMD: optional,
+  BACKUP_KEEP_DAYS: z.coerce.number().int().positive().default(7),
+  /** Bearer token for GET /metrics (unset = endpoint disabled). */
+  METRICS_TOKEN: optional,
+  /** Optional webhook (e.g. Slack incoming webhook) for alerts. */
+  ALERT_WEBHOOK_URL: optional,
+  /** Requests per minute per IP on every endpoint (specific endpoints have stricter limits). */
+  RATE_LIMIT_PER_IP_PER_MIN: z.coerce.number().int().positive().default(600),
   ATTACHMENTS_DIR: z.string().default('.tmp/attachments'),
 
   /** Trust X-Forwarded-For from Caddy. */

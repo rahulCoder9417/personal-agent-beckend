@@ -5,6 +5,10 @@ import { AppError } from '../shared/errors.ts';
 import { logger } from '../shared/logger.ts';
 import { mountAdminBoard } from './admin-board.ts';
 import { mountMcp } from './mcp.ts';
+import { accessLog, clientIp, ipRateLimit } from './middleware.ts';
+import { renderMetrics } from '../modules/admin/metrics.ts';
+import { config } from '../shared/config.ts';
+import { safeEqual } from '../shared/crypto.ts';
 import { errorResponse, mountRoutes, type RouteDef } from './router.ts';
 import { agentRoutes } from './routes/agent.ts';
 import { appRoutes } from './routes/apps.ts';
@@ -33,6 +37,9 @@ export function createApp(): Hono<AppEnv> {
   wireModules();
   const app = new Hono<AppEnv>();
   app.use(requestId());
+  app.use(accessLog);
+  app.use(clientIp);
+  app.use(ipRateLimit);
 
   app.onError((err, c) => {
     if (err instanceof AppError) return errorResponse(c, err);
@@ -43,6 +50,15 @@ export function createApp(): Hono<AppEnv> {
 
   mountRoutes(app, allRoutes);
   mountMcp(app);
+
+  // Prometheus metrics, bearer-protected (disabled when METRICS_TOKEN is unset).
+  app.get('/metrics', async (c) => {
+    const token = config().METRICS_TOKEN;
+    const given = c.req.header('authorization')?.replace(/^Bearer /i, '') ?? '';
+    if (!token || !safeEqual(given, token))
+      return errorResponse(c, new AppError(404, 'not_found', 'Not found'));
+    return c.text(await renderMetrics(), 200, { 'content-type': 'text/plain; version=0.0.4' });
+  });
   mountAdminBoard(app);
   return app;
 }

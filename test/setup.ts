@@ -22,6 +22,9 @@ Object.assign(process.env, {
   CLERK_WEBHOOK_SECRET: 'whsec_' + Buffer.from('clerk-test-secret-0123456789').toString('base64'),
   PUBLIC_API_URL: 'http://api.test',
   WEB_APP_URL: 'http://web.test',
+  TELEGRAM_WEBHOOK_SECRET: 'tg-secret',
+  TELEGRAM_BOT_USERNAME: 'agent_bot',
+  ATTACHMENTS_DIR: `.tmp/test-attachments/${suffix}`,
   CLERK_JWT_KEY: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
   TEST_JWT_PRIVATE_KEY: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
 });

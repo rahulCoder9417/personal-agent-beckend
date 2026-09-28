@@ -17,11 +17,17 @@ export interface InboundHooks {
   handleButton(userId: string, msg: InboundMessage, eventId: string): Promise<boolean>;
   /** Plain text that isn't for the agent (e.g. a coupon code). Return true if handled. */
   handleText(userId: string, text: string, sessionKey: string): Promise<boolean>;
+  /**
+   * Runs just before the message is saved: download media, transcribe voice (channels/media.ts).
+   * Returns the message to save (media with local paths, transcripts appended to the text).
+   */
+  prepareInbound(userId: string, msg: InboundMessage, eventId: string): Promise<InboundMessage>;
 }
 
 let inboundHooks: InboundHooks = {
   handleButton: async () => false,
   handleText: async () => false,
+  prepareInbound: async (_userId, msg) => msg,
 };
 
 export function setInboundHooks(h: Partial<InboundHooks>): void {
@@ -69,11 +75,12 @@ export async function handleProcessMessage(job: Job): Promise<unknown> {
   if (await inboundHooks.handleButton(userId, msg, eventId)) return null;
   if (await inboundHooks.handleText(userId, msg.text, sessionKey)) return null;
 
+  const prepared = await inboundHooks.prepareInbound(userId, msg, eventId);
   const saved = await saveInbound({
     userId,
     channel: msg.channel,
-    text: msg.text,
-    media: msg.media,
+    text: prepared.text,
+    media: prepared.media,
     eventId,
     sessionKey,
     externalId: msg.externalMessageId,
@@ -85,7 +92,7 @@ export async function handleProcessMessage(job: Job): Promise<unknown> {
     kind: 'message',
     sessionKey,
     channel: msg.channel,
-    text: msg.text,
+    text: saved.text,
     attachments: saved.mediaRef ?? [],
     inboundMessageId: saved.id,
   });

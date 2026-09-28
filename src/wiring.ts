@@ -10,7 +10,7 @@ export function wireModules(): void {
   if (wired) return;
   wired = true;
 
-  wireChannels(); // WhatsApp + Sendblue adapters, parsers, receipts
+  wireChannels(); // WhatsApp + Sendblue adapters, parsers, receipts, media download
 
   // A blocked chat is marked; the agent is told to use the web app instead.
   setBlockedHandler(async (userId, sessionKey) => {

@@ -1,5 +1,6 @@
-// Phase 6 channels: plugs WhatsApp and Sendblue (iMessage) into the channel registries.
-// Called once from src/wiring.ts.
+// Phase 6 channels: plugs WhatsApp and Sendblue (iMessage) into the channel registries and the
+// media download (+ voice to text) into the inbound path. Called once from src/wiring.ts.
+import { setInboundHooks } from '../orchestrator/process-message.ts';
 import { registerAdapter } from './adapters/index.ts';
 import {
   parseSendblueEvent,
@@ -15,6 +16,7 @@ import {
   type WhatsappEventPayload,
 } from './adapters/whatsapp.ts';
 import { registerInboundParser } from './inbound.ts';
+import { prepareInboundMedia } from './media.ts';
 import { registerStatusParser } from './status.ts';
 
 export function wireChannels(): void {
@@ -28,4 +30,7 @@ export function wireChannels(): void {
 
   registerStatusParser('whatsapp', (p) => parseWhatsappStatus(p as unknown as WaStatus));
   registerStatusParser('sendblue', (p) => parseSendblueStatus(p as SendbluePayload));
+
+  // The worker downloads media and transcribes voice before the message is saved.
+  setInboundHooks({ prepareInbound: prepareInboundMedia });
 }

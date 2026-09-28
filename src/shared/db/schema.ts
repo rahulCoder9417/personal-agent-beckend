@@ -5,3 +5,4 @@ export * from '../../modules/auth/schema.ts';
 export * from '../../modules/channels/schema.ts';
 export * from '../../modules/events/schema.ts';
 export * from '../../modules/orchestrator/schema.ts';
+export * from '../../modules/integrations/tables.ts';

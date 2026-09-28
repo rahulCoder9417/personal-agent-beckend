@@ -70,6 +70,8 @@ export const configSchema = z.object({
   COMPOSIO_API_KEY: optional,
   COMPOSIO_WEBHOOK_SECRET: optional,
   COMPOSIO_API_URL: z.string().url().default('https://backend.composio.dev'),
+  /** JSON map of app slug → Composio auth config id, e.g. {"gmail":"ac_123"}. */
+  COMPOSIO_AUTH_CONFIGS: optional,
 
   JEV_URL: optional,
   JEV_API_KEY: optional,

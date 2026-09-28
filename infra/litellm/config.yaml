@@ -1,0 +1,31 @@
+# Model names the backend uses: `cheap` (every plan) and `claude`, `gpt` (paid plans).
+# Per-user virtual keys (created by the backend) restrict which of these a user may call.
+model_list:
+  - model_name: cheap
+    litellm_params:
+      model: openrouter/meta-llama/llama-3.3-70b-instruct
+      api_key: os.environ/OPENROUTER_API_KEY
+  - model_name: claude
+    litellm_params:
+      model: anthropic/claude-sonnet-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: gpt
+    litellm_params:
+      model: openai/gpt-5-mini
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: whisper
+    litellm_params:
+      model: openai/whisper-1
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: audio_transcription
+
+router_settings:
+  # Backup model when a provider is down (HLD 10.1).
+  fallbacks:
+    - claude: [cheap]
+    - gpt: [cheap]
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL

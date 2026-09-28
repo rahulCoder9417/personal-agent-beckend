@@ -1,0 +1,188 @@
+# Local development stack (HLD sections 3 and 4).
+#   docker compose -f infra/docker-compose.yml up -d            infra only; run api + worker on the host (pnpm dev)
+#   docker compose -f infra/docker-compose.yml --profile app up -d   also runs api + worker in containers
+#   (the vm-manager and the agent image are built from ../vm-manager)
+#   docker compose -f infra/docker-compose.yml --profile egress-test run --rm egress-test
+#
+# Networks:
+#   edge     Caddy + api. Only Caddy publishes ports (80/443).
+#   platform api, worker, vm-manager, postgres, redis, litellm, egress-proxy. No published ports except
+#            127.0.0.1 bindings for local dev. Outbound internet is allowed (the worker calls Telegram,
+#            Composio, …; LiteLLM calls the model providers). Nothing on it is reachable from outside.
+#   sandbox  user containers + egress-proxy + vm-manager. `internal: true`: no route to the internet,
+#            the egress proxy is the only way out.
+name: personal-agent
+
+x-healthcheck: &hc
+  interval: 5s
+  timeout: 3s
+  retries: 20
+
+networks:
+  edge: {}
+  platform: {}
+  sandbox:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
+
+volumes:
+  pgdata: {}
+  redisdata: {}
+  caddydata: {}
+
+services:
+  caddy:
+    image: caddy:2
+    ports: ['80:80', '443:443']
+    environment:
+      API_DOMAIN: ${API_DOMAIN:-localhost}
+      API_UPSTREAM: ${API_UPSTREAM:-host.docker.internal:8080}
+    extra_hosts: ['host.docker.internal:host-gateway']
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+    networks: [edge]
+    healthcheck:
+      <<: *hc
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:2019/config/']
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agent}
+      POSTGRES_DB: ${POSTGRES_DB:-agent}
+    ports: ['127.0.0.1:5432:5432']
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks: [platform]
+    healthcheck:
+      <<: *hc
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER:-agent}']
+
+  redis:
+    image: redis:7
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory-policy', 'noeviction']
+    ports: ['127.0.0.1:6379:6379']
+    volumes: [redisdata:/data]
+    networks: [platform]
+    healthcheck:
+      <<: *hc
+      test: ['CMD', 'redis-cli', 'ping']
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    command: ['--config', '/app/config.yaml', '--port', '4000']
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/litellm
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-dev-master-key}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      STORE_MODEL_IN_DB: 'True'
+    ports: ['127.0.0.1:4000:4000']
+    volumes: ['./litellm/config.yaml:/app/config.yaml:ro']
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [platform]
+    healthcheck:
+      <<: *hc
+      retries: 60
+      test:
+        [
+          'CMD-SHELL',
+          'python -c "import urllib.request;urllib.request.urlopen(''http://127.0.0.1:4000/health/liveliness'')"',
+        ]
+
+  egress-proxy:
+    image: ubuntu/squid:latest
+    container_name: egress-proxy
+    volumes:
+      - ./egress-proxy/squid.conf:/etc/squid/squid.conf:ro
+      - ./egress-proxy/allowlists:/etc/squid/allowlists:ro
+    networks:
+      platform: {}
+      sandbox:
+        ipv4_address: 172.30.0.2
+    healthcheck:
+      <<: *hc
+      test: ['CMD-SHELL', 'squid -k check']
+
+  vm-manager:
+    build: ../../vm-manager
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/vm_manager
+      VM_INTERNAL_SECRET: ${VM_INTERNAL_SECRET:-dev-internal-secret-change-me-0123456789}
+      SANDBOX_NETWORK: personal-agent_sandbox
+      EGRESS_PROXY_URL: http://172.30.0.2:3128
+      EGRESS_PROXY_CONTAINER: egress-proxy
+      EGRESS_ALLOWLIST_DIR: /allowlists
+      LITELLM_BASE_URL: http://litellm:4000
+      PLATFORM_MCP_URL: ${PLATFORM_MCP_URL:-http://api:8080/mcp}
+      AGENT_IMAGE: personal-agent/agent:dev
+      AWAKE_CAP: ${AWAKE_CAP:-15}
+      SNAPSHOT_ROOT: /backups
+    volumes:
+      # The Docker socket is mounted ONLY here (HLD 10.2).
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./egress-proxy/allowlists:/allowlists
+      - ${BACKUP_HOST_DIR:-./.backups}:/backups
+    ports: ['127.0.0.1:9090:9090']
+    depends_on:
+      postgres: { condition: service_healthy }
+      agent-image: { condition: service_completed_successfully }
+    networks: [platform, sandbox]
+    restart: always
+
+  # Builds the Hermes + Bridge image the vm-manager starts per user (not a running service).
+  agent-image:
+    build: ../../vm-manager/agent-image
+    image: personal-agent/agent:dev
+    entrypoint: ['true']
+    network_mode: none
+    restart: 'no'
+
+  api:
+    build: { context: .., dockerfile: infra/Dockerfile }
+    command: ['node', '--import', 'tsx', 'src/api/main.ts']
+    env_file: [../.env]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/agent
+      REDIS_URL: redis://redis:6379
+      VM_MANAGER_URL: http://vm-manager:9090
+      LITELLM_URL: http://litellm:4000
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [edge, platform]
+    profiles: [app]
+
+  worker:
+    build: { context: .., dockerfile: infra/Dockerfile }
+    command: ['node', '--import', 'tsx', 'src/worker/main.ts']
+    env_file: [../.env]
+    volumes:
+      - ${BACKUP_HOST_DIR:-./.backups}:/var/backups/personal-agent
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/agent
+      REDIS_URL: redis://redis:6379
+      VM_MANAGER_URL: http://vm-manager:9090
+      LITELLM_URL: http://litellm:4000
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [platform]
+    profiles: [app]
+
+  # Phase 0 "done when": a container on the sandbox network can reach only the egress proxy.
+  egress-test:
+    image: curlimages/curl:latest
+    entrypoint: ['/bin/sh', '/tests/egress-test.sh']
+    volumes: ['./tests/egress-test.sh:/tests/egress-test.sh:ro']
+    networks: [sandbox]
+    depends_on:
+      egress-proxy: { condition: service_healthy }
+    profiles: [egress-test]

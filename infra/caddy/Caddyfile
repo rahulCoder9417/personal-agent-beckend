@@ -1,0 +1,10 @@
+{
+	admin 127.0.0.1:2019
+}
+
+{$API_DOMAIN} {
+	encode gzip
+	reverse_proxy {$API_UPSTREAM} {
+		flush_interval -1
+	}
+}

@@ -15,6 +15,13 @@
       "when": 1790591504480,
       "tag": "0001_phase3_chat",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790592009658,
+      "tag": "0002_phase4_apps_approvals",
+      "breakpoints": true
     }
   ]
 }

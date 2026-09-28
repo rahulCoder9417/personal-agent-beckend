@@ -9,6 +9,7 @@ import { errorResponse, mountRoutes, type RouteDef } from './router.ts';
 import { agentRoutes } from './routes/agent.ts';
 import { appRoutes } from './routes/apps.ts';
 import { approvalRoutes } from './routes/approvals.ts';
+import { automationRoutes } from './routes/automations.ts';
 import { channelRoutes } from './routes/channels.ts';
 import { chatRoutes } from './routes/chat.ts';
 import { meRoutes } from './routes/me.ts';
@@ -24,6 +25,7 @@ export const allRoutes: RouteDef[] = [
   ...agentRoutes,
   ...approvalRoutes,
   ...appRoutes,
+  ...automationRoutes,
   ...webhookRoutes,
 ];
 

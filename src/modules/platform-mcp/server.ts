@@ -6,6 +6,7 @@ import { touch } from '../orchestrator/sandbox.ts';
 import { platformTools, ToolError, type ToolContext } from './registry.ts';
 import './tools/core.ts';
 import './tools/apps.ts';
+import './tools/automations.ts';
 
 /** A per-request MCP server bound to ONE user (stateless streamable HTTP). */
 export function createPlatformMcpServer(ctx: ToolContext): McpServer {

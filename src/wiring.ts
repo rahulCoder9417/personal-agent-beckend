@@ -3,6 +3,7 @@ import { markBlocked } from './modules/auth/links.ts';
 import { wireChannels } from './modules/channels/register.ts';
 import { setBlockedHandler } from './modules/channels/outbound.ts';
 import { parseSessionKey } from './modules/channels/types.ts';
+import { wireRouting } from './modules/orchestrator/routing.ts';
 
 let wired = false;
 
@@ -11,6 +12,7 @@ export function wireModules(): void {
   wired = true;
 
   wireChannels(); // WhatsApp + Sendblue adapters, parsers, receipts, media download
+  wireRouting(); // Jev: simple / task / spam before waking a container
 
   // A blocked chat is marked; the agent is told to use the web app instead.
   setBlockedHandler(async (userId, sessionKey) => {

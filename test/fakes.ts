@@ -59,6 +59,11 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
   const deliveries: Delivery[] = [];
   const created: string[] = [];
   const touches: string[] = [];
+  const allowlists: Array<{
+    userId: string;
+    domains: string[];
+    mcpServers: Array<{ url: string; authSecret: string }>;
+  }> = [];
   const agent: AgentBehaviour =
     behaviour ??
     (async (d, mcp) =>
@@ -104,7 +109,12 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
       tokens.delete(req.userId);
       return {};
     },
-    async setEgressAllowlist() {
+    async setEgressAllowlist(req: {
+      userId: string;
+      domains: string[];
+      mcpServers: Array<{ url: string; authSecret: string }>;
+    }) {
+      allowlists.push(req);
       return {};
     },
     async getUsage() {
@@ -112,7 +122,7 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
     },
   };
   setVmClient(fake as unknown as VmClient);
-  return { tokens, deliveries, created, touches, state };
+  return { tokens, deliveries, created, touches, allowlists, state };
 }
 
 export interface SentTelegram {
@@ -160,4 +170,67 @@ export function telegramButton(chatId: number, data: string) {
       message: { message_id: 1, chat: { id: chatId } },
     },
   };
+}
+
+export interface ExecutedAction {
+  slug: string;
+  userId: string;
+  connectedAccountId?: string;
+  arguments: Record<string, unknown>;
+}
+
+/** Fake Composio: every app "connects" instantly; webhooks are "signed" with signature "valid". */
+export async function installFakeComposio() {
+  const { setComposioApi } = await import('../src/modules/integrations/composio.ts');
+  const executed: ExecutedAction[] = [];
+  const triggers: Array<{ userId: string; slug: string; triggerId: string }> = [];
+  let n = 0;
+  setComposioApi({
+    async connectLink(userId, authConfigId) {
+      return {
+        accountId: `ca_${userId}_${authConfigId}_${n++}`,
+        redirectUrl: `https://composio.test/connect/${authConfigId}`,
+      };
+    },
+    async listAccounts() {
+      return [];
+    },
+    async deleteAccount() {},
+    async listTools(toolkits) {
+      return toolkits.flatMap((t) => [
+        {
+          slug: `${t.toUpperCase()}_SEND_EMAIL`,
+          toolkit: t,
+          name: 'Send',
+          description: 'Send an email',
+          inputParameters: {},
+        },
+        {
+          slug: `${t.toUpperCase()}_LIST_EMAILS`,
+          toolkit: t,
+          name: 'List',
+          description: 'List emails',
+          inputParameters: {},
+        },
+      ]);
+    },
+    async execute(slug, input) {
+      executed.push({ slug, ...input });
+      return { successful: true, data: { ok: true }, error: null };
+    },
+    async createTrigger(userId, slug) {
+      const triggerId = `ti_${n++}`;
+      triggers.push({ userId, slug, triggerId });
+      return { triggerId };
+    },
+    async deleteTrigger(triggerId) {
+      const i = triggers.findIndex((t) => t.triggerId === triggerId);
+      if (i >= 0) triggers.splice(i, 1);
+    },
+    async verifyWebhook(input) {
+      if (input.signature !== 'valid') throw new Error('bad signature');
+      return JSON.parse(input.rawBody);
+    },
+  });
+  return { executed, triggers };
 }

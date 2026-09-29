@@ -29,7 +29,7 @@ What the MVP had to do, how it was designed, what we built, the tech used, and h
 
 | | |
 |---|---|
-| **Build phases (HLD §9)** | All 8 coded and committed (0 foundations → 8 hardening), plus a waitlist API added afterwards |
+| **Build phases (HLD §9)** | All 8 coded and committed (0 foundations → 8 hardening), plus two later changes: a waitlist API, and the 2026-09-29 pricing update (Max $30, automations 1/5/50, 90-day credits, waitlist discount) |
 | **Backend tests** | 24 files, 188 tests, all passing: real Postgres + real Redis, fakes for outside services |
 | **vm-manager tests** | Go unit tests (with a fake Docker daemon) + 27 Bridge (Python) tests, all passing |
 | **Contract coverage** | Every operation in `openapi.yaml` is implemented (a test enforces it) |
@@ -385,7 +385,7 @@ Step by step (`orchestrator/process-message.ts` → `turn.ts`):
 4. **Media.** Downloads photos, files and voice to `ATTACHMENTS_DIR/<user>/<id>` and saves an `attachments` row. Voice goes to LiteLLM `/v1/audio/transcriptions` and the transcript is appended to the text. If this fails, a note is added and the message is still delivered.
 5. **Save.** The message is saved once per event, then SSE sends `message.created`.
 6. **Credit check.** If the balance is ≤ 0, the user gets "You're out of credits… /billing" and no container is woken.
-7. **Jev routing** (`routing.ts`), only for short text-only messages:
+7. **Jev routing** (`routing.ts`), only for normal chat messages that are text-only (no attachments) and at most 1,000 characters; everything else is a task:
    - `simple`, at least 70% sure → the cheap model answers with the user's own LiteLLM key; if it answers `ESCALATE`, the message goes to the agent instead.
    - `spam`, at least 90% sure → dropped.
    - anything else, an error, or Jev not configured → `task`.
@@ -405,7 +405,7 @@ Step by step (`orchestrator/process-message.ts` → `turn.ts`):
 ### 6.6 Sending replies (outbound)
 
 - Every outgoing message is a `messages` row plus an `outbound/send-message` job. The job skips messages that were already sent.
-- **Telegram:** text split at ~4,096 characters on paragraph, line or space boundaries; up to 3 buttons as an inline keyboard on the last part (`callback_data` = our button id, e.g. `apr:<id>:yes`). A `403` means the user blocked the bot: the link is marked blocked, and the agent is told to use the web session.
+- **Telegram:** text split at ~4,096 characters on paragraph, line or space boundaries; buttons as one row of an inline keyboard on the last part (`callback_data` = our button id, e.g. `apr:<id>:yes`). A `403` means the user blocked the bot: the link is marked blocked, and the agent is told to use the web session.
 - **WhatsApp:**
   - Inside 24 hours of the user's last message: free text plus up to 3 reply buttons.
   - Outside that window: an approved template with the text in `{{1}}` (flattened, about 700 characters). Messages with buttons use the approval template (its quick-reply payloads are our button ids); others use the reminder or task-done template.
@@ -482,7 +482,7 @@ The 9 tools are listed in §8.3.
 | When | What happens |
 |---|---|
 | Before a turn | balance ≤ 0 → "out of credits" reply, no wake (web: `402`) |
-| During a turn | the LiteLLM key's `max_budget` = spend so far + balance ÷ 250 dollars, so LiteLLM refuses once the credits run out |
+| During a turn | the LiteLLM key's `max_budget` = spend so far + balance ÷ 250 dollars, so LiteLLM refuses once the credits run out (BYOK users: no AI cap while the balance is above 0) |
 | Balance hits ≤ 0 | budget set to spend so far; `onBalanceDepleted` → all enabled automations paused (`out_of_credits`) |
 | Credits added | budget raised; `onCreditsAdded` → automations paused for credits resume; SSE `credits.updated` |
 
@@ -669,7 +669,7 @@ The per-item checklist (HLD 10.2) is in `docs/security-checklist.md`.
 | orchestrator | `approvals` | user_id, summary, app, action, arguments, status, session_key, expires_at, decided_at/via, used_at |
 | integrations | `connections` | user_id, app, composio_account_id (unique), status, account_label |
 | integrations | `user_mcp_servers` | user_id, name, url, domain, auth_header_name, auth_secret (encrypted), enabled |
-| integrations | `composio_triggers` | user_id, composio_trigger_id, trigger_slug, config |
+| integrations | `composio_triggers` | user_id, composio_trigger_id, trigger_slug, config. **Not used yet:** app-event automations keep their Composio trigger id in `automations.trigger_ref` |
 | integrations | `byok_keys` | user_id + provider (unique), key (encrypted), last4, model |
 | automations | `automations` | kind, title, instruction, run_at / cron / timezone / trigger + trigger_ref, session_key, enabled, paused_reason, fail_count, next_run_at, last_run_at, completed_at |
 | billing | `subscriptions` | user_id, plan, dodo_subscription_id, status (incl. `cancel_at_period_end`), period_start/end, ended_at |
@@ -832,7 +832,7 @@ vm-manager variables (see its `.env.example`): `DATABASE_URL`, `VM_INTERNAL_SECR
 | Outside services | Swappable clients: `setVmClient` (a fake vm-manager whose "agent" calls the real `/mcp` with its token), `setTelegramApi`, `setWhatsappApi`, `setSendblueApi`, `setComposioApi`, `setLiteLLMClient`, `setDodoClient`, `setJevClient`, `setChatCompleter`, `setTranscriber`, `setUrlDownloader`, `setByokVerifier`, `setCommandRunner` |
 | HTTP clients | `phase6-http-clients.test.ts` runs the real HTTP clients against a local stand-in server |
 | Concurrency | 50 parallel coupon redemptions on real Postgres; per-user lock overlap test; parallel sync-usage |
-| Files | `phase1-*` (skeleton), `phase3-*` (Telegram, web), `phase4-*` (approvals, apps), `phase5-*` (credits, usage, coupons, Dodo, LiteLLM, jobs, API), `phase6-*` (WhatsApp, Sendblue, media, routing, clients), `phase7-*` (automations), `phase8-*` (hardening), `integration-billing`, `waitlist` |
+| Files | `phase1-*` (skeleton), `phase3-*` (Telegram, web), `phase4-*` (approvals, apps), `phase5-*` (credits, usage, coupons, Dodo, LiteLLM, jobs, API), `phase6-*` (WhatsApp, Sendblue, media, routing, clients), `phase7-*` (automations), `phase8-*` (hardening), `integration-billing`, `waitlist`, `waitlist-offer` |
 | vm-manager | Unit tests with a fake Docker daemon and a fake clock; the store on embedded Postgres; the Bridge with a fake Hermes; `-tags=integration` tests for real Docker (not run yet) |
 
 Commands: `pnpm lint && pnpm typecheck && pnpm test` · `pnpm openapi:lint` · in `vm-manager/`: `go vet ./... && go test ./...`, Bridge: `python3 -m unittest discover -s tests -t .` (in `agent-image/`).

@@ -30,7 +30,7 @@ What the MVP had to do, how it was designed, what we built, the tech used, and h
 | | |
 |---|---|
 | **Build phases (HLD §9)** | All 8 coded and committed (0 foundations → 8 hardening), plus a waitlist API added afterwards |
-| **Backend tests** | 23 files, 183 tests, all passing: real Postgres + real Redis, fakes for outside services |
+| **Backend tests** | 24 files, 188 tests, all passing: real Postgres + real Redis, fakes for outside services |
 | **vm-manager tests** | Go unit tests (with a fake Docker daemon) + 27 Bridge (Python) tests, all passing |
 | **Contract coverage** | Every operation in `openapi.yaml` is implemented (a test enforces it) |
 | **Run for real?** | **No.** Docker isn't installed on the dev machine, so no container, no real Hermes, no real Telegram/WhatsApp/Composio/LiteLLM/Dodo/Jev call has happened yet |
@@ -53,8 +53,8 @@ This is what HLD sections 0, 5 and 7 ask the product to do.
 | F5 | **Ask before risky actions** | Approvals for sending to others, deleting, paying; they never block the agent (✅/❌ comes back later as a new message) |
 | F6 | **Reminders and automations** | Once ("Friday 10am"), repeating ("every Monday 9am", in the user's timezone), app events ("when my boss emails me"); at most every 15 minutes |
 | F7 | **Credits billing** | 1 credit = $0.01 of price at ~2.5× real cost; AI, awake time, browser and paid tools cost credits; failed turns caused by us are free |
-| F8 | **Plans** | Free (100 sign-up credits, cheap model, 10 apps, 3 automations), Pro $12 (1,500/month, all models, 25 apps, 20 automations, top-ups), Max $29 (4,500/month, own MCP servers, 50 automations, priority) |
-| F9 | **Payments** | Dodo checkout for plans and top-ups ($10 = 800 credits); webhooks decide plan changes; refunds and chargebacks |
+| F8 | **Plans** (updated 2026-09-29 to match the pricing page) | Free $0 (100 sign-up credits, 10 apps, 1 automation), Pro $12 (1,500/month, 25 apps, 5 automations, top-ups), Max $30 (4,500/month, 25 apps + own MCP servers, 50 automations, priority when things get busy). **Every credit lasts 90 days from its grant**, whatever the source; unused monthly credits carry over. Model tiers are no longer advertised (for the MVP, AI comes from the user's own key); the model limits stay in code for later |
+| F9 | **Payments** | Dodo checkout for plans and top-ups ($10 = 800 credits); webhooks decide plan changes; refunds and chargebacks; waitlist members get 50% off their first month of Pro or Max |
 | F10 | **Coupon codes** | Admin-created free credits with strict anti-abuse rules (HLD 7.7) |
 | F11 | **Bring your own key** | The user's own AI key, encrypted; AI then isn't charged in credits |
 | F12 | **Smart routing** | Jev decides simple (cheap-model reply, no container) / task (wake the agent) / spam |
@@ -252,8 +252,8 @@ Status: ✅ built + tested (fakes for outside services) · ⚠️ built, needs a
 | F5 Approvals | `request_approval` → buttons / yes-no / web; single use; must match the exact action and arguments | ✅ |
 | F6 Automations | once / repeat (cron + timezone) / app event; 15-min minimum; plan limits; auto-pause; survive restart + Redis wipe | ✅ |
 | F7 Credits | Grants + append-only ledger; spending order; charging every 5 min and after each turn; reversal of our failures | ✅ |
-| F8 Plans | Free / Pro / Max with limits on apps, automations, models, own MCP, top-ups, queue priority | ✅ |
-| F9 Payments | Dodo checkout + 11 webhook event types, exactly once | ✅ / ⚠️ real Dodo |
+| F8 Plans | Free $0 / Pro $12 / Max $30 with limits on apps (10/25/25), automations (1/5/50), own MCP (Max), top-ups (paid), queue priority; 90-day credits; model limits kept in code | ✅ |
+| F9 Payments | Dodo checkout + 11 webhook event types, exactly once; waitlist discount code applied automatically | ✅ / ⚠️ real Dodo |
 | F10 Coupons | Every 7.7 rule, incl. 50 parallel redemptions on real Postgres | ✅ 🔁 |
 | F11 BYOK | Encrypted keys, test-called before saving; AI not charged | ✅ 🔁 |
 | F12 Jev routing | Real SDK; fallback to "task" on any doubt or failure | ✅ / ⚠️ real Jev |
@@ -460,7 +460,9 @@ The 9 tools are listed in §8.3.
 - **Balance** = the sum of what's left in unexpired grants, plus any debt. No balance number is stored anywhere.
 - Every credit change for a user runs in one transaction holding a **per-user advisory lock**.
 
-**Spending order:** the grant that expires soonest goes first, and never-expiring grants go last. Cheap-model-only grants (coupons) can only pay for cheap-model AI and awake time.
+**Expiry:** every grant lasts **90 days from the day it's granted** (`CREDIT_EXPIRY_DAYS` in `billing/plans.ts`), whatever the source: sign-up, monthly, top-up, coupon, and admin grants unless the admin sets another date. Monthly credits don't expire at renewal or when a plan ends, so unused ones carry over for up to 90 days.
+
+**Spending order:** the grant that expires soonest goes first (so the oldest credits are used first), and never-expiring grants (admin-set, debts) go last. Cheap-model-only grants (coupons) can only pay for cheap-model AI and awake time.
 
 **Overruns:** if a charge is bigger than the balance, the rest goes on a hidden per-user "overrun" grant as a small negative amount. The next positive grant pays it back first.
 
@@ -486,22 +488,24 @@ The 9 tools are listed in §8.3.
 
 **Failures caused by us:** if a turn ends with `platform_fault`, `reverseTurn` syncs first, works out the turn's cost from LiteLLM spend logs and `GetUsage` over the turn window, and gives back at most what was charged, to the grants it came from.
 
-**Expiry:** the hourly `expire-credits` job expires grants past their date, and moves users whose cancelled plan has lapsed back to Free.
+**Expiry job:** the hourly `expire-credits` job expires grants past their date, and moves users whose cancelled plan has lapsed back to Free (their credits keep their own expiry).
 
 ### 6.11 Plans and payments (Dodo)
 
-- `POST /v1/billing/checkout {kind: plan|topup}` creates a Dodo checkout with our user id in the metadata and returns the hosted URL. Top-ups are refused on Free (`403`), and plan changes while a renewing subscription exists get a `400`. The plan changes **only** when Dodo's webhook arrives.
+- **Prices:** Pro $12/month (1,500 credits), Max $30/month (4,500 credits), top-up $10 = 800 credits (paid plans only).
+- `POST /v1/billing/checkout {kind: plan|topup}` creates a Dodo checkout with our user id in the metadata and returns `{ checkoutUrl, discountApplied }`. Top-ups are refused on Free (`403`), and plan changes while a renewing subscription exists get a `400`. The plan changes **only** when Dodo's webhook arrives.
+- **Waitlist offer (50% off the first month of Pro or Max):** on a plan checkout, if the user's email is **verified** and matches a waitlist entry (normalized, so Gmail aliases count) that isn't rejected, isn't flagged and hasn't used the offer, the checkout gets the Dodo discount code `DODO_WAITLIST_DISCOUNT_CODE` and the entry id in its metadata. When `subscription.active` arrives with that metadata, the entry's `offer_used_at` is set, so the offer works once. The code itself must be created in Dodo as 50% off for one billing cycle. No code configured → no discount.
 - The webhook is verified with standard-webhooks, saved as an event with the webhook id as its unique key, and handled by `system/dodo-event`:
 
 | Dodo event | Action |
 |---|---|
-| `payment.succeeded` | record the payment; a top-up adds 800 credits per pack (12-month expiry) |
-| `subscription.active` | set the plan → this period's monthly grant (1,500 / 4,500) → raise the budget and switch the model alias |
-| `subscription.renewed` | new monthly grant; the previous monthly grant expires (no roll-over) |
+| `payment.succeeded` | record the payment; a top-up adds 800 credits per pack (90-day expiry) |
+| `subscription.active` | set the plan → this period's monthly grant (1,500 / 4,500, 90-day expiry) → raise the budget and switch the model alias; marks the waitlist offer used if this checkout had it |
+| `subscription.renewed` | new monthly grant (90 days); earlier monthly credits keep their own expiry, so unused ones carry over |
 | `subscription.plan_changed` | set the new plan (credits come with the next period) |
 | `subscription.updated` | track cancel-at-period-end and the period dates |
 | `subscription.on_hold` / `past_due` | mark past due (plan kept) |
-| `subscription.cancelled` / `expired` | Free at the end of the period; monthly credits expire, top-ups stay |
+| `subscription.cancelled` / `expired` | Free at the end of the period; credits already granted keep their 90-day expiry |
 | `refund.succeeded` | negative grant for the refunded share of the credits bought |
 | `dispute.opened` | chargeback: take back the credits bought + flag the account |
 
@@ -510,7 +514,7 @@ The 9 tools are listed in §8.3.
 
 ### 6.12 Coupons
 
-- **Create (admin):** `POST /v1/admin/coupons` with campaign, credits, max redemptions, expiry, credit expiry (default 30 days), cheap-model-only (default on), new-users-only, plans, and `codeCount` (1 = one shared code, more = that many single-use codes).
+- **Create (admin):** `POST /v1/admin/coupons` with campaign, credits, max redemptions, expiry, credit expiry (default 90 days, like every credit), cheap-model-only (default on), new-users-only, plans, and `codeCount` (1 = one shared code, more = that many single-use codes).
   - Codes look like `AGT-XXXX-XXXX-XXXX-XXXX` (16 secure random characters, no 0/O/1/I).
   - Only sha256 hashes and a visible prefix (`AGT-7K…`) are stored. The plaintext codes are returned **once**.
 - **Redeem** (`POST /v1/coupons/redeem`, or the code sent in chat):
@@ -541,7 +545,7 @@ The 9 tools are listed in §8.3.
 - **Checks on create:**
   - exactly one of run_at / cron / trigger
   - a valid timezone (default: the user's)
-  - the plan limit (3 / 20 / 50 active)
+  - the plan limit (Free 1 / Pro 5 / Max 50 active)
   - for cron, the next 50 runs must be at least 15 minutes apart
   - for a trigger, the app must be connected; then Composio creates a trigger instance and its id is saved
 - **Timers** (Postgres is the source of truth):
@@ -649,14 +653,14 @@ The per-item checklist (HLD 10.2) is in `docs/security-checklist.md`.
 
 ## 7. Data model
 
-### 7.1 Backend database (25 tables, 6 migrations)
+### 7.1 Backend database (25 tables, 7 migrations)
 
 | Module | Table | Purpose / key columns |
 |---|---|---|
 | auth | `users` | id, clerk_id (unique), email, email_verified, name, timezone, plan, role, flagged, deleted_at |
 | auth | `link_codes` | code_hash (unique), user_id, channel, expires_at, used_at |
 | auth | `channel_links` | user_id, channel + external_id (unique), display_id, last_inbound_at (24 h rule), blocked |
-| auth | `waitlist_entries` | email, email_normalized (unique), request data, status, flagged, flag_reasons, submit_count |
+| auth | `waitlist_entries` | email, email_normalized (unique), request data, status, flagged, flag_reasons, submit_count, offer_used_at |
 | auth | `waitlist_attempts` | ip, user_agent, outcome, entry_id |
 | events | `events` | source + external_id (unique), type, user_id, payload, status (received/queued/done/failed/ignored), queue, job_name |
 | channels | `messages` | user_id, channel, direction, text, media_ref, status, event_id, approval_id, client_message_id (unique per user), external_id, session_key |
@@ -679,7 +683,7 @@ The per-item checklist (HLD 10.2) is in `docs/security-checklist.md`.
 | billing | `coupon_redemptions` | coupon_id + user_id (**unique**), ip, grant_id |
 | admin | `audit_log` | user_id, actor (user/agent/admin/system), action, summary, details, credits_charged |
 
-Migrations: `0000_phase1_core`, `0001_phase3_chat`, `0002_phase4_apps_approvals`, `0003_phase7_automations`, `0004_phase5_billing`, `0005_waitlist`.
+Migrations: `0000_phase1_core`, `0001_phase3_chat`, `0002_phase4_apps_approvals`, `0003_phase7_automations`, `0004_phase5_billing`, `0005_waitlist`, `0006_pricing_90day_credits_waitlist_offer` (coupon expiry default 90, `waitlist_entries.offer_used_at`).
 
 ### 7.2 vm-manager database
 
@@ -811,7 +815,7 @@ All settings come from env vars, validated with Zod at startup (`src/shared/conf
 | LiteLLM | `LITELLM_URL`, `LITELLM_MASTER_KEY`, `LITELLM_CHEAP_MODEL`, `LITELLM_PAID_MODELS`, `LITELLM_AGENT_MODEL`, `LITELLM_PREMIUM_MODEL`, `STT_MODEL` |
 | Channels | `TELEGRAM_*`, `WHATSAPP_*` (incl. template names), `SENDBLUE_*`, `MEDIA_MAX_BYTES`, `ATTACHMENTS_DIR` |
 | Apps / routing | `COMPOSIO_API_KEY`, `COMPOSIO_WEBHOOK_SECRET`, `COMPOSIO_AUTH_CONFIGS` (JSON slug → auth config id), `JEV_URL`, `JEV_API_KEY`, `JEV_MODEL`, `JEV_TIMEOUT_MS` |
-| Payments | `DODO_API_KEY`, `DODO_WEBHOOK_SECRET`, `DODO_API_URL`, `DODO_PRODUCT_PRO/MAX/TOPUP_10`, `FREE_CREDITS_MONTHLY_CAP` |
+| Payments | `DODO_API_KEY`, `DODO_WEBHOOK_SECRET`, `DODO_API_URL`, `DODO_PRODUCT_PRO/MAX/TOPUP_10`, `DODO_WAITLIST_DISCOUNT_CODE`, `FREE_CREDITS_MONTHLY_CAP` |
 | Ops | `BACKUP_DIR`, `BACKUP_VOLUMES_DIR`, `BACKUP_UPLOAD_CMD`, `BACKUP_KEEP_DAYS`, `METRICS_TOKEN`, `ALERT_WEBHOOK_URL`, `RATE_LIMIT_PER_IP_PER_MIN` |
 
 vm-manager variables (see its `.env.example`): `DATABASE_URL`, `VM_INTERNAL_SECRET`, `GRPC_ADDR`, `AGENT_IMAGE`, `AGENT_IMAGE_VERSION`, `SANDBOX_*` (network, runtime, memory, CPUs, pids, volume driver), `LITELLM_BASE_URL`, `LITELLM_MODEL`, `PLATFORM_MCP_URL`, `EGRESS_*`, `AWAKE_CAP`, `IDLE_TIMEOUT`, `HEALTH_*`, `RECONCILE_INTERVAL`, `DELIVER_TIMEOUT`, `SHUTDOWN_GRACE`, `WAKE_TIMEOUT`, `SNAPSHOT_ROOT`.
@@ -858,6 +862,7 @@ Commands: `pnpm lint && pnpm typecheck && pnpm test` · `pnpm openapi:lint` · i
 - **Max-plan priority** is a BullMQ job priority on the inbound queue.
 - **WhatsApp 131047** means the 24 h window closed (not a block): the message is resent as a template.
 - **The waitlist** isn't in the HLD; it was added on request.
+- **Pricing update (2026-09-29, to match the pricing page):** Max $30 (was $29); automations Free 1 / Pro 5 / Max 50 (were 3 / 20 / 50); every credit lasts 90 days from its grant (was: sign-up never, monthly until renewal with no roll-over, top-ups 12 months, coupons 30 days), so monthly credits now carry over; waitlist members get 50% off the first month; model tiers are no longer shown on the pricing page but the model limits stay in code (for the MVP, AI is expected to come from the user's own key).
 
 **vm-manager**
 - **Secrets live in a file on `/data`**, not in env, so a re-created container keeps the same token.

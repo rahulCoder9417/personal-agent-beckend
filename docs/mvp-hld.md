@@ -355,18 +355,23 @@ A timeout (15 min) ends in a force-stop and an error event.
 
 ### 7.1 Plans
 
+_Updated 2026-09-29 to match the pricing page: Max $30, automations 1 / 5 / 50, 90-day credits, waitlist offer; model tiers no longer advertised._
+
 | | **Free** | **Pro** | **Max** |
 |---|---|---|---|
-| Price | $0 | **$12 / month** | **$29 / month** |
+| Price | $0 | **$12 / month** | **$30 / month** |
 | Credits | **100 once at sign-up** + **coupon codes** | **1,500 every month** | **4,500 every month** |
 | Buy top-ups | No (use coupon codes or upgrade) | Yes: $10 = 800 credits | Yes: $10 = 800 credits |
-| Models | Cheap model only | All models, including Claude | All + priority in the queue |
+| Models (in code, not advertised) | Cheap model only | All models | All models |
+| Priority | – | – | **Priority when things get busy** (queue + awake cap) |
 | Apps (Composio) | 10 | All 25 | All 25 + **own MCP servers** |
-| Automations | 3 | 20 | 50 |
+| Automations | 1 | 5 | 50 |
 | Bring your own key | ✓ | ✓ | ✓ |
 | Awake cap priority | Lowest (stopped first when the server is full) | Normal | Highest |
 
-**Bring your own key:** the user's own API key (encrypted at rest). AI costs are then not charged in credits; only awake time and paid tools are.
+**Bring your own key:** the user's own API key (encrypted at rest). AI costs are then not charged in credits; only awake time and paid tools are. For the MVP, AI is expected to come from the user's own key; the platform model tiers stay in the code for later.
+
+**Waitlist offer:** waitlist members get **50% off their first month** of Pro ($6) or Max ($15), applied automatically at checkout (a Dodo discount code, once per waitlist entry, verified email only).
 
 ### 7.2 What a credit is and what costs credits
 
@@ -388,15 +393,16 @@ Credits are held as **grants**. Each grant has an amount, **what's left of it**,
 
 | Source | Amount | Expires |
 |---|---|---|
-| Sign-up | 100 | Never (Free) |
-| Coupon | Set per coupon | **30 days** after redemption (or the coupon's setting) |
-| Monthly plan | 1,500 / 4,500 | At the end of the billing period (no roll-over) |
-| Top-up purchase | 800 per $10 | 12 months |
-| Admin adjustment | Any | Set by the admin |
+| Sign-up | 100 | **90 days** after the grant |
+| Coupon | Set per coupon | **90 days** after redemption (or the coupon's setting) |
+| Monthly plan | 1,500 / 4,500 | **90 days** after the grant: unused monthly credits carry over |
+| Top-up purchase | 800 per $10 | **90 days** after the grant |
+| Admin adjustment | Any | 90 days, unless the admin sets another date |
 | Refund / chargeback | Negative | – |
 
 - **Balance** = the sum of what's left in all unexpired grants.
-- **Spending order:** always spend from the grant that **expires soonest** first (coupon → monthly → top-up → sign-up), so users lose as little as possible.
+- **Every credit lasts 90 days from the day it's granted**, whatever the source.
+- **Spending order:** always spend from the grant that **expires soonest** first (so the oldest credits go first), so users lose as little as possible.
 
 ### 7.4 Charging (how usage becomes charges)
 
@@ -424,8 +430,8 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 | Event | Action |
 |---|---|
 | Subscription activated | Set plan → grant the monthly credits → raise the budget |
-| Subscription renewed | New monthly grant; the old monthly grant expires |
-| Subscription cancelled / expired | At the end of the period → back to Free (monthly credits expire; top-ups stay) |
+| Subscription renewed | New monthly grant (90 days); earlier monthly credits keep their own expiry |
+| Subscription cancelled / expired | At the end of the period → back to Free (credits already granted keep their 90-day expiry) |
 | Top-up payment succeeded | Top-up grant (800 credits per $10) |
 | Refund / chargeback | Negative grant; if a chargeback, flag the account |
 
@@ -438,7 +444,7 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 
 **Admin creates a coupon** (admin API):
 - campaign name, credits per redemption (e.g. 200), max total redemptions (e.g. 20), expiry date
-- credit expiry after redemption (default 30 days), **cheap-model-only** flag (default on)
+- credit expiry after redemption (default 90 days), **cheap-model-only** flag (default on)
 - optionally: new users only, or specific plans only
 - optionally **generate N single-use codes** for one campaign
 
@@ -586,7 +592,7 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
   - usage lowers the balance correctly and re-running a sync doesn't double-charge
   - at 0 credits the agent stops and says so
   - Dodo test-mode purchases add credits exactly once
-  - **coupon tests pass:** a second redemption by the same user fails, the (max+1)th redemption fails even with 50 parallel attempts, expired and disabled codes fail with the generic message, the rate limit kicks in, unverified users can't redeem, and coupon credits expire after 30 days and pay only for the cheap model
+  - **coupon tests pass:** a second redemption by the same user fails, the (max+1)th redemption fails even with 50 parallel attempts, expired and disabled codes fail with the generic message, the rate limit kicks in, unverified users can't redeem, and coupon credits expire after 90 days and pay only for the cheap model
 
 ### Phase 6: WhatsApp, media, Jev
 - **Read:** 0.3, 5.2

@@ -418,6 +418,8 @@ export interface paths {
          * Start a Dodo checkout for a plan or a top-up
          * @description Returns a hosted checkout URL. The plan or credits change only when Dodo's webhook arrives,
          *     never from this call. Top-ups are only for paid plans.
+         *     Waitlist members (verified email on a non-rejected, unflagged waitlist entry) get 50% off
+         *     their first month of Pro or Max once; `discountApplied` says whether it was applied.
          */
         post: operations["createCheckout"];
         delete?: never;
@@ -1016,7 +1018,7 @@ export interface components {
             /**
              * @example 0
              * @example 1200
-             * @example 2900
+             * @example 3000
              */
             priceCents: number;
             /** @enum {string|null} */
@@ -1050,7 +1052,7 @@ export interface components {
             priceCents: number;
             /** @example 800 */
             credits: number;
-            /** @example 365 */
+            /** @example 90 */
             expiresInDays: number;
         };
         Subscription: {
@@ -1126,7 +1128,7 @@ export interface components {
             redeemedCount: number;
             /** Format: date-time */
             expiresAt?: string | null;
-            /** @default 30 */
+            /** @default 90 */
             creditExpiryDays: number;
             /** @default true */
             cheapModelOnly: boolean;
@@ -1148,7 +1150,7 @@ export interface components {
             codeCount: number;
             /** Format: date-time */
             expiresAt: string;
-            /** @default 30 */
+            /** @default 90 */
             creditExpiryDays: number;
             /** @default true */
             cheapModelOnly: boolean;
@@ -2126,6 +2128,8 @@ export interface operations {
                     "application/json": {
                         /** Format: uri */
                         checkoutUrl: string;
+                        /** @description The waitlist offer (50% off the first month) is on this checkout. */
+                        discountApplied: boolean;
                     };
                 };
             };
@@ -2416,7 +2420,10 @@ export interface operations {
                     /** @description Positive adds credits; negative removes them */
                     amount: number;
                     reason: string;
-                    /** Format: date-time */
+                    /**
+                     * Format: date-time
+                     * @description Omitted = 90 days from now (like every grant); null = never expires.
+                     */
                     expiresAt?: string | null;
                     idempotencyKey: string;
                 };

@@ -654,6 +654,8 @@ paths:
       description: |
         Returns a hosted checkout URL. The plan or credits change only when Dodo's webhook arrives,
         never from this call. Top-ups are only for paid plans.
+        Waitlist members (verified email on a non-rejected, unflagged waitlist entry) get 50% off
+        their first month of Pro or Max once; `discountApplied` says whether it was applied.
       requestBody:
         required: true
         content:
@@ -674,9 +676,12 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [checkoutUrl]
+                required: [checkoutUrl, discountApplied]
                 properties:
                   checkoutUrl: { type: string, format: uri }
+                  discountApplied:
+                    type: boolean
+                    description: The waitlist offer (50% off the first month) is on this checkout.
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/PlanLimit" }
@@ -937,7 +942,10 @@ paths:
               properties:
                 amount: { type: integer, description: "Positive adds credits; negative removes them" }
                 reason: { type: string, maxLength: 200 }
-                expiresAt: { type: [string, "null"], format: date-time }
+                expiresAt:
+                  type: [string, "null"]
+                  format: date-time
+                  description: Omitted = 90 days from now (like every grant); null = never expires.
                 idempotencyKey: { type: string }
       responses:
         "200":
@@ -1500,7 +1508,7 @@ components:
       properties:
         id: { $ref: "#/components/schemas/PlanId" }
         name: { type: string }
-        priceCents: { type: integer, examples: [0, 1200, 2900] }
+        priceCents: { type: integer, examples: [0, 1200, 3000] }
         interval: { type: [string, "null"], enum: [month, null] }
         monthlyCredits: { type: integer, examples: [0, 1500, 4500] }
         signupCredits: { type: integer, examples: [100, 0, 0] }
@@ -1524,7 +1532,7 @@ components:
         id: { type: string, examples: [topup_10] }
         priceCents: { type: integer, examples: [1000] }
         credits: { type: integer, examples: [800] }
-        expiresInDays: { type: integer, examples: [365] }
+        expiresInDays: { type: integer, examples: [90] }
 
     Subscription:
       type: object
@@ -1612,7 +1620,7 @@ components:
         maxRedemptions: { type: integer }
         redeemedCount: { type: integer }
         expiresAt: { type: [string, "null"], format: date-time }
-        creditExpiryDays: { type: integer, default: 30 }
+        creditExpiryDays: { type: integer, default: 90 }
         cheapModelOnly: { type: boolean, default: true }
         newUsersOnly: { type: boolean, default: false }
         plans:
@@ -1635,7 +1643,7 @@ components:
           default: 1
           description: 1 = one shared code; more = that many single-use codes.
         expiresAt: { type: string, format: date-time }
-        creditExpiryDays: { type: integer, minimum: 1, maximum: 365, default: 30 }
+        creditExpiryDays: { type: integer, minimum: 1, maximum: 365, default: 90 }
         cheapModelOnly: { type: boolean, default: true }
         newUsersOnly: { type: boolean, default: false }
         plans:

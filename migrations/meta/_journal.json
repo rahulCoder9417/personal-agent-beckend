@@ -43,6 +43,13 @@
       "when": 1790604351138,
       "tag": "0005_waitlist",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790659341127,
+      "tag": "0006_pricing_90day_credits_waitlist_offer",
+      "breakpoints": true
     }
   ]
 }

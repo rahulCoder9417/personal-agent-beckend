@@ -281,7 +281,8 @@ describe('Phase 7: automations and reminders', () => {
 
   it('enforces plan limits, the 15-minute minimum and valid timezones', async () => {
     const u = await linkedUser('free');
-    for (let i = 0; i < 3; i++) {
+    // Free allows 1 automation (Pro 5, Max 50).
+    for (let i = 0; i < 1; i++) {
       await createAutomation({
         userId: u.id,
         title: `r${i}`,
@@ -298,7 +299,7 @@ describe('Phase 7: automations and reminders', () => {
         sessionKey: u.sessionKey,
         runAt: new Date(Date.now() + 3600_000),
       }),
-    ).rejects.toThrow(/allows 3/);
+    ).rejects.toThrow(/allows 1/);
     setMinIntervalMs(15 * 60 * 1000);
     try {
       const p = await linkedUser('pro');

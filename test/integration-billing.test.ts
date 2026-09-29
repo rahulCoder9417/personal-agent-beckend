@@ -113,7 +113,7 @@ describe('billing wired in', () => {
   });
 
   it('balance depleted pauses automations; credits added resumes only those', async () => {
-    const u = await chatUser();
+    const u = await chatUser({ plan: 'pro' });
     const a = await createAutomation({
       userId: u.id,
       title: 'weekly',

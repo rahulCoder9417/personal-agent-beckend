@@ -19,7 +19,7 @@ import { getActiveUser } from '../auth/users.ts';
 import { createGrantInTx, getBalance, revokeGrantsInTx } from './credits.ts';
 import { afterCreditsAdded, afterCreditsRemoved } from './enforce.ts';
 import { freeCapAllows } from './free-credits.ts';
-import type { PlanId } from './plans.ts';
+import { CREDIT_EXPIRY_DAYS, type PlanId } from './plans.ts';
 import { couponCodes, couponRedemptions, coupons } from './schema.ts';
 
 export type Coupon = typeof coupons.$inferSelect;
@@ -83,7 +83,7 @@ export async function createCoupon(
         maxRedemptions: input.maxRedemptions,
         codeCount,
         expiresAt: input.expiresAt,
-        creditExpiryDays: input.creditExpiryDays ?? 30,
+        creditExpiryDays: input.creditExpiryDays ?? CREDIT_EXPIRY_DAYS,
         cheapModelOnly: input.cheapModelOnly ?? true,
         newUsersOnly: input.newUsersOnly ?? false,
         plans: input.plans ?? [],

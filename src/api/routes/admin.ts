@@ -3,6 +3,7 @@ import { adjustCredits } from '../../modules/billing/admin.ts';
 import { createCoupon, listCoupons, updateCoupon } from '../../modules/billing/coupons.ts';
 import { getBalance, listBalanceGrants } from '../../modules/billing/credits.ts';
 import { freeCreditStats } from '../../modules/billing/free-credits.ts';
+import { creditExpiry } from '../../modules/billing/plans.ts';
 import { badRequest, notFound } from '../../shared/errors.ts';
 import { toBalance, toCoupon } from '../billing-presenters.ts';
 import { route } from '../router.ts';
@@ -54,7 +55,13 @@ export const adminRoutes = [
       userId: user.id,
       amount: body.amount,
       reason: body.reason,
-      expiresAt: body.expiresAt ? new Date(body.expiresAt) : null,
+      // Omitted: 90 days like every grant; explicit null: never expires (admin's choice).
+      expiresAt:
+        body.expiresAt === undefined
+          ? creditExpiry()
+          : body.expiresAt
+            ? new Date(body.expiresAt)
+            : null,
       idempotencyKey: body.idempotencyKey,
       adminId: c.get('user').id,
     });

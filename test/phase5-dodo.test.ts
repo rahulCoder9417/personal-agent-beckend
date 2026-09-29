@@ -110,7 +110,7 @@ describe('Dodo webhook signature (Standard Webhooks)', () => {
 });
 
 describe('Dodo events (HLD 7.6)', () => {
-  it('a top-up payment adds 800 credits (12 months) exactly once', async () => {
+  it('a top-up payment adds 800 credits (90 days) exactly once', async () => {
     const u = await member(0, 'pro');
     const paymentId = `pay_${randomUUID()}`;
     const payload = topUpPayment(u.id, paymentId);
@@ -121,14 +121,15 @@ describe('Dodo events (HLD 7.6)', () => {
     const topups = (await grantsOf(u.id)).filter((g) => g.source === 'topup');
     expect(topups).toHaveLength(1);
     expect(topups[0]!.amount).toBe(800);
-    expect(topups[0]!.expiresAt!.getTime()).toBeGreaterThan(Date.now() + 364 * DAY);
+    expect(topups[0]!.expiresAt!.getTime()).toBeGreaterThan(Date.now() + 89.9 * DAY);
+    expect(topups[0]!.expiresAt!.getTime()).toBeLessThanOrEqual(Date.now() + 90 * DAY);
     expect(await getBalance(u.id)).toBe(800);
     expect(llm.remainingBudget(u.id)).toBeCloseTo(800 / 250, 6);
     const rows = await db().select().from(payments).where(eq(payments.dodoPaymentId, paymentId));
     expect(rows).toHaveLength(1);
   });
 
-  it('subscription activated → plan set, monthly credits, paid models; renewed → new grant, old expires', async () => {
+  it('subscription activated → plan set, monthly credits (90 days), paid models; renewed → new grant, unused credits carry over', async () => {
     const u = await member(0);
     const subId = `sub_${randomUUID()}`;
     const p1 = periodFromNow();
@@ -138,7 +139,8 @@ describe('Dodo events (HLD 7.6)', () => {
     expect(llm.byUser(u.id)!.models).toEqual(['agent-default', 'cheap', 'claude', 'gpt']);
     expect(llm.byUser(u.id)!.aliases).toEqual({ 'agent-default': 'claude' });
     const monthly = (await grantsOf(u.id)).find((g) => g.source === 'monthly' && g.amount > 0)!;
-    expect(monthly.expiresAt!.toISOString()).toBe(p1.end.toISOString());
+    // Every credit lasts 90 days from the grant, not until the period ends.
+    expect(monthly.expiresAt!.getTime()).toBeGreaterThan(Date.now() + 89.9 * DAY);
 
     // Re-delivered activation: nothing new.
     await deliver(subscriptionEvent('subscription.active', { userId: u.id, subId, ...p1 }));
@@ -148,12 +150,12 @@ describe('Dodo events (HLD 7.6)', () => {
     await deliver(subscriptionEvent('subscription.renewed', { userId: u.id, subId, ...p2 }));
     const grants = (await grantsOf(u.id)).filter((g) => g.source === 'monthly' && g.amount > 0);
     expect(grants).toHaveLength(2);
-    expect(await getBalance(u.id)).toBe(1500); // no roll-over
-    expect((await ledgerOf(u.id)).filter((l) => l.reason === 'expire')).toHaveLength(1);
+    expect(await getBalance(u.id)).toBe(3000); // unused monthly credits carry over (90 days)
+    expect((await ledgerOf(u.id)).filter((l) => l.reason === 'expire')).toHaveLength(0);
     expect(await ledgerMatchesGrants(u.id)).toBe(true);
   });
 
-  it('cancelled → Free at the end of the period; monthly credits expire, top-ups stay', async () => {
+  it('cancelled → Free at the end of the period; credits keep their own 90-day expiry', async () => {
     const u = await member(0);
     const subId = `sub_${randomUUID()}`;
     const p = periodFromNow();
@@ -176,7 +178,9 @@ describe('Dodo events (HLD 7.6)', () => {
     const after = new Date(p.end.getTime() + 1000);
     expect(await endLapsedSubscriptions(after)).toBe(1);
     expect((await getUser(u.id))!.plan).toBe('free');
-    expect(await getBalance(u.id, after)).toBe(800);
+    expect(await getBalance(u.id, after)).toBe(2300);
+    // …until 90 days after they were granted.
+    expect(await getBalance(u.id, new Date(Date.now() + 91 * DAY))).toBe(0);
     expect(llm.byUser(u.id)!.models).toEqual(['agent-default', 'cheap']);
     expect(llm.byUser(u.id)!.aliases).toEqual({ 'agent-default': 'cheap' });
     expect(await endLapsedSubscriptions(new Date(p.end.getTime() + 2000))).toBe(0);
@@ -202,7 +206,7 @@ describe('Dodo events (HLD 7.6)', () => {
       }),
     );
     expect((await getUser(u.id))!.plan).toBe('free');
-    expect(await getBalance(u.id)).toBe(0);
+    expect(await getBalance(u.id)).toBe(1500); // the monthly grant keeps its 90 days
   });
 
   it('refund → negative grant for the refunded share, taken from that top-up first', async () => {
@@ -288,8 +292,12 @@ describe('Dodo events (HLD 7.6)', () => {
 describe('checkout + cancel', () => {
   it('creates a hosted checkout with the user id in the metadata; changes nothing yet', async () => {
     const u = await createUser();
-    const url = await startCheckout(u, { kind: 'plan', planId: 'pro' });
+    const { checkoutUrl: url, discountApplied } = await startCheckout(u, {
+      kind: 'plan',
+      planId: 'pro',
+    });
     expect(url).toMatch(/^https:\/\//);
+    expect(discountApplied).toBe(false);
     expect(dodo.checkouts.at(-1)).toMatchObject({
       productId: 'prod_pro',
       quantity: 1,

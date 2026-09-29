@@ -81,7 +81,7 @@ describe('coupons: admin create', () => {
 });
 
 describe('coupons: redeem (HLD 7.7)', () => {
-  it('adds the credits (30-day expiry, cheap-model only), raises the budget, audits it', async () => {
+  it('adds the credits (90-day expiry, cheap-model only), raises the budget, audits it', async () => {
     const u = await eligible();
     await ensureLiteLLMKey(u.id);
     const { codes } = await campaign();
@@ -91,8 +91,8 @@ describe('coupons: redeem (HLD 7.7)', () => {
     expect(res.creditsAdded).toBe(200);
     expect(res.cheapModelOnly).toBe(true);
     expect(res.balance).toBe(200);
-    expect(res.expiresAt!.getTime()).toBeGreaterThanOrEqual(before + 30 * DAY);
-    expect(res.expiresAt!.getTime()).toBeLessThan(Date.now() + 30 * DAY + 1000);
+    expect(res.expiresAt!.getTime()).toBeGreaterThanOrEqual(before + 90 * DAY);
+    expect(res.expiresAt!.getTime()).toBeLessThan(Date.now() + 90 * DAY + 1000);
     expect(llm.remainingBudget(u.id)).toBeCloseTo(200 / 250, 6);
     const [grant] = await grantsOf(u.id);
     expect(grant).toMatchObject({ source: 'coupon', amount: 200, cheapModelOnly: true });
@@ -175,13 +175,14 @@ describe('coupons: redeem (HLD 7.7)', () => {
     expect(results[20]).toMatch(/^429:rate_limited:/);
   });
 
-  it('coupon credits expire after 30 days and pay only for the cheap model', async () => {
+  it('coupon credits expire after 90 days and pay only for the cheap model', async () => {
     const u = await eligible({ plan: 'pro' });
     await createGrant({
       userId: u.id,
       source: 'topup',
       amount: 800,
-      expiresAt: new Date(Date.now() + 365 * DAY),
+      // Outlives the coupon, so only the coupon expires below.
+      expiresAt: new Date(Date.now() + 120 * DAY),
       idempotencyKey: `t:${u.id}`,
       description: 'topup',
     });
@@ -202,10 +203,10 @@ describe('coupons: redeem (HLD 7.7)', () => {
     coupon = (await grantsOf(u.id)).find((g) => g.source === 'coupon')!;
     expect(coupon.remaining).toBe(170);
 
-    expect(await getBalance(u.id, new Date(Date.now() + 29 * DAY))).toBe(920);
-    const day31 = new Date(Date.now() + 31 * DAY);
-    expect(await getBalance(u.id, day31)).toBe(750);
-    expect(await expireDueGrants(day31)).toContain(u.id);
+    expect(await getBalance(u.id, new Date(Date.now() + 89 * DAY))).toBe(920);
+    const day91 = new Date(Date.now() + 91 * DAY);
+    expect(await getBalance(u.id, day91)).toBe(750);
+    expect(await expireDueGrants(day91)).toContain(u.id);
     const expired = (await ledgerOf(u.id)).filter((l) => l.reason === 'expire');
     expect(expired.map((e) => e.delta)).toEqual([-170]);
   });

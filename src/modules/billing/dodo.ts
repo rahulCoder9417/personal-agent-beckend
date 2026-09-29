@@ -6,6 +6,7 @@ import { config } from '../../shared/config.ts';
 import { badRequest, conflict, planLimit } from '../../shared/errors.ts';
 import { webhookUnauthorized } from '../auth/webhooks.ts';
 import type { User } from '../auth/users.ts';
+import { findWaitlistOffer } from '../auth/waitlist.ts';
 import { getTopUp, planLimits, type PlanId } from './plans.ts';
 import {
   getCurrentSubscription,
@@ -22,6 +23,8 @@ export interface DodoClient {
     customer?: { email: string; name?: string };
     returnUrl: string;
     metadata: Record<string, string>;
+    /** A Dodo discount code applied to this checkout (the waitlist offer). */
+    discountCode?: string;
   }): Promise<{ checkoutUrl: string; sessionId: string }>;
   /** PATCH /subscriptions/{id} { cancel_at_next_billing_date: true } */
   cancelAtPeriodEnd(subscriptionId: string): Promise<void>;
@@ -51,6 +54,7 @@ class HttpDodo implements DodoClient {
         ...(input.customer ? { customer: input.customer } : {}),
         return_url: input.returnUrl,
         metadata: input.metadata,
+        ...(input.discountCode ? { discount_code: input.discountCode } : {}),
       },
     );
     return { checkoutUrl: out.checkout_url, sessionId: out.session_id };
@@ -106,12 +110,19 @@ export function isTopUpProduct(productId: string | undefined): boolean {
 
 export type CheckoutRequest = { kind: 'plan'; planId: PlanId } | { kind: 'topup'; topUpId: string };
 
-/** The plan or credits change only when Dodo's webhook arrives, never from this call. */
-export async function startCheckout(user: User, req: CheckoutRequest): Promise<string> {
+/**
+ * The plan or credits change only when Dodo's webhook arrives, never from this call.
+ * Waitlist members get 50% off their first month of Pro or Max (once, verified email only).
+ */
+export async function startCheckout(
+  user: User,
+  req: CheckoutRequest,
+): Promise<{ checkoutUrl: string; discountApplied: boolean }> {
   const returnUrl = `${config().WEB_APP_URL}/billing?checkout=done`;
   const customer = user.email ? { email: user.email, name: user.name || user.email } : undefined;
   let productId: string;
   let metadata: Record<string, string>;
+  let discountCode: string | undefined;
   if (req.kind === 'plan') {
     if (req.planId === 'free') throw badRequest('The Free plan needs no checkout');
     const renewing = await getRenewingSubscription(user.id);
@@ -124,6 +135,13 @@ export async function startCheckout(user: User, req: CheckoutRequest): Promise<s
     }
     productId = productFor('plan', req.planId);
     metadata = { user_id: user.id, kind: 'plan', plan_id: req.planId };
+    const code = config().DODO_WAITLIST_DISCOUNT_CODE;
+    const offer =
+      code && user.emailVerified && user.email ? await findWaitlistOffer(user.email) : null;
+    if (code && offer) {
+      discountCode = code;
+      metadata.waitlist_offer_entry = offer.entryId;
+    }
   } else {
     const pack = getTopUp(req.topUpId);
     if (!pack) throw badRequest('Unknown top-up pack', { topUpId: req.topUpId });
@@ -139,8 +157,9 @@ export async function startCheckout(user: User, req: CheckoutRequest): Promise<s
     ...(customer ? { customer } : {}),
     returnUrl,
     metadata,
+    ...(discountCode ? { discountCode } : {}),
   });
-  return checkoutUrl;
+  return { checkoutUrl, discountApplied: Boolean(discountCode) };
 }
 
 /** Cancel at the end of the current period (the plan stays until then). */

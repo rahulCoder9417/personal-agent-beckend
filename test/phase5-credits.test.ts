@@ -185,17 +185,17 @@ describe('credits: grants + ledger', () => {
 });
 
 describe('plans', () => {
-  it('limits per HLD 7.1', () => {
+  it('limits per plan (Free 1 / Pro 5 / Max 50 automations)', () => {
     expect(planLimits('free')).toEqual({
       apps: 10,
-      automations: 3,
+      automations: 1,
       ownMcpServers: false,
       topUps: false,
       models: 'cheap',
     });
     expect(planLimits('pro')).toEqual({
       apps: 25,
-      automations: 20,
+      automations: 5,
       ownMcpServers: false,
       topUps: true,
       models: 'all',

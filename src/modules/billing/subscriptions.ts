@@ -4,7 +4,6 @@ import { and, desc, eq, inArray, isNull, lte, ne } from 'drizzle-orm';
 import { db, type Tx } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import { setPlan } from '../auth/users.ts';
-import { expireGrantsNowInTx } from './credits.ts';
 import { afterCreditsRemoved } from './enforce.ts';
 import type { PlanId } from './plans.ts';
 import { subscriptions } from './schema.ts';
@@ -96,7 +95,7 @@ export async function setSubscriptionStatus(
 
 /**
  * A cancelled subscription whose period is over: back to Free (or to another live subscription's
- * plan). Monthly credits expire; top-ups stay. Idempotent (`ended_at`).
+ * plan). Credits already granted keep their own 90-day expiry. Idempotent (`ended_at`).
  */
 export async function endSubscription(sub: Subscription, now = new Date()): Promise<boolean> {
   const ended = await db().transaction(async (tx) => {
@@ -120,14 +119,6 @@ export async function endSubscription(sub: Subscription, now = new Date()): Prom
       .orderBy(desc(subscriptions.updatedAt))
       .limit(1);
     await setPlan(sub.userId, other?.plan ?? 'free', tx);
-    if (!other) {
-      await expireGrantsNowInTx(
-        tx,
-        sub.userId,
-        { source: 'monthly', description: 'Monthly credits ended with the plan' },
-        now,
-      );
-    }
     return true;
   });
   if (ended) await afterCreditsRemoved(sub.userId); // also updates the key's models

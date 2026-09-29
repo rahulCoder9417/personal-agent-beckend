@@ -13,8 +13,8 @@ import { automations } from './schema.ts';
 
 export type Automation = typeof automations.$inferSelect;
 
-/** Plan limits (Free 3 / Pro 20 / Max 50). Billing's planLimits plugs in via wiring. */
-let limitFor: (plan: PlanId) => number = (plan) => ({ free: 3, pro: 20, max: 50 })[plan];
+/** Plan limits (Free 1 / Pro 5 / Max 50). Billing's planLimits plugs in via wiring. */
+let limitFor: (plan: PlanId) => number = (plan) => ({ free: 1, pro: 5, max: 50 })[plan];
 export function setAutomationLimit(fn: (plan: PlanId) => number): void {
   limitFor = fn;
 }

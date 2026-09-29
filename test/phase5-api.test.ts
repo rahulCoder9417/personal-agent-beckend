@@ -63,10 +63,10 @@ describe('contract: billing', () => {
     expect(body.plans.map((p) => [p.id, p.priceCents, p.monthlyCredits])).toEqual([
       ['free', 0, 0],
       ['pro', 1200, 1500],
-      ['max', 2900, 4500],
+      ['max', 3000, 4500],
     ]);
     expect(body.topUps).toEqual([
-      { id: 'topup_10', priceCents: 1000, credits: 800, expiresInDays: 365 },
+      { id: 'topup_10', priceCents: 1000, credits: 800, expiresInDays: 90 },
     ]);
   });
 

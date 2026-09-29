@@ -36,7 +36,11 @@ describe('onboarding', () => {
     expect(results.filter((r) => r.signupGranted)).toHaveLength(1);
     const grants = await grantsOf(u.id);
     expect(grants).toHaveLength(1);
-    expect(grants[0]).toMatchObject({ source: 'signup', amount: 100, expiresAt: null });
+    expect(grants[0]).toMatchObject({ source: 'signup', amount: 100 });
+    // Every credit lasts 90 days from the grant.
+    const days = (grants[0]!.expiresAt!.getTime() - Date.now()) / 86400_000;
+    expect(days).toBeGreaterThan(89.9);
+    expect(days).toBeLessThanOrEqual(90);
     // A parallel onboarding may generate a second key; the loser deletes its own.
     expect([...llm.keys.values()].filter((k) => k.userId === u.id && !k.deleted)).toHaveLength(1);
     expect(llm.remainingBudget(u.id)).toBeCloseTo(0.4, 6);

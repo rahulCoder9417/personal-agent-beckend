@@ -7,7 +7,7 @@ import { createGrantInTx, ledgerKeyExists } from './credits.ts';
 import { dodo } from './dodo.ts';
 import { freeCapAllows } from './free-credits.ts';
 import { ensureLiteLLMKey, refreshBudget, revokeLiteLLMKey } from './litellm.ts';
-import { SIGNUP_CREDITS } from './plans.ts';
+import { SIGNUP_CREDITS, creditExpiry } from './plans.ts';
 import { getRenewingSubscription } from './subscriptions.ts';
 
 /**
@@ -36,7 +36,7 @@ export async function onboardBilling(userId: string): Promise<{ signupGranted: b
       userId,
       source: 'signup',
       amount: SIGNUP_CREDITS,
-      expiresAt: null,
+      expiresAt: creditExpiry(),
       idempotencyKey: key,
       description: 'Sign-up credits',
     });

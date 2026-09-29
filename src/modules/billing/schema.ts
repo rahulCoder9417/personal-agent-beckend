@@ -120,7 +120,7 @@ export const coupons = pgTable('coupons', {
   redeemedCount: integer().notNull().default(0),
   codeCount: integer().notNull().default(1),
   expiresAt: ts().notNull(),
-  creditExpiryDays: integer().notNull().default(30),
+  creditExpiryDays: integer().notNull().default(90),
   cheapModelOnly: boolean().notNull().default(true),
   newUsersOnly: boolean().notNull().default(false),
   /** Empty = every plan. */

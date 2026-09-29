@@ -9,11 +9,12 @@ import { logger } from '../../shared/logger.ts';
 import { IGNORED } from '../../worker/runner.ts';
 import { audit } from '../admin/audit.ts';
 import { flagUser, getUser, setPlan } from '../auth/users.ts';
+import { markWaitlistOfferUsed } from '../auth/waitlist.ts';
 import { getEvent } from '../events/intake.ts';
-import { createGrantInTx, expireGrantsNowInTx } from './credits.ts';
+import { createGrantInTx } from './credits.ts';
 import { isTopUpProduct, planForProduct, type DodoWebhook } from './dodo.ts';
 import { afterCreditsAdded, afterCreditsRemoved } from './enforce.ts';
-import { PLANS, TOP_UPS, PLAN_IDS, type PlanId } from './plans.ts';
+import { PLANS, TOP_UPS, PLAN_IDS, creditExpiry, type PlanId } from './plans.ts';
 import { creditGrants, payments } from './schema.ts';
 import {
   endSubscription,
@@ -116,24 +117,18 @@ async function startPeriod(d: Data, event: DodoWebhook, kind: 'activated' | 'ren
       periodEnd,
     });
     await setPlan(userId, plan, tx);
-    if (periodEnd <= now) return false; // a late event for a period that is already over
-    const { grant, created } = await createGrantInTx(tx, {
+    // Every credit lasts 90 days from the grant, so unused monthly credits carry over (no
+    // expiry at renewal). A late event still grants: the period was paid for.
+    const { created } = await createGrantInTx(tx, {
       userId,
       source: 'monthly',
       amount: PLANS[plan].monthlyCredits,
-      expiresAt: periodEnd,
+      expiresAt: creditExpiry(now),
       ref: subId,
       idempotencyKey: `monthly:${subId}:${periodStart.toISOString()}`,
       description: `${PLANS[plan].name} monthly credits`,
     });
     if (!created) return false;
-    // No roll-over: the previous period's monthly credits end now.
-    await expireGrantsNowInTx(tx, userId, {
-      source: 'monthly',
-      exceptId: grant.id,
-      olderThan: periodEnd,
-      description: 'Monthly credits replaced by the new period',
-    });
     await audit(
       {
         userId,
@@ -147,6 +142,9 @@ async function startPeriod(d: Data, event: DodoWebhook, kind: 'activated' | 'ren
     return true;
   });
   await afterCreditsAdded(userId); // also applies the plan's models to the LiteLLM key
+  // The waitlist offer (discount on this checkout) is used once the subscription starts.
+  const offerEntry = meta(d).waitlist_offer_entry;
+  if (kind === 'activated' && offerEntry) await markWaitlistOfferUsed(offerEntry);
   return { granted };
 }
 
@@ -264,7 +262,7 @@ async function paymentSucceeded(d: Data, event: DodoWebhook) {
       userId,
       source: 'topup',
       amount: credits,
-      expiresAt: new Date(Date.now() + pack.expiresInDays * DAY),
+      expiresAt: creditExpiry(),
       ref: paymentId,
       idempotencyKey: `topup:${paymentId}`,
       description: `Top-up: ${credits} credits`,

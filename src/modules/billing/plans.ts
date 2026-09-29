@@ -25,6 +25,17 @@ export interface PlanDef {
 }
 
 export const SIGNUP_CREDITS = 100;
+/**
+ * Every credit lasts 90 days from the day it's granted, whatever the source (sign-up, monthly,
+ * top-up, coupon). Unused monthly credits therefore carry over for up to 90 days.
+ */
+export const CREDIT_EXPIRY_DAYS = 90;
+const DAY_MS = 24 * 3600 * 1000;
+
+/** When a grant made at `from` expires. */
+export function creditExpiry(from: Date = new Date()): Date {
+  return new Date(from.getTime() + CREDIT_EXPIRY_DAYS * DAY_MS);
+}
 /** Total Composio apps in the catalogue ("All 25"). */
 export const ALL_APPS = 25;
 
@@ -36,14 +47,15 @@ export const PLANS: Record<PlanId, PlanDef> = {
     interval: null,
     monthlyCredits: 0,
     signupCredits: SIGNUP_CREDITS,
-    limits: { apps: 10, automations: 3, ownMcpServers: false, topUps: false, models: 'cheap' },
+    // Model limits stay in code (models: 'cheap') even though the pricing page no longer shows them.
+    limits: { apps: 10, automations: 1, ownMcpServers: false, topUps: false, models: 'cheap' },
     features: [
       '100 credits at sign-up',
       'Coupon codes',
-      'Cheap model only',
       '10 apps',
-      '3 automations',
+      '1 automation',
       'Bring your own key',
+      'Credits last 90 days',
     ],
   },
   pro: {
@@ -53,31 +65,32 @@ export const PLANS: Record<PlanId, PlanDef> = {
     interval: 'month',
     monthlyCredits: 1500,
     signupCredits: 0,
-    limits: { apps: ALL_APPS, automations: 20, ownMcpServers: false, topUps: true, models: 'all' },
+    limits: { apps: ALL_APPS, automations: 5, ownMcpServers: false, topUps: true, models: 'all' },
     features: [
       '1,500 credits every month',
-      'All models, including Claude',
       `All ${ALL_APPS} apps`,
-      '20 automations',
+      '5 automations',
       'Top-ups: $10 = 800 credits',
       'Bring your own key',
+      'Unused credits carry over for 90 days',
     ],
   },
   max: {
     id: 'max',
     name: 'Max',
-    priceCents: 2900,
+    priceCents: 3000,
     interval: 'month',
     monthlyCredits: 4500,
     signupCredits: 0,
     limits: { apps: ALL_APPS, automations: 50, ownMcpServers: true, topUps: true, models: 'all' },
     features: [
       '4,500 credits every month',
-      'All models + priority in the queue',
+      'Priority when things get busy',
       `All ${ALL_APPS} apps + your own MCP servers`,
       '50 automations',
       'Top-ups: $10 = 800 credits',
       'Bring your own key',
+      'Unused credits carry over for 90 days',
     ],
   },
 };
@@ -90,7 +103,7 @@ export interface TopUpPack {
 }
 
 export const TOP_UPS: TopUpPack[] = [
-  { id: 'topup_10', priceCents: 1000, credits: 800, expiresInDays: 365 },
+  { id: 'topup_10', priceCents: 1000, credits: 800, expiresInDays: CREDIT_EXPIRY_DAYS },
 ];
 
 export function planLimits(plan: PlanId): PlanLimits {

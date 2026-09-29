@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gt, lt, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gt, isNull, lt, ne, sql } from 'drizzle-orm';
 import { db } from '../../shared/db/client.ts';
 import { notFound, rateLimited } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
@@ -309,6 +309,36 @@ export async function waitlistStats() {
       lastAt: t.lastAt.toISOString(),
     })),
   };
+}
+
+/**
+ * The waitlist offer (50% off the first month of Pro or Max) for this email, if it's still
+ * available: on the list, not rejected, not flagged for abuse, not used yet. The caller must only
+ * pass a verified email.
+ */
+export async function findWaitlistOffer(email: string): Promise<{ entryId: string } | null> {
+  const [row] = await db()
+    .select({ id: waitlistEntries.id })
+    .from(waitlistEntries)
+    .where(
+      and(
+        eq(waitlistEntries.emailNormalized, normalizeEmail(email)),
+        ne(waitlistEntries.status, 'rejected'),
+        eq(waitlistEntries.flagged, false),
+        isNull(waitlistEntries.offerUsedAt),
+      ),
+    );
+  return row ? { entryId: row.id } : null;
+}
+
+/** Marks the offer used (when the discounted subscription starts). Idempotent. */
+export async function markWaitlistOfferUsed(entryId: string): Promise<boolean> {
+  const rows = await db()
+    .update(waitlistEntries)
+    .set({ offerUsedAt: new Date() })
+    .where(and(eq(waitlistEntries.id, entryId), isNull(waitlistEntries.offerUsedAt)))
+    .returning({ id: waitlistEntries.id });
+  return rows.length > 0;
 }
 
 /** Retention: attempts are kept 90 days. */

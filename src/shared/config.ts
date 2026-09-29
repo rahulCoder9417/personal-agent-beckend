@@ -96,6 +96,8 @@ export const configSchema = z.object({
   DODO_PRODUCT_PRO: optional,
   DODO_PRODUCT_MAX: optional,
   DODO_PRODUCT_TOPUP_10: optional,
+  /** Dodo discount code for the waitlist offer: 50% off, first billing cycle only (set up in Dodo). */
+  DODO_WAITLIST_DISCOUNT_CODE: optional,
 
   /** Optional monthly cap on free credits (sign-up + coupons). */
   FREE_CREDITS_MONTHLY_CAP: z.coerce.number().int().positive().optional(),

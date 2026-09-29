@@ -93,6 +93,8 @@ export const waitlistEntries = pgTable(
     submitCount: integer().notNull().default(1),
     createdAt: ts().notNull().defaultNow(),
     lastSeenAt: ts().notNull().defaultNow(),
+    /** When the waitlist offer (50% off the first paid month) was used. Once per entry. */
+    offerUsedAt: ts(),
   },
   (t) => [index().on(t.ip, t.createdAt), index().on(t.status), index().on(t.flagged)],
 );

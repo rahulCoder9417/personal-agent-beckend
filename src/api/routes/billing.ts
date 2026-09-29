@@ -19,13 +19,13 @@ export const billingRoutes = [
 
   // Returns a hosted checkout URL; plan/credits change only when Dodo's webhook arrives.
   route('createCheckout', async (c, { body }) => {
-    const checkoutUrl = await startCheckout(
+    const { checkoutUrl, discountApplied } = await startCheckout(
       c.get('user'),
       body.kind === 'plan'
         ? { kind: 'plan', planId: body.planId }
         : { kind: 'topup', topUpId: body.topUpId },
     );
-    return c.json({ checkoutUrl }, 200);
+    return c.json({ checkoutUrl, discountApplied }, 200);
   }),
 
   route('cancelSubscription', async (c) => {

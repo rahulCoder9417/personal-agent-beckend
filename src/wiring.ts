@@ -32,13 +32,15 @@ import { deleteUserMcpServers, sandboxMcpConfig } from './modules/integrations/m
 import { handleApprovalReply } from './modules/orchestrator/approvals.ts';
 import { setLifecycleHooks } from './modules/orchestrator/lifecycle.ts';
 import { setInboundHooks } from './modules/orchestrator/process-message.ts';
+import { getAgentSettings } from './modules/orchestrator/agent-settings.ts';
 import {
+  routeTurn,
   setRoutingAppsProvider,
   setRoutingKeyProvider,
   wireRouting,
 } from './modules/orchestrator/routing.ts';
 import { setSandboxConfigProvider } from './modules/orchestrator/sandbox.ts';
-import { setTurnHooks } from './modules/orchestrator/turn.ts';
+import { connectAiText, setTurnHooks } from './modules/orchestrator/turn.ts';
 import { logger } from './shared/logger.ts';
 
 let wired = false;
@@ -64,6 +66,17 @@ export function wireModules(): void {
     (await activeConnections(userId)).map((c) => ({ slug: c.catalog.slug, name: c.catalog.name })),
   );
   setRoutingKeyProvider(async (userId) => getLiteLLMKey(userId).catch(() => null));
+
+  // Bring your own AI: no AI source (AI_ACCESS_MODE=own_only) → "connect your AI", no wake.
+  // A Claude plan answers everything itself: no Jev, no platform-model quick replies.
+  setTurnHooks({
+    route: async (input) => {
+      const { aiAccess } = await getAgentSettings(input.userId);
+      if (aiAccess === 'none') return { kind: 'simple', reply: connectAiText() };
+      if (aiAccess === 'claude_plan') return { kind: 'task' };
+      return routeTurn(input);
+    },
+  });
 
   // Credits (HLD 7.4, 7.5): check before a turn, quick sync after it, never charge our failures.
   setTurnHooks({

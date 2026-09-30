@@ -9,6 +9,7 @@ import { queueOutbound } from '../channels/outbound.ts';
 import type { MediaRef } from '../channels/schema.ts';
 import { publish } from '../channels/stream.ts';
 import type { Channel } from '../channels/types.ts';
+import { fallBackIfClaudeSignedOut, syncRuntimeAfterWake } from './agent-settings.ts';
 import { ensureSandbox } from './sandbox.ts';
 import { DeliverEventType, DeliverKind, planPriority, vm } from './vm.ts';
 
@@ -64,6 +65,11 @@ export function outOfCreditsText(): string {
   return `You're out of credits, so I can't work on that right now. Top up, upgrade or redeem a coupon at ${config().WEB_APP_URL}/billing`;
 }
 
+/** `AI_ACCESS_MODE=own_only` and the user has neither an API key nor a connected Claude plan. */
+export function connectAiText(): string {
+  return `Connect your own AI first: add an API key or connect your Claude plan at ${config().WEB_APP_URL}/settings/ai`;
+}
+
 const KIND: Record<TurnKind, DeliverKind> = {
   message: DeliverKind.MESSAGE,
   approval_answer: DeliverKind.APPROVAL_ANSWER,
@@ -101,8 +107,9 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
 
   await ensureSandbox(userId);
   await publish(userId, 'agent.status', { state: 'waking', lastActiveAt: null });
+  let woke;
   try {
-    await vm().wakeSandbox({ userId, priority: planPriority(user.plan) });
+    woke = await vm().wakeSandbox({ userId, priority: planPriority(user.plan) });
   } catch (err) {
     if (
       err instanceof ConnectError &&
@@ -112,6 +119,8 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
     }
     throw err;
   }
+  // The container runs the agent the user's settings say (Hermes or Claude Code).
+  await syncRuntimeAfterWake(userId, woke.sandbox);
 
   const startedAt = new Date();
   let outcome: TurnOutcome | null = null;
@@ -165,6 +174,14 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
             sessionKey: input.sessionKey,
             text: `I couldn't finish that: ${ev.message}`,
           });
+          // Claude Code whose sign-in stopped working: forget it, Hermes answers next time.
+          if (await fallBackIfClaudeSignedOut(userId)) {
+            await queueOutbound({
+              userId,
+              sessionKey: input.sessionKey,
+              text: `Your Claude plan is no longer connected, so I've switched back to the standard agent. Reconnect it at ${config().WEB_APP_URL}/settings/ai`,
+            });
+          }
         }
         break;
       }

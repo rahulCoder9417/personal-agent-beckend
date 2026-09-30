@@ -494,9 +494,9 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Start a Dodo checkout for a plan or a top-up
-         * @description Returns a hosted checkout URL. The plan or credits change only when Dodo's webhook arrives,
-         *     never from this call. Top-ups are only for paid plans.
+         * Start a Polar checkout for a plan or a top-up
+         * @description Returns a hosted Polar checkout URL. The plan or credits change only when Polar's signed
+         *     webhook arrives, never from this call. Top-ups are only for paid plans.
          *     Waitlist members (verified email on a non-rejected, unflagged waitlist entry) get 50% off
          *     their first month of Pro or Max once; `discountApplied` says whether it was applied.
          */
@@ -831,7 +831,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/webhooks/dodo": {
+    "/webhooks/polar": {
         parameters: {
             query?: never;
             header?: never;
@@ -840,8 +840,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Dodo payment and subscription events */
-        post: operations["webhookDodo"];
+        /**
+         * Polar order, subscription and refund events
+         * @description Signed with Standard Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`).
+         *     The event is saved once per `webhook-id`, then handled by the worker.
+         */
+        post: operations["webhookPolar"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2951,7 +2955,7 @@ export interface operations {
             401: components["responses"]["WebhookUnauthorized"];
         };
     };
-    webhookDodo: {
+    webhookPolar: {
         parameters: {
             query?: never;
             header: {

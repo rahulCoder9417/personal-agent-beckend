@@ -1,4 +1,4 @@
-// Subscription state. The user's plan (auth.users.plan) changes only here, and only from Dodo
+// Subscription state. The user's plan (auth.users.plan) changes only here, and only from Polar
 // webhooks or when a cancelled period ends (HLD 7.6) — never from the web app directly.
 import { and, desc, eq, inArray, isNull, lte, ne } from 'drizzle-orm';
 import { db, type Tx } from '../../shared/db/client.ts';
@@ -40,11 +40,11 @@ export async function getRenewingSubscription(userId: string): Promise<Subscript
   return row;
 }
 
-export async function getSubscriptionByDodoId(dodoId: string, tx: Tx = db()) {
+export async function getSubscriptionByPolarId(polarId: string, tx: Tx = db()) {
   const [row] = await tx
     .select()
     .from(subscriptions)
-    .where(eq(subscriptions.dodoSubscriptionId, dodoId));
+    .where(eq(subscriptions.polarSubscriptionId, polarId));
   return row;
 }
 
@@ -53,7 +53,7 @@ export async function upsertSubscriptionInTx(
   input: {
     userId: string;
     plan: PlanId;
-    dodoSubscriptionId: string;
+    polarSubscriptionId: string;
     status: SubscriptionStatus;
     periodStart?: Date | null;
     periodEnd?: Date | null;
@@ -72,10 +72,10 @@ export async function upsertSubscriptionInTx(
     .values({
       id: newId('sub'),
       userId: input.userId,
-      dodoSubscriptionId: input.dodoSubscriptionId,
+      polarSubscriptionId: input.polarSubscriptionId,
       ...set,
     })
-    .onConflictDoUpdate({ target: subscriptions.dodoSubscriptionId, set })
+    .onConflictDoUpdate({ target: subscriptions.polarSubscriptionId, set })
     .returning();
   return row!;
 }
@@ -125,14 +125,18 @@ export async function endSubscription(sub: Subscription, now = new Date()): Prom
   return ended;
 }
 
-/** Hourly: end every cancelled subscription whose paid period is over. */
+/**
+ * Hourly: end every cancelled subscription whose paid period is over. Polar sends
+ * subscription.revoked at the end of a cancelled period; this is the safety net if it never
+ * comes (a subscription set to cancel does not renew, so once its period is over it is over).
+ */
 export async function endLapsedSubscriptions(now = new Date()): Promise<number> {
   const due = await db()
     .select()
     .from(subscriptions)
     .where(
       and(
-        eq(subscriptions.status, 'cancelled'),
+        inArray(subscriptions.status, ['cancelled', 'cancel_at_period_end']),
         isNull(subscriptions.endedAt),
         lte(subscriptions.periodEnd, now),
       ),

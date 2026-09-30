@@ -765,10 +765,10 @@ paths:
     post:
       operationId: createCheckout
       tags: [billing]
-      summary: Start a Dodo checkout for a plan or a top-up
+      summary: Start a Polar checkout for a plan or a top-up
       description: |
-        Returns a hosted checkout URL. The plan or credits change only when Dodo's webhook arrives,
-        never from this call. Top-ups are only for paid plans.
+        Returns a hosted Polar checkout URL. The plan or credits change only when Polar's signed
+        webhook arrives, never from this call. Top-ups are only for paid plans.
         Waitlist members (verified email on a non-rejected, unflagged waitlist entry) get 50% off
         their first month of Pro or Max once; `discountApplied` says whether it was applied.
       requestBody:
@@ -1281,11 +1281,14 @@ paths:
         "200": { $ref: "#/components/responses/WebhookAccepted" }
         "401": { $ref: "#/components/responses/WebhookUnauthorized" }
 
-  /webhooks/dodo:
+  /webhooks/polar:
     post:
-      operationId: webhookDodo
+      operationId: webhookPolar
       tags: [webhooks]
-      summary: Dodo payment and subscription events
+      summary: Polar order, subscription and refund events
+      description: |
+        Signed with Standard Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`).
+        The event is saved once per `webhook-id`, then handled by the worker.
       security: []
       parameters:
         - { name: webhook-id, in: header, required: true, schema: { type: string } }

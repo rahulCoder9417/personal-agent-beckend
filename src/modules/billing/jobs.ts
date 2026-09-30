@@ -6,7 +6,7 @@ import { afterCreditsRemoved } from './enforce.ts';
 import { endLapsedSubscriptions } from './subscriptions.ts';
 import { syncAllUsage, syncUsageForUser } from './usage.ts';
 
-export { handleDodoEvent } from './dodo-events.ts';
+export { handlePolarEvent } from './polar-events.ts';
 
 export const SYNC_USAGE_EVERY_MS = 5 * 60 * 1000;
 export const EXPIRE_CREDITS_EVERY_MS = 60 * 60 * 1000;

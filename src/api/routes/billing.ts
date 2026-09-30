@@ -1,4 +1,4 @@
-import { cancelSubscription, startCheckout } from '../../modules/billing/dodo.ts';
+import { cancelSubscription, startCheckout } from '../../modules/billing/polar.ts';
 import { PLAN_IDS, PLANS, TOP_UPS } from '../../modules/billing/plans.ts';
 import { getCurrentSubscription } from '../../modules/billing/subscriptions.ts';
 import { toPlan, toSubscription } from '../billing-presenters.ts';
@@ -17,7 +17,7 @@ export const billingRoutes = [
     return c.json(toSubscription(user.plan, await getCurrentSubscription(user.id)), 200);
   }),
 
-  // Returns a hosted checkout URL; plan/credits change only when Dodo's webhook arrives.
+  // Returns a hosted checkout URL; plan/credits change only when Polar's webhook arrives.
   route('createCheckout', async (c, { body }) => {
     const { checkoutUrl, discountApplied } = await startCheckout(
       c.get('user'),

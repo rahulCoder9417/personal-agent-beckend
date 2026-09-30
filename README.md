@@ -29,7 +29,7 @@ pnpm dev                        # api on :8080 + worker
 | Restore test (on the server) | `scripts/restore-test.sh` |
 | Load test at the awake cap | `LOAD_USERS=40 AWAKE_CAP=15 pnpm tsx scripts/load-test.ts` |
 
-Tests run against a real Postgres (embedded binaries, downloaded by `embedded-postgres`) and a local `redis-server`, one database and queue prefix per test file. External services (vm-manager, Telegram, WhatsApp, Composio, LiteLLM, Dodo, Jev) are faked in tests via `set…Api()` / `setVmClient()`.
+Tests run against a real Postgres (embedded binaries, downloaded by `embedded-postgres`) and a local `redis-server`, one database and queue prefix per test file. External services (vm-manager, Telegram, WhatsApp, Composio, LiteLLM, Polar, Jev) are faked in tests via `set…Api()` / `setVmClient()`.
 
 ## Layout
 

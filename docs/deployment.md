@@ -47,7 +47,7 @@ Hosting and server setup for the system in `mvp-hld.md`. **Not needed for writin
 ## DNS and secrets
 
 - DNS: `api.<domain>` → the VPS IP. The web app's domain → Vercel.
-- Secrets (Clerk, Meta, Telegram, Sendblue, Composio, Dodo, Jev, OpenRouter, Anthropic/OpenAI, internal gRPC secret, encryption key) go in a `.env` file on the server, readable only by the deploy user, and **never committed**.
+- Secrets (Clerk, Meta, Telegram, Sendblue, Composio, Polar, Jev, OpenRouter, Anthropic/OpenAI, internal gRPC secret, encryption key) go in a `.env` file on the server, readable only by the deploy user, and **never committed**.
 
 ## Monthly cost
 

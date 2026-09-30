@@ -25,7 +25,7 @@ import { chatRoutes } from './routes/chat.ts';
 import { meRoutes } from './routes/me.ts';
 import { systemRoutes } from './routes/system.ts';
 import { waitlistRoutes } from './routes/waitlist.ts';
-import { dodoWebhookRoutes } from './routes/webhooks-dodo.ts';
+import { polarWebhookRoutes } from './routes/webhooks-polar.ts';
 import { webhookRoutes } from './routes/webhooks.ts';
 import { channelWebhookRoutes } from './routes/webhooks-channels.ts';
 import type { AppEnv } from './types.ts';
@@ -42,13 +42,13 @@ export const allRoutes: RouteDef[] = [
   ...automationRoutes,
   ...webhookRoutes,
   ...channelWebhookRoutes,
-  // Phase 5: billing, credits, coupons, bring-your-own key, admin, Dodo webhook
+  // Phase 5: billing, credits, coupons, bring-your-own key, admin, Polar webhook
   ...billingRoutes,
   ...creditRoutes,
   ...couponRoutes,
   ...byokRoutes,
   ...adminRoutes,
-  ...dodoWebhookRoutes,
+  ...polarWebhookRoutes,
   ...waitlistRoutes,
 ];
 

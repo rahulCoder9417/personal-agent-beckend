@@ -1,4 +1,4 @@
-// Subscription state. The user's plan (auth.users.plan) changes only here, and only from Dodo
+// Subscription state. The user's plan (auth.users.plan) changes only here, and only from Polar
 // webhooks or when a cancelled period ends (HLD 7.6) — never from the web app directly.
 import { and, desc, eq, inArray, isNull, lte, ne } from 'drizzle-orm';
 import { db, type Tx } from '../../shared/db/client.ts';
@@ -125,14 +125,18 @@ export async function endSubscription(sub: Subscription, now = new Date()): Prom
   return ended;
 }
 
-/** Hourly: end every cancelled subscription whose paid period is over. */
+/**
+ * Hourly: end every cancelled subscription whose paid period is over. Polar sends
+ * subscription.revoked at the end of a cancelled period; this is the safety net if it never
+ * comes (a subscription set to cancel does not renew, so once its period is over it is over).
+ */
 export async function endLapsedSubscriptions(now = new Date()): Promise<number> {
   const due = await db()
     .select()
     .from(subscriptions)
     .where(
       and(
-        eq(subscriptions.status, 'cancelled'),
+        inArray(subscriptions.status, ['cancelled', 'cancel_at_period_end']),
         isNull(subscriptions.endedAt),
         lte(subscriptions.periodEnd, now),
       ),

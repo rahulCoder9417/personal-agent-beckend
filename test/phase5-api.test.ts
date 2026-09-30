@@ -11,12 +11,12 @@ import { processors } from '../src/worker/processors.ts';
 import { startWorkers } from '../src/worker/runner.ts';
 import { installFakes, member } from './billing-fakes.ts';
 import { DAY, grantsOf, linkChat } from './billing-helpers.ts';
-import { installDodo, signDodo } from './dodo-fakes.ts';
 import { call, createUser, expectContract, waitFor } from './helpers.ts';
+import { installPolar, signPolar, topUpOrder } from './polar-fakes.ts';
 
 afterAll(closeQueues);
 const { llm, vm } = installFakes();
-installDodo();
+installPolar();
 
 type Err = { error: { code: string; message: string } };
 const post = (token: string, body: unknown, headers: Record<string, string> = {}) => ({
@@ -435,9 +435,9 @@ describe('contract: bring your own key', () => {
   });
 });
 
-describe('contract: Dodo webhook', () => {
+describe('contract: Polar webhook', () => {
   it('rejects a bad signature without saving anything', async () => {
-    const signed = signDodo({ type: 'payment.succeeded', data: {} });
+    const signed = signPolar({ type: 'order.paid', data: {} });
     const res = await call('/webhooks/polar', {
       method: 'POST',
       body: signed.body,
@@ -449,21 +449,9 @@ describe('contract: Dodo webhook', () => {
     ).toHaveLength(0);
   });
 
-  it('a test-mode top-up sent twice adds credits exactly once', async () => {
+  it('a sandbox top-up sent twice adds credits exactly once', async () => {
     const u = await member(0, 'pro');
-    const signed = signDodo({
-      business_id: 'bus_test',
-      type: 'payment.succeeded',
-      timestamp: new Date().toISOString(),
-      data: {
-        payload_type: 'Payment',
-        payment_id: `pay_${randomUUID()}`,
-        subscription_id: null,
-        total_amount: 1000,
-        product_cart: [{ product_id: 'prod_topup10', quantity: 1 }],
-        metadata: { user_id: u.id, kind: 'topup', top_up_id: 'topup_10' },
-      },
-    });
+    const signed = signPolar(topUpOrder(u.id, randomUUID()));
     for (let i = 0; i < 2; i++) {
       await expectContract(
         'webhookPolar',
@@ -480,6 +468,7 @@ describe('contract: Dodo webhook', () => {
       .from(events)
       .where(eq(events.externalId, signed.headers['webhook-id']));
     expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ source: 'polar', type: 'order.paid', userId: u.id });
     const workers = startWorkers(processors());
     try {
       await waitFor(async () => {

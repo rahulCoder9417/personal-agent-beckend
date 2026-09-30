@@ -17,17 +17,18 @@ import { resetConfig } from '../src/shared/config.ts';
 import { db } from '../src/shared/db/client.ts';
 import { createUser } from './helpers.ts';
 
-export const DODO_SECRET = 'whsec_' + Buffer.from('dodo-test-secret-0123456789').toString('base64');
+export const POLAR_SECRET =
+  'whsec_' + Buffer.from('polar-test-secret-0123456789').toString('base64');
 
 Object.assign(process.env, {
   LITELLM_MASTER_KEY: 'sk-test-master',
   LITELLM_CHEAP_MODEL: 'cheap',
   LITELLM_PAID_MODELS: 'cheap,claude,gpt',
-  DODO_API_KEY: 'dodo-test-key',
-  DODO_WEBHOOK_SECRET: DODO_SECRET,
-  DODO_PRODUCT_PRO: 'prod_pro',
-  DODO_PRODUCT_MAX: 'prod_max',
-  DODO_PRODUCT_TOPUP_10: 'prod_topup10',
+  POLAR_ACCESS_TOKEN: 'polar_oat_test',
+  POLAR_WEBHOOK_SECRET: POLAR_SECRET,
+  POLAR_PRODUCT_PRO: '5b8c4f3e-1111-4c5a-9d7e-0a1b2c3d4e01',
+  POLAR_PRODUCT_MAX: '5b8c4f3e-2222-4c5a-9d7e-0a1b2c3d4e02',
+  POLAR_PRODUCT_TOPUP_10: '5b8c4f3e-3333-4c5a-9d7e-0a1b2c3d4e03',
   TRUST_PROXY: 'true',
 });
 resetConfig();

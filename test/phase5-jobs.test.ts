@@ -4,7 +4,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { auditLog } from '../src/modules/admin/schema.ts';
 import { createGrant, getBalance } from '../src/modules/billing/credits.ts';
 import { freeCreditStats } from '../src/modules/billing/free-credits.ts';
-import { handleDodoEvent } from '../src/modules/billing/dodo-events.ts';
+import { handlePolarEvent } from '../src/modules/billing/polar-events.ts';
 import {
   EXPIRE_CREDITS_EVERY_MS,
   SYNC_USAGE_EVERY_MS,
@@ -21,12 +21,12 @@ import { processors } from '../src/worker/processors.ts';
 import { startWorkers } from '../src/worker/runner.ts';
 import { installFakes, member } from './billing-fakes.ts';
 import { DAY, fakeJob, grantsOf } from './billing-helpers.ts';
-import { installDodo } from './dodo-fakes.ts';
 import { createUser, waitFor } from './helpers.ts';
+import { installPolar, subscriptionEvent } from './polar-fakes.ts';
 
 afterAll(closeQueues);
 const { llm, vm } = installFakes();
-const dodo = installDodo();
+const polar = installPolar();
 
 describe('onboarding', () => {
   it('grants the 100 sign-up credits and creates the LiteLLM key, once', async () => {
@@ -68,36 +68,33 @@ describe('onboarding', () => {
 
   it('offboarding revokes the key and stops the subscription renewing', async () => {
     const u = await member(0);
-    const subId = `sub_${randomUUID()}`;
-    const { eventId } = await ingestEvent({
-      source: 'dodo',
-      externalId: `msg_${randomUUID()}`,
-      type: 'subscription.active',
-      payload: {
-        type: 'subscription.active',
-        data: {
-          subscription_id: subId,
-          product_id: 'prod_pro',
-          metadata: { user_id: u.id },
-          previous_billing_date: new Date().toISOString(),
-          next_billing_date: new Date(Date.now() + 30 * DAY).toISOString(),
-        },
-      },
-      queue: 'system',
-      jobName: 'dodo-event',
+    const subId = randomUUID();
+    const payload = subscriptionEvent('subscription.active', {
+      userId: u.id,
+      subId,
+      start: new Date(),
+      end: new Date(Date.now() + 30 * DAY),
     });
-    await handleDodoEvent(fakeJob({ eventId }));
+    const { eventId } = await ingestEvent({
+      source: 'polar',
+      externalId: `msg_${randomUUID()}`,
+      type: payload.type,
+      payload,
+      queue: 'system',
+      jobName: 'polar-event',
+    });
+    await handlePolarEvent(fakeJob({ eventId }));
     const key = llm.byUser(u.id)!.key;
     await offboardBilling(u.id);
     expect(llm.keys.get(key)!.deleted).toBe(true);
-    expect(dodo.cancelled).toContain(subId);
+    expect(polar.cancelled).toContain(subId);
   });
 });
 
 describe('billing jobs', () => {
   it('are registered with the worker', () => {
     expect(Object.keys(processors().system ?? {})).toEqual(
-      expect.arrayContaining(['dodo-event', 'sync-usage', 'expire-credits']),
+      expect.arrayContaining(['polar-event', 'sync-usage', 'expire-credits']),
     );
   });
 

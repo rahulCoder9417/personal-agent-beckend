@@ -4,7 +4,7 @@ import { route } from '../router.ts';
 
 // Verify (Standard Webhooks) on the raw body → save the event (unique on webhook-id) → job → 200.
 export const dodoWebhookRoutes = [
-  route('webhookDodo', async (c, { rawBody }) => {
+  route('webhookPolar', async (c, { rawBody }) => {
     const headers = {
       'webhook-id': c.req.header('webhook-id'),
       'webhook-timestamp': c.req.header('webhook-timestamp'),

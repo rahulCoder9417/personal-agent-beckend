@@ -371,6 +371,85 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/agent/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Which agent runs for this user, and which AI source pays for it
+         * @description Rule: a connected Claude plan → Claude Code (when chosen); an own API key → Hermes;
+         *     neither → Hermes on platform credits, or nothing when the platform requires your own AI
+         *     (`aiAccess: none`).
+         */
+        get: operations["getAgentSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Choose the agent runtime */
+        patch: operations["updateAgentSettings"];
+        trace?: never;
+    };
+    "/v1/agent/claude/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start connecting the user's Claude plan (official Claude Code sign-in)
+         * @description Wakes the user's container and starts the unmodified Claude Code sign-in there. Open
+         *     `authorizeUrl` (Anthropic's own page), sign in, then send the code Anthropic shows to the
+         *     complete endpoint. We never see or store Claude credentials. Rate limited.
+         */
+        post: operations["startClaudeLogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agent/claude/login/{loginId}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Finish connecting the Claude plan with the code from Anthropic's page */
+        post: operations["completeClaudeLogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agent/claude": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Disconnect the Claude plan (signs Claude Code out; the agent goes back to Hermes) */
+        delete: operations["disconnectClaude"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/billing/plans": {
         parameters: {
             query?: never;
@@ -1229,6 +1308,37 @@ export interface components {
                 lastAt: string;
             }[];
         };
+        /** @enum {string} */
+        AgentRuntime: "hermes" | "claude_code";
+        AgentSettings: {
+            runtime: components["schemas"]["AgentRuntime"];
+            /**
+             * @description What actually runs (null when there's no AI source)
+             * @enum {string|null}
+             */
+            effectiveRuntime: "hermes" | "claude_code" | null;
+            /**
+             * @description What pays for the AI
+             * @enum {string}
+             */
+            aiAccess: "claude_plan" | "own_key" | "platform" | "none";
+            claude: {
+                connected: boolean;
+                /** Format: date-time */
+                connectedAt?: string | null;
+            };
+            ownKeyProviders: components["schemas"]["ByokProvider"][];
+        };
+        ClaudeLoginStart: {
+            loginId: string;
+            /**
+             * Format: uri
+             * @description Anthropic's sign-in page
+             */
+            authorizeUrl: string;
+            /** Format: date-time */
+            expiresAt: string;
+        };
         ActivityEntry: {
             id: string;
             /** @enum {string} */
@@ -2058,6 +2168,153 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AgentStatus"];
                 };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getAgentSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSettings"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    updateAgentSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    runtime: components["schemas"]["AgentRuntime"];
+                };
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Claude Code needs a connected Claude plan first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    startClaudeLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sign-in started */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaudeLoginStart"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["RateLimited"];
+            /** @description The agent container is unavailable right now; retry */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    completeClaudeLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                loginId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Connected; Claude Code is now the user's agent */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSettings"];
+                };
+            };
+            /** @description Wrong or expired code (the message says which) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    disconnectClaude: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Disconnected */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             401: components["responses"]["Unauthorized"];
         };

@@ -610,6 +610,116 @@ paths:
               schema: { $ref: "#/components/schemas/AgentStatus" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /v1/agent/settings:
+    get:
+      operationId: getAgentSettings
+      tags: [agent]
+      summary: Which agent runs for this user, and which AI source pays for it
+      description: |
+        Rule: a connected Claude plan → Claude Code (when chosen); an own API key → Hermes;
+        neither → Hermes on platform credits, or nothing when the platform requires your own AI
+        (`aiAccess: none`).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentSettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      operationId: updateAgentSettings
+      tags: [agent]
+      summary: Choose the agent runtime
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [runtime]
+              additionalProperties: false
+              properties:
+                runtime: { $ref: "#/components/schemas/AgentRuntime" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentSettings" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: Claude Code needs a connected Claude plan first
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/agent/claude/login:
+    post:
+      operationId: startClaudeLogin
+      tags: [agent]
+      summary: Start connecting the user's Claude plan (official Claude Code sign-in)
+      description: |
+        Wakes the user's container and starts the unmodified Claude Code sign-in there. Open
+        `authorizeUrl` (Anthropic's own page), sign in, then send the code Anthropic shows to the
+        complete endpoint. We never see or store Claude credentials. Rate limited.
+      responses:
+        "201":
+          description: Sign-in started
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClaudeLoginStart" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503":
+          description: The agent container is unavailable right now; retry
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/agent/claude/login/{loginId}/complete:
+    post:
+      operationId: completeClaudeLogin
+      tags: [agent]
+      summary: Finish connecting the Claude plan with the code from Anthropic's page
+      parameters:
+        - name: loginId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              additionalProperties: false
+              properties:
+                code: { type: string, minLength: 4, maxLength: 2000, writeOnly: true }
+      responses:
+        "200":
+          description: Connected; Claude Code is now the user's agent
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentSettings" }
+        "400":
+          description: Wrong or expired code (the message says which)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/agent/claude:
+    delete:
+      operationId: disconnectClaude
+      tags: [agent]
+      summary: Disconnect the Claude plan (signs Claude Code out; the agent goes back to Hermes)
+      responses:
+        "204": { description: Disconnected }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   # ---------------------------------------------------------------- billing
   /v1/billing/plans:
     get:
@@ -1732,6 +1842,42 @@ components:
               entries: { type: integer }
               attempts: { type: integer }
               lastAt: { type: string, format: date-time }
+
+    AgentRuntime:
+      type: string
+      enum: [hermes, claude_code]
+
+    AgentSettings:
+      type: object
+      required: [runtime, effectiveRuntime, aiAccess, claude, ownKeyProviders]
+      properties:
+        runtime:
+          $ref: "#/components/schemas/AgentRuntime"
+        effectiveRuntime:
+          type: [string, "null"]
+          enum: [hermes, claude_code, null]
+          description: What actually runs (null when there's no AI source)
+        aiAccess:
+          type: string
+          enum: [claude_plan, own_key, platform, none]
+          description: What pays for the AI
+        claude:
+          type: object
+          required: [connected]
+          properties:
+            connected: { type: boolean }
+            connectedAt: { type: [string, "null"], format: date-time }
+        ownKeyProviders:
+          type: array
+          items: { $ref: "#/components/schemas/ByokProvider" }
+
+    ClaudeLoginStart:
+      type: object
+      required: [loginId, authorizeUrl, expiresAt]
+      properties:
+        loginId: { type: string }
+        authorizeUrl: { type: string, format: uri, description: "Anthropic's sign-in page" }
+        expiresAt: { type: string, format: date-time }
 
     ActivityEntry:
       type: object

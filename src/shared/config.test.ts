@@ -23,4 +23,10 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...base, ENCRYPTION_KEY: 'short' })).toThrow(/ENCRYPTION_KEY/);
     expect(() => loadConfig({ REDIS_URL: base.REDIS_URL })).toThrow(/DATABASE_URL/);
   });
+
+  it('AI_ACCESS_MODE defaults to platform and accepts only platform | own_only', () => {
+    expect(loadConfig(base).AI_ACCESS_MODE).toBe('platform');
+    expect(loadConfig({ ...base, AI_ACCESS_MODE: 'own_only' }).AI_ACCESS_MODE).toBe('own_only');
+    expect(() => loadConfig({ ...base, AI_ACCESS_MODE: 'free' })).toThrow(/AI_ACCESS_MODE/);
+  });
 });

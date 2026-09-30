@@ -99,6 +99,12 @@ export const configSchema = z.object({
   /** Dodo discount code for the waitlist offer: 50% off, first billing cycle only (set up in Dodo). */
   DODO_WAITLIST_DISCOUNT_CODE: optional,
 
+  /**
+   * Who may pay for the AI. `platform`: Hermes on platform credits when the user brings nothing.
+   * `own_only` (MVP): the user must bring their own AI (an API key or their Claude plan).
+   */
+  AI_ACCESS_MODE: z.enum(['platform', 'own_only']).default('platform'),
+
   /** Optional monthly cap on free credits (sign-up + coupons). */
   FREE_CREDITS_MONTHLY_CAP: z.coerce.number().int().positive().optional(),
 

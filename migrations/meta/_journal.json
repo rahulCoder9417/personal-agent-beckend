@@ -50,6 +50,13 @@
       "when": 1790659341127,
       "tag": "0006_pricing_90day_credits_waitlist_offer",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790760390293,
+      "tag": "0007_agent_runtime",
+      "breakpoints": true
     }
   ]
 }

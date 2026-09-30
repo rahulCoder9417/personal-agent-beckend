@@ -35,3 +35,17 @@ export const approvals = pgTable(
   },
   (t) => [index().on(t.userId, t.id), index().on(t.status, t.expiresAt)],
 );
+
+/**
+ * Which agent runs for the user: Hermes (API key / platform credits) or Claude Code (the user's
+ * own Claude plan). We only store WHEN a Claude plan was connected: never a credential or token.
+ */
+export const agentSettings = pgTable('agent_settings', {
+  userId: text().primaryKey(),
+  runtime: text({ enum: ['hermes', 'claude_code'] })
+    .notNull()
+    .default('hermes'),
+  /** Set when the in-container Claude Code sign-in succeeded; null = not connected. */
+  claudeConnectedAt: timestamp({ withTimezone: true }),
+  updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+});

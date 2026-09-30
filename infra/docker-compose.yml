@@ -103,6 +103,17 @@ services:
   egress-proxy:
     image: ubuntu/squid:latest
     container_name: egress-proxy
+    # Squid must be PID 1: the vm-manager applies allowlist changes with `docker kill -s HUP`, and
+    # the image's bash entrypoint (PID 1) would silently drop the signal. The tail keeps the
+    # logs on the container's stdout like the stock entrypoint does.
+    entrypoint:
+      - /bin/bash
+      - -c
+      - >-
+        tail -F /var/log/squid/access.log /var/log/squid/cache.log 2>/dev/null &
+        /usr/sbin/squid -Nz -f /etc/squid/squid.conf &&
+        exec /usr/sbin/squid -f /etc/squid/squid.conf -NYC
+    command: []
     volumes:
       - ./egress-proxy/squid.conf:/etc/squid/squid.conf:ro
       - ./egress-proxy/allowlists:/etc/squid/allowlists:ro

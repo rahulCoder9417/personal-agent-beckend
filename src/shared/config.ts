@@ -90,14 +90,17 @@ export const configSchema = z.object({
   /** Speech-to-text (OpenAI-compatible /audio/transcriptions), via LiteLLM by default. */
   STT_MODEL: z.string().default('whisper'),
 
-  DODO_API_KEY: optional,
-  DODO_WEBHOOK_SECRET: optional,
-  DODO_API_URL: z.string().url().default('https://test.dodopayments.com'),
-  DODO_PRODUCT_PRO: optional,
-  DODO_PRODUCT_MAX: optional,
-  DODO_PRODUCT_TOPUP_10: optional,
-  /** Dodo discount code for the waitlist offer: 50% off, first billing cycle only (set up in Dodo). */
-  DODO_WAITLIST_DISCOUNT_CODE: optional,
+  /** Polar organization access token (Core API: checkouts, cancel at period end). */
+  POLAR_ACCESS_TOKEN: optional,
+  /** The webhook endpoint's `whsec_…` secret from the Polar dashboard, as-is. */
+  POLAR_WEBHOOK_SECRET: optional,
+  /** sandbox → sandbox-api.polar.sh, production → api.polar.sh (tokens differ per environment). */
+  POLAR_SERVER: z.enum(['sandbox', 'production']).default('sandbox'),
+  POLAR_PRODUCT_PRO: optional,
+  POLAR_PRODUCT_MAX: optional,
+  POLAR_PRODUCT_TOPUP_10: optional,
+  /** Polar discount id for the waitlist offer: 50% off, once (first billing cycle only). */
+  POLAR_WAITLIST_DISCOUNT_ID: optional,
 
   /**
    * Who may pay for the AI. `platform`: Hermes on platform credits when the user brings nothing.

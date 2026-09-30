@@ -4,26 +4,27 @@ import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { users, waitlistEntries } from '../src/modules/auth/schema.ts';
 import { findWaitlistOffer, joinWaitlist, normalizeEmail } from '../src/modules/auth/waitlist.ts';
-import { handleDodoEvent } from '../src/modules/billing/dodo-events.ts';
+import { handlePolarEvent } from '../src/modules/billing/polar-events.ts';
 import { ingestEvent } from '../src/modules/events/intake.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
 import { resetConfig } from '../src/shared/config.ts';
 import { db } from '../src/shared/db/client.ts';
 import { installFakes } from './billing-fakes.ts';
 import { DAY, fakeJob } from './billing-helpers.ts';
-import { installDodo } from './dodo-fakes.ts';
 import { call, createUser, expectContract } from './helpers.ts';
+import { installPolar, subscriptionEvent } from './polar-fakes.ts';
 
 installFakes();
-const dodo = installDodo();
-const CODE = 'WAITLIST50';
+const polar = installPolar();
+/** The Polar discount (50% off, duration once) set up for the waitlist offer. */
+const DISCOUNT = '9f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f';
 
 beforeAll(() => {
-  process.env.DODO_WAITLIST_DISCOUNT_CODE = CODE;
+  process.env.POLAR_WAITLIST_DISCOUNT_ID = DISCOUNT;
   resetConfig();
 });
 afterAll(async () => {
-  delete process.env.DODO_WAITLIST_DISCOUNT_CODE;
+  delete process.env.POLAR_WAITLIST_DISCOUNT_ID;
   resetConfig();
   await closeQueues();
 });
@@ -45,7 +46,7 @@ const checkout = (token: string, body: unknown) =>
   call('/v1/billing/checkout', { method: 'POST', token, body });
 
 describe('waitlist offer at checkout', () => {
-  it('a verified waitlist member gets the discount code on a plan checkout', async () => {
+  it('a verified waitlist member gets the discount on a plan checkout', async () => {
     const u = await waitlisted();
     const res = await expectContract<{ checkoutUrl: string; discountApplied: boolean }>(
       'createCheckout',
@@ -53,8 +54,8 @@ describe('waitlist offer at checkout', () => {
       200,
     );
     expect(res.discountApplied).toBe(true);
-    const sent = dodo.checkouts.at(-1)!;
-    expect(sent.discountCode).toBe(CODE);
+    const sent = polar.checkouts.at(-1)!;
+    expect(sent.discountId).toBe(DISCOUNT);
     const offer = await findWaitlistOffer(u.email);
     expect(sent.metadata).toMatchObject({
       user_id: u.id,
@@ -82,34 +83,52 @@ describe('waitlist offer at checkout', () => {
   it('is used once: the subscription starting marks it used', async () => {
     const u = await waitlisted();
     await checkout(u.token, { kind: 'plan', planId: 'pro' });
-    const { metadata } = dodo.checkouts.at(-1)!;
-    const subId = `sub_${randomUUID()}`;
-    const payload = {
-      type: 'subscription.active',
-      timestamp: new Date().toISOString(),
-      data: {
-        subscription_id: subId,
-        product_id: 'prod_pro',
-        status: 'active',
-        metadata,
-        previous_billing_date: new Date().toISOString(),
-        next_billing_date: new Date(Date.now() + 30 * DAY).toISOString(),
-      },
-    };
+    const { metadata } = polar.checkouts.at(-1)!;
+    // Polar copies the checkout metadata onto the subscription.
+    const payload = subscriptionEvent('subscription.active', {
+      userId: u.id,
+      subId: randomUUID(),
+      start: new Date(),
+      end: new Date(Date.now() + 30 * DAY),
+      metadata,
+      discountId: DISCOUNT,
+    });
     const { eventId } = await ingestEvent({
-      source: 'dodo',
+      source: 'polar',
       externalId: `msg_${randomUUID()}`,
       type: payload.type,
       payload,
       queue: 'system',
-      jobName: 'dodo-event',
+      jobName: 'polar-event',
     });
-    await handleDodoEvent(fakeJob({ eventId }));
+    await handlePolarEvent(fakeJob({ eventId }));
     const [entry] = await db()
       .select()
       .from(waitlistEntries)
       .where(eq(waitlistEntries.emailNormalized, normalizeEmail(u.email)));
     expect(entry!.offerUsedAt).not.toBeNull();
+    expect(await findWaitlistOffer(u.email)).toBeNull();
+  });
+
+  it('is marked used from the discount on the subscription when the metadata is missing', async () => {
+    const u = await waitlisted();
+    const payload = subscriptionEvent('subscription.active', {
+      userId: u.id,
+      subId: randomUUID(),
+      start: new Date(),
+      end: new Date(Date.now() + 30 * DAY),
+      metadata: {},
+      discountId: DISCOUNT,
+    });
+    const { eventId } = await ingestEvent({
+      source: 'polar',
+      externalId: `msg_${randomUUID()}`,
+      type: payload.type,
+      payload,
+      queue: 'system',
+      jobName: 'polar-event',
+    });
+    await handlePolarEvent(fakeJob({ eventId }));
     expect(await findWaitlistOffer(u.email)).toBeNull();
   });
 
@@ -140,7 +159,7 @@ describe('waitlist offer at checkout', () => {
         200,
       );
       expect(res.discountApplied).toBe(false);
-      expect(dodo.checkouts.at(-1)!.discountCode).toBeUndefined();
+      expect(polar.checkouts.at(-1)!.discountId).toBeUndefined();
     }
 
     const paid = await waitlisted();
@@ -153,8 +172,8 @@ describe('waitlist offer at checkout', () => {
     expect(topup.discountApplied).toBe(false);
   });
 
-  it('no discount when the Dodo code is not configured', async () => {
-    delete process.env.DODO_WAITLIST_DISCOUNT_CODE;
+  it('no discount when the Polar discount is not configured', async () => {
+    delete process.env.POLAR_WAITLIST_DISCOUNT_ID;
     resetConfig();
     try {
       const u = await waitlisted();
@@ -165,7 +184,7 @@ describe('waitlist offer at checkout', () => {
       );
       expect(res.discountApplied).toBe(false);
     } finally {
-      process.env.DODO_WAITLIST_DISCOUNT_CODE = CODE;
+      process.env.POLAR_WAITLIST_DISCOUNT_ID = DISCOUNT;
       resetConfig();
     }
   });

@@ -4,7 +4,7 @@ import { db } from '../../shared/db/client.ts';
 import { audit } from '../admin/audit.ts';
 import { getActiveUser } from '../auth/users.ts';
 import { createGrantInTx, ledgerKeyExists } from './credits.ts';
-import { dodo } from './dodo.ts';
+import { polar } from './polar.ts';
 import { freeCapAllows } from './free-credits.ts';
 import { ensureLiteLLMKey, refreshBudget, revokeLiteLLMKey } from './litellm.ts';
 import { SIGNUP_CREDITS, creditExpiry } from './plans.ts';
@@ -53,9 +53,12 @@ export async function offboardBilling(userId: string): Promise<void> {
   const sub = await getRenewingSubscription(userId);
   if (sub) {
     try {
-      await dodo().cancelAtPeriodEnd(sub.dodoSubscriptionId);
+      await polar().cancelAtPeriodEnd(sub.polarSubscriptionId);
     } catch (err) {
-      logger().error({ userId, err: (err as Error).message }, 'could not cancel Dodo subscription');
+      logger().error(
+        { userId, err: (err as Error).message },
+        'could not cancel Polar subscription',
+      );
       throw err;
     }
   }

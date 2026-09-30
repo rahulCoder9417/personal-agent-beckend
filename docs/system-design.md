@@ -81,7 +81,7 @@ auth · channels · events · orchestrator · platform-mcp · integrations · bi
 | 2 | vm-manager (Go) + agent image (Hermes + Bridge) |
 | 3 | Telegram end to end, Platform MCP (send_message, get_profile) |
 | 4 | Composio apps, approvals, user MCP servers, audit log |
-| 5 | Credits, plans, coupons, Dodo payments, LiteLLM keys, BYOK |
+| 5 | Credits, plans, coupons, Polar payments, LiteLLM keys, BYOK |
 | 6 | WhatsApp, media + voice, Jev routing |
 | 7 | Automations and reminders |
 | 8 | Backups, rate limits, logs/metrics/alerts, admin views, iMessage, load test |
@@ -100,7 +100,7 @@ All 8 phases are built, plus four later changes. Everything is tested with real 
 
 | Area | Built | Status |
 |---|---|---|
-| Backend (api + worker) | 9 modules, 26 tables, 56 REST operations, 21 job types | ✅ 204 tests |
+| Backend (api + worker) | 9 modules, 26 tables, 56 REST operations, 21 job types | ✅ 212 tests |
 | vm-manager | 15 gRPC calls, 5 background loops | ✅ Go tests, `-race` clean |
 | Agent image | Hermes + Claude Code + our Python Bridge | ✅ 54 Bridge tests (fakes) |
 | Infra | docker-compose (3 networks), Caddy, Squid, LiteLLM config | ⚠️ never started |
@@ -115,6 +115,7 @@ All 8 phases are built, plus four later changes. Everything is tested with real 
 | **Waitlist** | — | Public join API with IP/abuse data + 50% off first month | Launch marketing |
 | **Platform network** | "no internet" | Outbound allowed, nothing exposed | The worker must call Telegram, Composio… |
 | **Spec** | — | 400/503 responses documented where the code returns them | Contract accuracy |
+| **Payments provider** | Hosted checkout + signed webhooks | **Polar** (merchant of record), same flow; webhook `/webhooks/polar` | The user's decision (2026-09-30) |
 
 ## B.3 Backend modules — what each does
 
@@ -126,7 +127,7 @@ All 8 phases are built, plus four later changes. Everything is tested with real 
 | **orchestrator** | sandbox_tokens, approvals, agent_settings | The turn flow, per-user lock, Jev routing, approvals, container tokens, which agent runs, Claude sign-in, the gRPC client |
 | **platform-mcp** | — | The `/mcp` server: 9 tools the agent calls |
 | **integrations** | connections, user_mcp_servers, byok_keys, composio_triggers | Composio (catalog, connect, actions, triggers), user MCP servers, own API keys |
-| **billing** | subscriptions, payments, credit_grants, credit_ledger, usage_periods, coupons, coupon_codes, coupon_redemptions, litellm_keys | Plans, credits, charging, LiteLLM keys and budgets, Dodo, coupons |
+| **billing** | subscriptions, payments, credit_grants, credit_ledger, usage_periods, coupons, coupon_codes, coupon_redemptions, litellm_keys | Plans, credits, charging, LiteLLM keys and budgets, Polar, coupons |
 | **automations** | automations | Reminders and automations, timers, triggers, auto-pause |
 | **admin** | audit_log | Audit log, alerts, metrics, health check, backups |
 
@@ -146,7 +147,7 @@ All 8 phases are built, plus four later changes. Everything is tested with real 
 
 **Credits.** Grants (each with its own 90-day expiry) + an append-only ledger (a database trigger blocks edits). Spent oldest-expiry first. Every 5 minutes and after each turn, `sync-usage` reads AI spend (LiteLLM) and awake time (vm-manager **GetUsage**) and writes **one** charge per user per period with a unique key, so re-runs never double-charge. At zero: automations pause and the LiteLLM budget closes.
 
-**Payments.** Dodo checkout (waitlist members get 50% off the first month automatically). Plans change only when Dodo's signed webhook arrives.
+**Payments.** Polar checkout (our user id is Polar's external customer id; waitlist members get 50% off the first month automatically through a Polar discount). Plans and credits change only when Polar's signed webhook arrives: `subscription.active` or a paid `order.paid` grants the period's credits once, `subscription.canceled` keeps the plan to the end of the period and `subscription.revoked` moves the user to Free, a top-up `order.paid` adds 800 credits, and a succeeded refund takes back its share (all of it, plus a flag, when Polar refunded to prevent a chargeback).
 
 **Automations.** Once (delayed job), repeating (BullMQ job scheduler with cron + timezone), or app event (Composio trigger → webhook). Postgres is the source of truth; timers are re-registered on every worker start.
 
@@ -183,7 +184,7 @@ Connecting a Claude plan: gRPC **StartClaudeLogin** runs the official `claude au
 | **Connect-ES + buf** | gRPC client + code generator | `pnpm proto:gen` generates `proto-gen/` from `vm.proto`; `src/modules/orchestrator/vm.ts` is the client |
 | **Composio SDK** (`@composio/core`) | App integrations | Connect links, run actions, triggers, webhook verification |
 | **TypeSafe Jev SDK** | Message router | simple / task / spam decision (falls back to "task") |
-| **Dodo Payments** + standardwebhooks | Payments | Checkout, subscriptions, top-ups, refunds, webhooks |
+| **Polar** (plain HTTP, `Polar-Version: 2026-10`) + standardwebhooks | Payments (merchant of record) | Checkout, subscriptions, top-ups, refunds, webhooks |
 | **LiteLLM** (HTTP) | AI gateway | Per-user virtual keys with budgets, spend tracking, model alias `agent-default`, speech-to-text |
 | **cron-parser** | Cron maths | Next run times, the 15-minute minimum |
 | **pino** | JSON logger | Structured logs with secrets redacted |
@@ -230,7 +231,7 @@ Connecting a Claude plan: gRPC **StartClaudeLogin** runs the official `claude au
 | From → To | How | Auth |
 |---|---|---|
 | Web app → api | REST (JSON) + SSE | Clerk session JWT (`Authorization: Bearer`, or `?token=` for SSE) |
-| Telegram/WhatsApp/Sendblue/Clerk/Dodo/Composio → api | HTTPS webhooks | Each provider's signature/secret, checked on the raw body |
+| Telegram/WhatsApp/Sendblue/Clerk/Polar/Composio → api | HTTPS webhooks | Each provider's signature/secret, checked on the raw body |
 | api → worker | BullMQ jobs in Redis | Same process group; job id = event id |
 | worker / api → vm-manager | **gRPC** | Metadata `x-internal-secret`, platform network only |
 | vm-manager → container | Docker API + HTTP to the Bridge | Per-container Bridge secret (`X-Bridge-Secret`) |
@@ -251,7 +252,7 @@ Connecting a Claude plan: gRPC **StartClaudeLogin** runs the official `claude au
 | inbound | process-message, web-message, process-approval, automation-turn, composio-trigger |
 | outbound | send-message, send-raw, message-status |
 | scheduled | run-automation |
-| system | clerk-event, onboard-user, delete-user, sync-allowlist, composio-event, dodo-event, sync-usage (5 min), expire-credits (hourly), expire-approvals (hourly), cleanup (daily), backup (nightly), health-check (5 min) |
+| system | clerk-event, onboard-user, delete-user, sync-allowlist, composio-event, polar-event, sync-usage (5 min), expire-credits (hourly), expire-approvals (hourly), cleanup (daily), backup (nightly), health-check (5 min) |
 
 Retries 5 s → 30 s → 2 min → 10 min (5 tries). Inbound jobs take the user's Redis lock (`lock:user:<id>`); a busy user's job is pushed back 2 s. Max-plan jobs get higher priority.
 
@@ -482,7 +483,7 @@ Nothing below has run yet because Docker isn't on the dev machine. Plan: one AWS
 | 5 | RAM per container | `docker stats --no-stream pa-sbx-<user>` | Number written in `vm-manager/README.md`; set `AWAKE_CAP` |
 | 6 | Real channels | Telegram bot (then WhatsApp test number) | Link, chat, buttons, voice |
 | 7 | Apps + approvals | Composio free tier, Gmail | Asks before sending, sends after ✅ |
-| 8 | Billing | Dodo test mode, LiteLLM + OpenRouter key | Credits go down correctly; purchase adds once; waitlist discount applied |
+| 8 | Billing | Polar sandbox, LiteLLM + OpenRouter key | Credits go down correctly; purchase adds once; waitlist discount applied |
 | 9 | Claude plan | A real Pro/Max account through Squid | Sign-in screen parsed, turns work, errors clear, 4 hosts enough |
 | 10 | Automations | A 2-minute reminder, restart the worker | Fires once, on time |
 | 11 | Backup + restore | `scripts/restore-test.sh` | Restore works |
@@ -492,7 +493,8 @@ Nothing below has run yet because Docker isn't on the dev machine. Plan: one AWS
 - Confirm with Anthropic: Commercial Terms, our UI offering only the Claude-plan sign-in, relaying the pasted code, telemetry off.
 - Own API keys are saved and exempt from AI charges, but calls still go through our LiteLLM key (routing through the user's key isn't wired).
 - `AI_ACCESS_MODE` defaults to `platform`; set `own_only` for "bring your own AI only".
-- Create the Dodo discount code for the waitlist offer (`DODO_WAITLIST_DISCOUNT_CODE`).
+- Set up Polar: the Pro, Max and $10 top-up products, the waitlist discount (50% off, duration once → `POLAR_WAITLIST_DISCOUNT_ID`), and the webhook endpoint `/webhooks/polar` on API version 2026-10.
+- Polar has no dispute webhook: a dispute Polar does not refund itself is handled by hand (admin credit adjustment + flag).
 - WhatsApp templates must be approved (one body variable; approval buttons in Approve, Reject order).
 - `composio_triggers` table exists but isn't used.
 
@@ -550,7 +552,7 @@ beckend/
 | `admin-board.ts` | Bull Board at `/admin/queues` (admins only) |
 | `presenters.ts`, `billing-presenters.ts` | Turn database rows into the JSON shapes the spec defines |
 | `types.ts` | Shared types (the Hono context, spec helpers) |
-| `routes/*.ts` | One file per area; each is a list of `route('operationId', …)` handlers that call module functions: `me`, `channels`, `chat` (messages, attachments, SSE), `approvals`, `apps` (+ MCP servers), `byok`, `automations`, `agent` (status, activity), `agent-settings` (runtime, Claude sign-in), `billing`, `credits`, `coupons`, `admin`, `waitlist`, `system` (healthz), `webhooks` (Clerk, Telegram, Composio), `webhooks-channels` (WhatsApp, Sendblue), `webhooks-dodo` |
+| `routes/*.ts` | One file per area; each is a list of `route('operationId', …)` handlers that call module functions: `me`, `channels`, `chat` (messages, attachments, SSE), `approvals`, `apps` (+ MCP servers), `byok`, `automations`, `agent` (status, activity), `agent-settings` (runtime, Claude sign-in), `billing`, `credits`, `coupons`, `admin`, `waitlist`, `system` (healthz), `webhooks` (Clerk, Telegram, Composio), `webhooks-channels` (WhatsApp, Sendblue), `webhooks-polar` |
 
 **Rule:** route files are thin. They validate (done by the router), call a module function, and shape the answer. All real logic is in `src/modules/`.
 
@@ -576,7 +578,7 @@ Each module folder has a `schema.ts` (its tables, Drizzle) and plain files of fu
 | **orchestrator** | `process-message.ts` **the inbound job** (link, approvals, coupons, media, then a turn) · `turn.ts` **runTurn** (credit check → routing → wake → deliver) · `routing.ts` Jev simple/task/spam · `vm.ts` **the gRPC client** · `sandbox.ts` ensureSandbox, token → user, agent status, Touch · `lifecycle.ts` onboard/delete jobs · `approvals.ts` approvals · `agent-settings.ts` Hermes vs Claude Code, AI access · `claude-login.ts` Claude sign-in calls · `lock.ts` per-user Redis lock |
 | **platform-mcp** | `server.ts` builds the MCP server per request, audits + Touches every call · `registry.ts` how tools are defined · `tools/core.ts` send_message, get_profile · `tools/apps.ts` list/run app actions, request_approval · `tools/automations.ts` reminder/automation tools |
 | **integrations** | `catalog.ts` the 25 apps + risky-action detection · `composio.ts` Composio SDK wrapper · `apps.ts` connections · `mcp-servers.ts` user MCP servers · `byok.ts` own API keys · `jobs.ts` allowlist sync + Composio connection events · `tables.ts`, `schema.ts` tables |
-| **billing** | `plans.ts` plans, prices, limits, credit maths, 90-day expiry · `credits.ts` **grants + ledger**, spending order, charges, expiry, reversals · `usage.ts` **sync-usage** (charging) · `litellm.ts` per-user keys + budgets · `enforce.ts` after credits change (budget, hooks) · `hooks.ts` "depleted"/"added" listeners · `dodo.ts` checkout + webhook check · `dodo-events.ts` payment/subscription events · `subscriptions.ts` subscription rows · `coupons.ts` coupons · `chat.ts` coupon codes sent in chat · `free-credits.ts` monthly free-credit cap + abuse stats · `onboard.ts` sign-up grant + key · `admin.ts` admin adjustments · `models.ts` model checks · `balance.ts` balance summary · `jobs.ts` billing jobs + schedules · `index.ts` what other modules may import |
+| **billing** | `plans.ts` plans, prices, limits, credit maths, 90-day expiry · `credits.ts` **grants + ledger**, spending order, charges, expiry, reversals · `usage.ts` **sync-usage** (charging) · `litellm.ts` per-user keys + budgets · `enforce.ts` after credits change (budget, hooks) · `hooks.ts` "depleted"/"added" listeners · `polar.ts` checkout, cancel + webhook check · `polar-events.ts` order/subscription/refund events · `subscriptions.ts` subscription rows · `coupons.ts` coupons · `chat.ts` coupon codes sent in chat · `free-credits.ts` monthly free-credit cap + abuse stats · `onboard.ts` sign-up grant + key · `admin.ts` admin adjustments · `models.ts` model checks · `balance.ts` balance summary · `jobs.ts` billing jobs + schedules · `index.ts` what other modules may import |
 | **automations** | `automations.ts` create/list/pause/delete, timers, limits · `jobs.ts` fire an automation as a turn, app-event triggers, auto-pause |
 | **admin** | `audit.ts` audit log · `alerts.ts` alert logs + webhook · `metrics.ts` Prometheus text · `health.ts` health-check job · `backup.ts` nightly backup |
 
@@ -703,11 +705,11 @@ vm-manager/
 | File(s) | Tests |
 |---|---|
 | `global-setup.ts`, `setup.ts`, `helpers.ts` | Start one real Postgres + Redis; a fresh database per test file; helpers like `createUser`, `call`, `expectContract` (checks responses against the spec) |
-| `fakes.ts`, `fakes-channels.ts`, `billing-fakes.ts`, `dodo-fakes.ts`, `billing-helpers.ts` | Fake vm-manager (its "agent" really calls `/mcp`), fake Telegram/WhatsApp/Sendblue/Composio/LiteLLM/Dodo/Jev |
+| `fakes.ts`, `fakes-channels.ts`, `billing-fakes.ts`, `polar-fakes.ts`, `billing-helpers.ts` | Fake vm-manager (its "agent" really calls `/mcp`), fake Telegram/WhatsApp/Sendblue/Composio/LiteLLM/Polar/Jev |
 | `phase1-*` | Skeleton: contract, auth, webhooks dedupe, per-user lock, retries |
 | `phase3-*` | Telegram end to end, web chat, SSE, cross-user isolation |
 | `phase4-*` | Apps, approvals, crafted cross-user requests, MCP servers |
-| `phase5-*` | Credits, usage charging, coupons (50 in parallel), Dodo, LiteLLM keys, jobs, billing API |
+| `phase5-*` | Credits, usage charging, coupons (50 in parallel), Polar, LiteLLM keys, jobs, billing API |
 | `phase6-*` | WhatsApp, Sendblue, media + voice, Jev routing, real HTTP clients vs a stand-in |
 | `phase7-*` | Automations across restart + Redis wipe |
 | `phase8-*` | Backups, metrics, rate limits, health check, schedules |

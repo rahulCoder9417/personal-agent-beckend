@@ -16,7 +16,12 @@ afterAll(() => {
   resetConfig();
 });
 
-const ipN = () => `198.51.100.${Math.floor(Math.random() * 250) + 1}`;
+// Unique per call, so rate-limit counters of different tests never share an IP.
+let ipSeq = Math.floor(Math.random() * 60000);
+const ipN = () => {
+  ipSeq += 1;
+  return `10.${(ipSeq >> 16) & 255}.${(ipSeq >> 8) & 255}.${ipSeq & 255}`;
+};
 const uniq = () => randomUUID().slice(0, 8);
 
 function join(body: unknown, ip: string, extra: Record<string, string> = {}) {

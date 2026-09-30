@@ -38,6 +38,7 @@ volumes:
 services:
   caddy:
     image: caddy:2
+    restart: unless-stopped
     ports: ['80:80', '443:443']
     environment:
       API_DOMAIN: ${API_DOMAIN:-localhost}
@@ -53,6 +54,7 @@ services:
 
   postgres:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-agent}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agent}
@@ -68,6 +70,7 @@ services:
 
   redis:
     image: redis:7
+    restart: unless-stopped
     command: ['redis-server', '--appendonly', 'yes', '--maxmemory-policy', 'noeviction']
     ports: ['127.0.0.1:6379:6379']
     volumes: [redisdata:/data]
@@ -78,6 +81,7 @@ services:
 
   litellm:
     image: ghcr.io/berriai/litellm:main-stable
+    restart: unless-stopped
     command: ['--config', '/app/config.yaml', '--port', '4000']
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/litellm
@@ -102,6 +106,7 @@ services:
 
   egress-proxy:
     image: ubuntu/squid:latest
+    restart: unless-stopped
     container_name: egress-proxy
     # Squid must be PID 1: the vm-manager applies allowlist changes with `docker kill -s HUP`, and
     # the image's bash entrypoint (PID 1) would silently drop the signal. The tail keeps the
@@ -138,6 +143,9 @@ services:
       PLATFORM_MCP_URL: ${PLATFORM_MCP_URL:-http://api:8080/mcp}
       AGENT_IMAGE: personal-agent/agent:dev
       SANDBOX_RUNTIME: ${SANDBOX_RUNTIME:-runsc}
+      # deploy.sh sets this to the agent image id: stopped containers are re-created from a new
+      # image on their next wake (keeping /data).
+      AGENT_IMAGE_VERSION: ${AGENT_IMAGE_VERSION:-dev}
       AWAKE_CAP: ${AWAKE_CAP:-15}
       SNAPSHOT_ROOT: /backups
     volumes:
@@ -162,6 +170,7 @@ services:
 
   api:
     build: { context: .., dockerfile: infra/Dockerfile }
+    restart: unless-stopped
     command: ['node', '--import', 'tsx', 'src/api/main.ts']
     env_file: [../.env]
     environment:
@@ -177,6 +186,7 @@ services:
 
   worker:
     build: { context: .., dockerfile: infra/Dockerfile }
+    restart: unless-stopped
     command: ['node', '--import', 'tsx', 'src/worker/main.ts']
     env_file: [../.env]
     volumes:

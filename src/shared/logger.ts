@@ -12,7 +12,10 @@ const redact = [
   '*.auth_secret',
   '*.authorization',
   '*.Authorization',
+  // The code from Anthropic's sign-in page (Claude plan) must never reach a log.
+  'code',
   '*.code',
+  '*.*.code',
   '*.litellmKey',
   'req.headers.authorization',
   'req.headers.cookie',
@@ -20,11 +23,22 @@ const redact = [
 
 let instance: pino.Logger | undefined;
 
-export function logger(): pino.Logger {
-  instance ??= pino({
-    level: config().LOG_LEVEL,
+/** The app logger config, optionally writing to `dest` (tests capture output this way). */
+export function buildLogger(dest?: pino.DestinationStream, level?: string): pino.Logger {
+  const options = {
+    level: level ?? config().LOG_LEVEL,
     redact: { paths: redact, censor: '[redacted]' },
     base: { service: process.env.SERVICE_NAME ?? 'backend' },
-  });
+  };
+  return dest ? pino(options, dest) : pino(options);
+}
+
+export function logger(): pino.Logger {
+  instance ??= buildLogger();
   return instance;
+}
+
+/** Tests: swap the logger (e.g. one that captures output). `undefined` restores the default. */
+export function setLogger(l: pino.Logger | undefined): void {
+  instance = l;
 }

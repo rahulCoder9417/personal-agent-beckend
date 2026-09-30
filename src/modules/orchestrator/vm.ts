@@ -7,6 +7,7 @@ import type { PlanId } from '../auth/users.ts';
 
 export type VmClient = Client<typeof VmManager>;
 export {
+  AgentRuntime,
   DeliverEventType,
   DeliverKind,
   Priority,

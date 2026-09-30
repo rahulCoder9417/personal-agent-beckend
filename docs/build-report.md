@@ -29,9 +29,9 @@ What the MVP had to do, how it was designed, what we built, the tech used, and h
 
 | | |
 |---|---|
-| **Build phases (HLD §9)** | All 8 coded and committed (0 foundations → 8 hardening), plus two later changes: a waitlist API, and the 2026-09-29 pricing update (Max $30, automations 1/5/50, 90-day credits, waitlist discount) |
+| **Build phases (HLD §9)** | All 8 coded and committed (0 foundations → 8 hardening), plus later changes: a waitlist API, the 2026-09-29 pricing update (Max $30, automations 1/5/50, 90-day credits, waitlist discount), and bring your own Claude plan (Claude Code runtime, 2026-09-30) |
 | **Backend tests** | 25 files, 204 tests, all passing: real Postgres + real Redis, fakes for outside services |
-| **vm-manager tests** | Go unit tests (with a fake Docker daemon) + 27 Bridge (Python) tests, all passing |
+| **vm-manager tests** | Go unit tests (fake Docker daemon, store on embedded Postgres, `-race` clean) + 54 Bridge (Python) tests with a fake Hermes and a fake `claude` CLI, all passing |
 | **Contract coverage** | Every operation in `openapi.yaml` is implemented (a test enforces it) |
 | **Run for real?** | **No.** Docker isn't installed on the dev machine, so no container, no real Hermes, no real Telegram/WhatsApp/Composio/LiteLLM/Dodo/Jev call has happened yet |
 | **Verdict** | **Code-complete, not end-to-end verified.** Section 12 lists the steps to verify it on a Docker machine |
@@ -574,6 +574,27 @@ We follow Anthropic's rules (code.claude.com/docs/en/legal-and-compliance). The 
 - After `WakeSandbox`, if the container runs another agent than the settings say, `SetAgentRuntime` is sent again. This heals a switch that failed while the vm-manager was down.
 - If a Claude Code turn ends in an error and `GetSandbox` reports `claude_connected=false` (e.g. "Connect your Claude plan again"), the connection is cleared and the agent goes back to Hermes for the next turn. Audit `claude_disconnected` (system), and the user gets a "reconnect at /settings/ai" note.
 
+**Inside the container (vm-manager + Bridge)**
+- **Install:** the agent image has the official Claude Code CLI from Anthropic's native installer, pinned to 2.1.283 and checked against Anthropic's GPG-signed release manifest. The binary is never modified. Its config lives on the user's volume (`CLAUDE_CONFIG_DIR=/data/claude`, `HOME=/data/home`), so the sign-in survives restarts and works with a read-only root filesystem. Auto-update, telemetry, error reports and claude.ai connectors are off.
+- **Sign-in:** the Bridge runs `claude auth login` in a pseudo-terminal and returns the authorize URL it prints (the code-paste one). In containers, Anthropic's page shows a code for the user to paste. The Bridge types that code into the waiting CLI, and the CLI saves its own credentials to `/data/claude/.credentials.json`. The Bridge never reads that file and never logs or stores the code (it also clears the terminal echo). Status comes from `claude auth status`; sign-out is `claude auth logout`. One pending sign-in per container, 10-minute expiry, one attempt per sign-in.
+  - `claude setup-token` was rejected on purpose: it prints a token that we would have to capture and store, which Anthropic's rules forbid.
+- **Only the user's sign-in is used:** the Bridge strips `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` and `CLAUDE_CODE_OAUTH_TOKEN` from the CLI's environment.
+- **A turn:** the Bridge reads the runtime from `platform.json` on every delivery, so switching needs no restart. In Claude Code mode it runs `claude -p --output-format stream-json` in `/data/workspace`:
+  - with a private MCP config: the Platform MCP (the container's bearer token) plus the user's own MCP servers
+  - with no interactive prompts (`dontAsk`, an allow list, `--permission-prompts none`); risky real-world actions still go through our `request_approval`
+  - one Claude session per chat (`--session-id`, then `--resume`), mapped in `/data/.platform/claude-sessions.json`
+  - the same NDJSON events, `delivery_id` dedupe, and final answer through `send_message` as the Hermes path
+- **Errors:** not signed in → "Connect your Claude plan again" and a plan usage limit or rate limit → "Your Claude plan's usage limit was reached…", both `platform_fault=false` (the user isn't refunded anything because we charged nothing for AI); a crash, timeout or overload → `platform_fault=true`.
+- **vm-manager:** `StartClaudeLogin` wakes the sandbox and treats a pending sign-in like "busy", so the idle reaper and capacity guard never stop it mid-sign-in. `runtime` and `claude_connected` are stored in the `sandboxes` table (migration `0002_agent_runtime`) and reported by every RPC. The code is shown as `[REDACTED]` in gRPC logs.
+- **Egress:** while the runtime is Claude Code (and while a sign-in or sign-out runs), the user's Squid file also allows `api.anthropic.com`, `claude.ai`, `claude.com` and `platform.claude.com` (from Claude Code's network docs; configurable with `CLAUDE_EGRESS_DOMAINS`). They're removed when the user switches back to Hermes.
+- **Hermes keeps running** next to Claude Code, so switching back is instant. The RAM cost of both hasn't been measured.
+
+**To confirm with Anthropic before launch** (their page says to contact sales with questions):
+1. We must accept Anthropic's Commercial Terms of Service to host Claude Code in our sandboxes.
+2. Our UI offers only the Claude-plan sign-in for Claude Code. The binary still has every auth method, but the rule says we may not "restrict" built-in methods, including the user's own API key.
+3. The paste-code travels from the web app through our backend to the CLI (never logged or stored). Confirm this counts as "sign-in through Anthropic's own flow" and not intermediating credentials.
+4. We turned off telemetry and error reports with environment variables (auth is untouched).
+
 **Billing:** nothing changes. Claude Code doesn't call LiteLLM, so there's no AI spend to charge. Awake time is still charged in credits, and a turn still needs a balance above 0. The user's LiteLLM key stays; it is only used for things like voice transcription, which are charged as before.
 
 ### 6.14 Automations and reminders
@@ -935,7 +956,7 @@ Commands: `pnpm lint && pnpm typecheck && pnpm test` · `pnpm openapi:lint` · i
 | 6 | Real outside services | Test accounts: Telegram bot, Meta test number, Sendblue, Composio, LiteLLM + OpenRouter, Dodo test mode, Jev, Clerk |
 | 7 | Backups restore | `scripts/restore-test.sh` on the server |
 | 8 | Load at the awake cap | `pnpm tsx scripts/load-test.ts` |
-| 9 | Claude plan sign-in with the real Claude Code | Connect a test Claude account from the web app, send a message, then disconnect |
+| 9 | Claude plan sign-in with the real Claude Code | Build the agent image (installer + signature check for 2.1.283), connect a test Pro/Max account from the web app through the Squid proxy, send a message, then disconnect. Check the real `auth login` screen, the stream-json shapes and error texts, whether the 4 Anthropic hosts are enough, and RAM with Hermes + Claude Code |
 
 Most likely to break on the first real run:
 - Hermes config keys and its run API
@@ -943,6 +964,7 @@ Most likely to break on the first real run:
 - Dodo payload field names
 - LiteLLM's key `aliases` and `/spend/logs` filter
 - WhatsApp template setup (one body variable; approval template buttons in Approve, Reject order)
+- The Claude Code sign-in screen parsing in the pseudo-terminal, and the exact CLI flags of the pinned version
 
 ---
 

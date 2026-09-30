@@ -30,7 +30,7 @@ What the MVP had to do, how it was designed, what we built, the tech used, and h
 | | |
 |---|---|
 | **Build phases (HLD §9)** | All 8 coded and committed (0 foundations → 8 hardening), plus two later changes: a waitlist API, and the 2026-09-29 pricing update (Max $30, automations 1/5/50, 90-day credits, waitlist discount) |
-| **Backend tests** | 24 files, 188 tests, all passing: real Postgres + real Redis, fakes for outside services |
+| **Backend tests** | 25 files, 204 tests, all passing: real Postgres + real Redis, fakes for outside services |
 | **vm-manager tests** | Go unit tests (with a fake Docker daemon) + 27 Bridge (Python) tests, all passing |
 | **Contract coverage** | Every operation in `openapi.yaml` is implemented (a test enforces it) |
 | **Run for real?** | **No.** Docker isn't installed on the dev machine, so no container, no real Hermes, no real Telegram/WhatsApp/Composio/LiteLLM/Dodo/Jev call has happened yet |
@@ -56,7 +56,7 @@ This is what HLD sections 0, 5 and 7 ask the product to do.
 | F8 | **Plans** (updated 2026-09-29 to match the pricing page) | Free $0 (100 sign-up credits, 10 apps, 1 automation), Pro $12 (1,500/month, 25 apps, 5 automations, top-ups), Max $30 (4,500/month, 25 apps + own MCP servers, 50 automations, priority when things get busy). **Every credit lasts 90 days from its grant**, whatever the source; unused monthly credits carry over. Model tiers are no longer advertised (for the MVP, AI comes from the user's own key); the model limits stay in code for later |
 | F9 | **Payments** | Dodo checkout for plans and top-ups ($10 = 800 credits); webhooks decide plan changes; refunds and chargebacks; waitlist members get 50% off their first month of Pro or Max |
 | F10 | **Coupon codes** | Admin-created free credits with strict anti-abuse rules (HLD 7.7) |
-| F11 | **Bring your own key** | The user's own AI key, encrypted; AI then isn't charged in credits |
+| F11 | **Bring your own AI** | The user's own AI key (encrypted), or their own Claude plan through Claude Code; AI then isn't charged in credits |
 | F12 | **Smart routing** | Jev decides simple (cheap-model reply, no container) / task (wake the agent) / spam |
 | F13 | **Media** | Voice, images and documents; voice is turned into text |
 | F14 | **Web app API** | Profile, channels, chat history + live updates, approvals, apps, MCP servers, automations, billing, credits, usage, coupons, activity log |
@@ -255,10 +255,10 @@ Status: ✅ built + tested (fakes for outside services) · ⚠️ built, needs a
 | F8 Plans | Free $0 / Pro $12 / Max $30 with limits on apps (10/25/25), automations (1/5/50), own MCP (Max), top-ups (paid), queue priority; 90-day credits; model limits kept in code | ✅ |
 | F9 Payments | Dodo checkout + 11 webhook event types, exactly once; waitlist discount code applied automatically | ✅ / ⚠️ real Dodo |
 | F10 Coupons | Every 7.7 rule, incl. 50 parallel redemptions on real Postgres | ✅ 🔁 |
-| F11 BYOK | Encrypted keys, test-called before saving; AI not charged | ✅ 🔁 |
+| F11 BYOK | Encrypted keys, test-called before saving; AI not charged. Claude plan: sign-in in the container, runtime switch, `own_only` mode | ✅ 🔁 / ⚠️ real Claude Code |
 | F12 Jev routing | Real SDK; fallback to "task" on any doubt or failure | ✅ / ⚠️ real Jev |
 | F13 Media | Download per channel, voice → text via LiteLLM | ✅ / ⚠️ |
-| F14 Web API | All 51 operations in the spec | ✅ |
+| F14 Web API | All 56 operations in the spec | ✅ |
 | F15 Admin | Coupons, credit adjustments, free-credit stats + abuse flags, Bull Board, waitlist admin | ✅ |
 | N1 Isolation | gVisor spec, limits, read-only, sandbox network, Squid allowlist | ⚠️ (no disk quota by default 🔁) |
 | N2 No impersonation | `/mcp` maps sha256(token) → user; tools never read a user id | ✅ |
@@ -533,11 +533,48 @@ The 9 tools are listed in §8.3.
 - **Disable** a campaign instantly (`PATCH`), optionally revoking unspent credits.
 - **Admin stats** (`/v1/admin/stats/free-credits`): sign-up and coupon credits this month, the cap, and abuse flags (3 or more accounts redeeming from one IP).
 
-### 6.13 Bring your own key
+### 6.13 Bring your own AI (API key or Claude plan)
 
+**Own API key**
 - `PUT /v1/byok/{anthropic|openai|openrouter}` test-calls the key first; a bad key gets a `400`. It's then saved AES-GCM encrypted, and only `last4` is ever shown.
 - While a user has a key, their AI usage isn't charged in credits; awake time still is.
 - Sending their LiteLLM traffic through their own key isn't wired yet (§11).
+
+**Own Claude plan (Claude Code)**
+
+We follow Anthropic's rules (code.claude.com/docs/en/legal-and-compliance). The sign-in happens in the unmodified Claude Code inside the user's container, on Anthropic's own page. **We never collect, store or log Claude credentials or tokens.** Claude Code keeps its own credentials in `/data`.
+
+1. `POST /v1/agent/claude/login`: at most 10 per hour per user. `ensureSandbox`, then gRPC `StartClaudeLogin` (it wakes the container). Returns `201 { loginId, authorizeUrl, expiresAt }`. Server full or vm-manager down → `503`, try again.
+2. The user opens `authorizeUrl` (Anthropic's page), signs in and copies the code Anthropic shows.
+3. `POST /v1/agent/claude/login/{loginId}/complete { code }`: the code goes straight to `CompleteClaudeLogin`. It is not logged (the logger redacts `code`), not stored, not audited and not put in an event.
+   - wrong or expired code → `400` with the vm-manager's message
+   - unknown login (or another user's) → `404`
+4. Success → `agent_settings.claude_connected_at` is set, runtime becomes `claude_code`, `SetAgentRuntime` is sent, audit `claude_connected`. Returns the settings.
+
+- `PATCH /v1/agent/settings { runtime }` switches between Hermes and Claude Code. Claude Code without a connected plan → `409`.
+- `DELETE /v1/agent/claude` → `ClaudeLogout` (removes Claude Code's credentials), clears the connection, back to Hermes, audit `claude_disconnected`. No container → still `204`.
+- New containers are created with the runtime from the settings (`CreateSandbox.runtime`).
+
+**Who runs and who pays** (`orchestrator/agent-settings.ts`, `decideAccess`), first match wins:
+
+| User has | Runs (`effectiveRuntime`) | Pays for AI (`aiAccess`) |
+|---|---|---|
+| a connected Claude plan and chose Claude Code | Claude Code | `claude_plan` |
+| an own API key | Hermes | `own_key` |
+| nothing, `AI_ACCESS_MODE=platform` | Hermes | `platform` (credits) |
+| a connected plan but chose Hermes, no key, `own_only` | Claude Code (the plan is the only AI source) | `claude_plan` |
+| nothing, `AI_ACCESS_MODE=own_only` | nothing (`null`) | `none` |
+
+`AI_ACCESS_MODE` is `platform` by default (today's behaviour). `own_only` is the MVP mode: the user must bring their own AI.
+
+**In a turn** (through the `route` turn hook in `wiring.ts`, plus two small steps in `turn.ts`):
+- `aiAccess: none` → the reply "Connect your own AI first: add an API key or connect your Claude plan at `<WEB_APP_URL>/settings/ai`". No container is woken. The credit check runs before this, so at zero credits the user gets "out of credits" instead.
+- Web: `POST /v1/messages` keeps its contract (`202`, or `402` at zero credits). The "connect your AI" reply comes back over SSE like any agent reply.
+- Claude plan users skip Jev: their plan answers everything, so there are no platform-model quick replies.
+- After `WakeSandbox`, if the container runs another agent than the settings say, `SetAgentRuntime` is sent again. This heals a switch that failed while the vm-manager was down.
+- If a Claude Code turn ends in an error and `GetSandbox` reports `claude_connected=false` (e.g. "Connect your Claude plan again"), the connection is cleared and the agent goes back to Hermes for the next turn. Audit `claude_disconnected` (system), and the user gets a "reconnect at /settings/ai" note.
+
+**Billing:** nothing changes. Claude Code doesn't call LiteLLM, so there's no AI spend to charge. Awake time is still charged in credits, and a turn still needs a balance above 0. The user's LiteLLM key stays; it is only used for things like voice transcription, which are charged as before.
 
 ### 6.14 Automations and reminders
 
@@ -653,7 +690,7 @@ The per-item checklist (HLD 10.2) is in `docs/security-checklist.md`.
 
 ## 7. Data model
 
-### 7.1 Backend database (25 tables, 7 migrations)
+### 7.1 Backend database (26 tables, 8 migrations)
 
 | Module | Table | Purpose / key columns |
 |---|---|---|
@@ -666,6 +703,7 @@ The per-item checklist (HLD 10.2) is in `docs/security-checklist.md`.
 | channels | `messages` | user_id, channel, direction, text, media_ref, status, event_id, approval_id, client_message_id (unique per user), external_id, session_key |
 | channels | `attachments` | user_id, name, mime_type, size_bytes, path |
 | orchestrator | `sandbox_tokens` | user_id → mcp_token_hash (unique) |
+| orchestrator | `agent_settings` | user_id (PK), runtime (hermes/claude_code, default hermes), claude_connected_at (null = not connected), updated_at. No Claude credential is ever stored |
 | orchestrator | `approvals` | user_id, summary, app, action, arguments, status, session_key, expires_at, decided_at/via, used_at |
 | integrations | `connections` | user_id, app, composio_account_id (unique), status, account_label |
 | integrations | `user_mcp_servers` | user_id, name, url, domain, auth_header_name, auth_secret (encrypted), enabled |
@@ -683,7 +721,7 @@ The per-item checklist (HLD 10.2) is in `docs/security-checklist.md`.
 | billing | `coupon_redemptions` | coupon_id + user_id (**unique**), ip, grant_id |
 | admin | `audit_log` | user_id, actor (user/agent/admin/system), action, summary, details, credits_charged |
 
-Migrations: `0000_phase1_core`, `0001_phase3_chat`, `0002_phase4_apps_approvals`, `0003_phase7_automations`, `0004_phase5_billing`, `0005_waitlist`, `0006_pricing_90day_credits_waitlist_offer` (coupon expiry default 90, `waitlist_entries.offer_used_at`).
+Migrations: `0000_phase1_core`, `0001_phase3_chat`, `0002_phase4_apps_approvals`, `0003_phase7_automations`, `0004_phase5_billing`, `0005_waitlist`, `0006_pricing_90day_credits_waitlist_offer` (coupon expiry default 90, `waitlist_entries.offer_used_at`), `0007_agent_runtime` (`agent_settings`).
 
 ### 7.2 vm-manager database
 
@@ -696,7 +734,7 @@ Migrations: `0000_phase1_core`, `0001_phase3_chat`, `0002_phase4_apps_approvals`
 
 ## 8. Interfaces
 
-### 8.1 REST endpoints (all 51 operations in `openapi.yaml`)
+### 8.1 REST endpoints (all 56 operations in `openapi.yaml`)
 
 Auth: **public** = no token · **user** = Clerk session · **admin** = Clerk session + admin role.
 
@@ -728,6 +766,11 @@ Auth: **public** = no token · **user** = Clerk session · **admin** = Clerk ses
 | automations | `PATCH /v1/automations/{automationId}` | user | Pause or resume |
 | automations | `DELETE /v1/automations/{automationId}` | user | Delete (timer or trigger too) |
 | agent | `GET /v1/agent/status` | user | Container state |
+| agent | `GET /v1/agent/settings` | user | Which agent runs (`runtime`, `effectiveRuntime`), what pays (`aiAccess`), Claude plan status, own-key providers |
+| agent | `PATCH /v1/agent/settings` | user | Choose Hermes or Claude Code (`409` without a connected Claude plan) |
+| agent | `POST /v1/agent/claude/login` | user | Start the Claude Code sign-in in the container; returns Anthropic's URL (10/hour, `503` if unavailable) |
+| agent | `POST /v1/agent/claude/login/{loginId}/complete` | user | Hand over the code from Anthropic's page (`400` wrong/expired, `404` unknown) |
+| agent | `DELETE /v1/agent/claude` | user | Sign Claude Code out; back to Hermes |
 | billing | `GET /v1/billing/plans` | public | Plans and top-up packs |
 | billing | `GET /v1/billing/subscription` | user | Current subscription |
 | billing | `POST /v1/billing/checkout` | user | Dodo checkout for a plan or top-up |
@@ -791,6 +834,10 @@ SSE event types on `/v1/stream`: `message.created`, `message.status`, `approval.
 | GetUsage | unary | Awake / browser seconds per user in a window |
 | SetEgressAllowlist | unary | Domains + the user's MCP servers |
 | SnapshotVolume | unary | Archive `/data` for backup |
+| SetAgentRuntime | unary | Hermes or Claude Code, applied on the next delivery |
+| StartClaudeLogin | unary | Wake + start the Claude Code sign-in; returns Anthropic's authorize URL |
+| CompleteClaudeLogin | unary | Pass the user's code to the waiting sign-in (never stored); `connected` + a safe message |
+| ClaudeLogout | unary | Remove Claude Code's credentials from `/data` |
 
 ### 8.5 Bridge HTTP (vm-manager → container, port 8765, header `X-Bridge-Secret`)
 
@@ -815,6 +862,7 @@ All settings come from env vars, validated with Zod at startup (`src/shared/conf
 | LiteLLM | `LITELLM_URL`, `LITELLM_MASTER_KEY`, `LITELLM_CHEAP_MODEL`, `LITELLM_PAID_MODELS`, `LITELLM_AGENT_MODEL`, `LITELLM_PREMIUM_MODEL`, `STT_MODEL` |
 | Channels | `TELEGRAM_*`, `WHATSAPP_*` (incl. template names), `SENDBLUE_*`, `MEDIA_MAX_BYTES`, `ATTACHMENTS_DIR` |
 | Apps / routing | `COMPOSIO_API_KEY`, `COMPOSIO_WEBHOOK_SECRET`, `COMPOSIO_AUTH_CONFIGS` (JSON slug → auth config id), `JEV_URL`, `JEV_API_KEY`, `JEV_MODEL`, `JEV_TIMEOUT_MS` |
+| AI access | `AI_ACCESS_MODE` (`platform` default: Hermes on credits when the user brings nothing · `own_only`: the user must add a key or connect their Claude plan) |
 | Payments | `DODO_API_KEY`, `DODO_WEBHOOK_SECRET`, `DODO_API_URL`, `DODO_PRODUCT_PRO/MAX/TOPUP_10`, `DODO_WAITLIST_DISCOUNT_CODE`, `FREE_CREDITS_MONTHLY_CAP` |
 | Ops | `BACKUP_DIR`, `BACKUP_VOLUMES_DIR`, `BACKUP_UPLOAD_CMD`, `BACKUP_KEEP_DAYS`, `METRICS_TOKEN`, `ALERT_WEBHOOK_URL`, `RATE_LIMIT_PER_IP_PER_MIN` |
 
@@ -832,7 +880,7 @@ vm-manager variables (see its `.env.example`): `DATABASE_URL`, `VM_INTERNAL_SECR
 | Outside services | Swappable clients: `setVmClient` (a fake vm-manager whose "agent" calls the real `/mcp` with its token), `setTelegramApi`, `setWhatsappApi`, `setSendblueApi`, `setComposioApi`, `setLiteLLMClient`, `setDodoClient`, `setJevClient`, `setChatCompleter`, `setTranscriber`, `setUrlDownloader`, `setByokVerifier`, `setCommandRunner` |
 | HTTP clients | `phase6-http-clients.test.ts` runs the real HTTP clients against a local stand-in server |
 | Concurrency | 50 parallel coupon redemptions on real Postgres; per-user lock overlap test; parallel sync-usage |
-| Files | `phase1-*` (skeleton), `phase3-*` (Telegram, web), `phase4-*` (approvals, apps), `phase5-*` (credits, usage, coupons, Dodo, LiteLLM, jobs, API), `phase6-*` (WhatsApp, Sendblue, media, routing, clients), `phase7-*` (automations), `phase8-*` (hardening), `integration-billing`, `waitlist`, `waitlist-offer` |
+| Files | `phase1-*` (skeleton), `phase3-*` (Telegram, web), `phase4-*` (approvals, apps), `phase5-*` (credits, usage, coupons, Dodo, LiteLLM, jobs, API), `phase6-*` (WhatsApp, Sendblue, media, routing, clients), `phase7-*` (automations), `phase8-*` (hardening), `integration-billing`, `waitlist`, `waitlist-offer`, `claude-plan` (bring your own Claude plan) |
 | vm-manager | Unit tests with a fake Docker daemon and a fake clock; the store on embedded Postgres; the Bridge with a fake Hermes; `-tags=integration` tests for real Docker (not run yet) |
 
 Commands: `pnpm lint && pnpm typecheck && pnpm test` · `pnpm openapi:lint` · in `vm-manager/`: `go vet ./... && go test ./...`, Bridge: `python3 -m unittest discover -s tests -t .` (in `agent-image/`).
@@ -853,6 +901,7 @@ Commands: `pnpm lint && pnpm typecheck && pnpm test` · `pnpm openapi:lint` · i
 - **Overruns** sit on one hidden grant per user and are recovered from the next grant.
 - **LiteLLM budget** = spend so far + balance ÷ 250, because LiteLLM compares `max_budget` with the key's total spend.
 - **BYOK:** any own key means no AI charges (we can't tell which calls used it). Routing their traffic through their own key in LiteLLM is **not wired yet**.
+- **Bring your own Claude plan** (added on request, not in the HLD, §6.13): with `own_only`, a connected plan runs Claude Code even if Hermes was chosen, because it's the only AI source; Claude plan users skip Jev; a lost Claude sign-in falls back to Hermes after the failed turn. `DELETE /v1/agent/claude` answers `503` if the vm-manager is down (not in the spec yet).
 - **Chargebacks** (`dispute.opened`) take back purchased credits and flag the user; the plan isn't changed.
 - **Monthly grants on renewal** are handled inside `dodo-event`; there's no separate `grant-monthly-credits` job.
 - **Approvals** are single use, expire after 24 h, and must match the exact action and arguments.
@@ -886,6 +935,7 @@ Commands: `pnpm lint && pnpm typecheck && pnpm test` · `pnpm openapi:lint` · i
 | 6 | Real outside services | Test accounts: Telegram bot, Meta test number, Sendblue, Composio, LiteLLM + OpenRouter, Dodo test mode, Jev, Clerk |
 | 7 | Backups restore | `scripts/restore-test.sh` on the server |
 | 8 | Load at the awake cap | `pnpm tsx scripts/load-test.ts` |
+| 9 | Claude plan sign-in with the real Claude Code | Connect a test Claude account from the web app, send a message, then disconnect |
 
 Most likely to break on the first real run:
 - Hermes config keys and its run API
@@ -907,7 +957,7 @@ beckend/
     auth/                     users, sessions, link codes, channel links, waitlist
     events/                   intake, queues, cleanup
     channels/                 adapters (telegram, whatsapp, sendblue, web), messages, outbound, SSE, media, files
-    orchestrator/             turn flow, process-message, Jev routing, approvals, sandbox tokens, lifecycle, gRPC client, lock
+    orchestrator/             turn flow, process-message, Jev routing, approvals, sandbox tokens, lifecycle, gRPC client, lock, agent settings + Claude sign-in
     platform-mcp/             MCP server + tools (core, apps, automations)
     integrations/             Composio catalog/client/connections, user MCP servers, BYOK
     billing/                  plans, credits/ledger, usage, LiteLLM, Dodo, coupons, jobs

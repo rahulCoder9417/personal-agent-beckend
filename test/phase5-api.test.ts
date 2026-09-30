@@ -43,7 +43,7 @@ describe('contract: routes', () => {
       'adminUpdateCoupon',
       'adminAdjustCredits',
       'adminFreeCreditStats',
-      'webhookDodo',
+      'webhookPolar',
       'listByokKeys',
       'setByokKey',
       'deleteByokKey',
@@ -438,12 +438,12 @@ describe('contract: bring your own key', () => {
 describe('contract: Dodo webhook', () => {
   it('rejects a bad signature without saving anything', async () => {
     const signed = signDodo({ type: 'payment.succeeded', data: {} });
-    const res = await call('/webhooks/dodo', {
+    const res = await call('/webhooks/polar', {
       method: 'POST',
       body: signed.body,
       headers: { ...signed.headers, 'webhook-signature': 'v1,AAAA' },
     });
-    await expectContract('webhookDodo', res, 401);
+    await expectContract('webhookPolar', res, 401);
     expect(
       await db().select().from(events).where(eq(events.externalId, signed.headers['webhook-id'])),
     ).toHaveLength(0);
@@ -466,8 +466,8 @@ describe('contract: Dodo webhook', () => {
     });
     for (let i = 0; i < 2; i++) {
       await expectContract(
-        'webhookDodo',
-        await call('/webhooks/dodo', {
+        'webhookPolar',
+        await call('/webhooks/polar', {
           method: 'POST',
           body: signed.body,
           headers: signed.headers,

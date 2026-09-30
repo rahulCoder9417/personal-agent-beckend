@@ -125,7 +125,7 @@ describe('Dodo events (HLD 7.6)', () => {
     expect(topups[0]!.expiresAt!.getTime()).toBeLessThanOrEqual(Date.now() + 90 * DAY);
     expect(await getBalance(u.id)).toBe(800);
     expect(llm.remainingBudget(u.id)).toBeCloseTo(800 / 250, 6);
-    const rows = await db().select().from(payments).where(eq(payments.dodoPaymentId, paymentId));
+    const rows = await db().select().from(payments).where(eq(payments.polarOrderId, paymentId));
     expect(rows).toHaveLength(1);
   });
 
@@ -196,7 +196,7 @@ describe('Dodo events (HLD 7.6)', () => {
     await db()
       .update(subscriptions)
       .set({ periodEnd: past.end })
-      .where(eq(subscriptions.dodoSubscriptionId, subId));
+      .where(eq(subscriptions.polarSubscriptionId, subId));
     await deliver(
       subscriptionEvent('subscription.expired', {
         userId: u.id,
@@ -254,7 +254,7 @@ describe('Dodo events (HLD 7.6)', () => {
     const [payment] = await db()
       .select()
       .from(payments)
-      .where(eq(payments.dodoPaymentId, paymentId));
+      .where(eq(payments.polarOrderId, paymentId));
     expect(payment).toMatchObject({ kind: 'plan', credits: 1500, amountCents: 1200 });
     expect(await getBalance(u.id)).toBe(1500); // the payment itself grants nothing extra
     await deliver({

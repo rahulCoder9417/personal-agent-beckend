@@ -21,7 +21,7 @@ export const subscriptions = pgTable(
     id: text().primaryKey(),
     userId: text().notNull(),
     plan: text({ enum: PLAN_IDS }).notNull(),
-    dodoSubscriptionId: text().notNull().unique(),
+    polarSubscriptionId: text().notNull().unique(),
     status: text({ enum: ['active', 'cancel_at_period_end', 'past_due', 'cancelled'] }).notNull(),
     periodStart: ts(),
     periodEnd: ts(),
@@ -181,14 +181,14 @@ export const litellmKeys = pgTable('litellm_keys', {
   revokedAt: ts(),
 });
 
-/** Dodo payments we have seen (maps refunds and disputes back to a user and the credits bought). */
+/** Polar orders we have seen (maps refunds and disputes back to a user and the credits bought). */
 export const payments = pgTable(
   'payments',
   {
     id: text().primaryKey(),
     userId: text().notNull(),
-    dodoPaymentId: text().notNull().unique(),
-    dodoSubscriptionId: text(),
+    polarOrderId: text().notNull().unique(),
+    polarSubscriptionId: text(),
     kind: text({ enum: ['plan', 'topup'] }).notNull(),
     amountCents: integer().notNull(),
     /** Credits this payment bought (top-up credits, or the plan's monthly credits). */

@@ -53,7 +53,7 @@ export async function offboardBilling(userId: string): Promise<void> {
   const sub = await getRenewingSubscription(userId);
   if (sub) {
     try {
-      await dodo().cancelAtPeriodEnd(sub.dodoSubscriptionId);
+      await dodo().cancelAtPeriodEnd(sub.polarSubscriptionId);
     } catch (err) {
       logger().error({ userId, err: (err as Error).message }, 'could not cancel Dodo subscription');
       throw err;

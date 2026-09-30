@@ -31,6 +31,31 @@ Hosting and server setup for the system in `mvp-hld.md`. **Not needed for writin
 | egress-proxy | platform, sandbox | Allowlists written by the vm-manager |
 | user containers | sandbox | Created on demand by the vm-manager, not in the compose file |
 
+## Deploying (from GitHub `main`)
+
+The server runs git clones of `main`, never copied files. Layout under `/opt/textcrew`:
+
+| Path | What |
+|---|---|
+| `beckend/` | clone of `personal-agent-beckend` (`git@gh-beckend:…`); its `.env` holds the api/worker secrets (mode 600, gitignored) |
+| `vm-manager/` | clone of `personal-agent-vm-manager` (`git@gh-vmm:…`); must stay a sibling of `beckend/` (compose builds `../../vm-manager`) |
+| `compose.env` | compose variables: `POSTGRES_PASSWORD`, `LITELLM_MASTER_KEY`, `VM_INTERNAL_SECRET` (same as in `beckend/.env`), `API_DOMAIN`, `API_UPSTREAM=api:8080`, `AWAKE_CAP`, `BACKUP_HOST_DIR`, `SANDBOX_RUNTIME` |
+| `dc` | `docker compose --env-file compose.env -f beckend/infra/docker-compose.yml "$@"` |
+| `deploy.sh` | runs `beckend/infra/deploy/deploy.sh` |
+| `backups/` | `BACKUP_HOST_DIR` (owned by uid 1000, the api/worker user) |
+
+Each repo has its own read-only GitHub **deploy key** on the server (`~/.ssh/deploy_beckend`, `~/.ssh/deploy_vmm`; GitHub won't take one key on two repos), selected by the `gh-beckend` / `gh-vmm` host aliases in `~/.ssh/config`.
+
+**To deploy:** push to `main`, then on the server run `/opt/textcrew/deploy.sh`. It:
+
+1. `git fetch` + `git reset --hard origin/main` in both repos (untracked runtime files such as `.env` and the per-user Squid allowlists are kept);
+2. builds the images (unchanged layers are cached) and sets `AGENT_IMAGE_VERSION` to the agent image id, so stopped user containers are re-created from a new image on their next wake (their `/data` is kept);
+3. runs the migrations (`pnpm db:migrate` in a one-off api container);
+4. `docker compose --profile app up -d`, and force-recreates Caddy / LiteLLM / Squid + vm-manager when their bind-mounted config changed;
+5. checks `https://$API_DOMAIN/healthz` and that every service is running; exits non-zero otherwise.
+
+Other checks: `./dc --profile egress-test run --rm egress-test` (egress isolation).
+
 ## Sizing on 12 GB RAM
 
 - About **3 GB** for the OS + the services above.

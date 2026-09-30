@@ -1,10 +1,11 @@
 // Fake vm-manager + fake Telegram Bot API for end-to-end tests without Docker.
 import { randomBytes } from 'node:crypto';
+import { Code, ConnectError } from '@connectrpc/connect';
 import { setLiteLLMClient } from '../src/modules/billing/litellm.ts';
 import { sha256Hex } from '../src/shared/crypto.ts';
 import { setTelegramApi } from '../src/modules/channels/adapters/telegram.ts';
 import { setVmClient, type VmClient } from '../src/modules/orchestrator/vm.ts';
-import { DeliverEventType, SandboxState } from '../proto-gen/vm/v1/vm_pb.ts';
+import { AgentRuntime, DeliverEventType, SandboxState } from '../proto-gen/vm/v1/vm_pb.ts';
 import { testApp } from './helpers.ts';
 
 export interface Delivery {
@@ -69,29 +70,63 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
     behaviour ??
     (async (d, mcp) =>
       void (await mcp('send_message', { text: `echo: ${d.text}`, session_key: d.sessionKey })));
-  const state = { agent, wakeError: null as Error | null };
+  const state = {
+    agent,
+    wakeError: null as Error | null,
+    /** Next StartClaudeLogin / ClaudeLogout error (e.g. UNAVAILABLE), used once. */
+    claudeError: null as Error | null,
+    /** The next delivered turn ends with this ERROR instead of TURN_DONE (used once). */
+    turnError: null as { message: string; platformFault: boolean } | null,
+    /** Awake/browser seconds GetUsage reports per user. */
+    usage: new Map<string, { awakeSeconds: bigint; browserSeconds: bigint }>(),
+  };
+  // Agent runtime + the in-container Claude Code sign-in (the code Anthropic shows the user).
+  const runtimes = new Map<string, AgentRuntime>();
+  const claudeConnected = new Set<string>();
+  const runtimeCalls: Array<{ userId: string; runtime: AgentRuntime }> = [];
+  const logins = new Map<string, { userId: string; code: string }>();
+  const logouts: string[] = [];
+  let loginSeq = 0;
+  const sandboxView = (userId: string, s: SandboxState) => ({
+    userId,
+    state: s,
+    runtime: runtimes.get(userId) ?? AgentRuntime.UNSPECIFIED,
+    claudeConnected: claudeConnected.has(userId),
+  });
+  const takeClaudeError = () => {
+    const e = state.claudeError;
+    state.claudeError = null;
+    if (e) throw e;
+  };
 
   const fake = {
-    async createSandbox(req: { userId: string }) {
+    async createSandbox(req: { userId: string; runtime?: AgentRuntime }) {
       let token = tokens.get(req.userId);
       if (!token) {
         token = randomBytes(24).toString('hex');
         tokens.set(req.userId, token);
         created.push(req.userId);
+        runtimes.set(req.userId, req.runtime ?? AgentRuntime.UNSPECIFIED);
       }
       return {
-        sandbox: { userId: req.userId, state: SandboxState.STOPPED },
+        sandbox: sandboxView(req.userId, SandboxState.STOPPED),
         mcpTokenHash: sha256Hex(token),
       };
     },
     async wakeSandbox(req: { userId: string }) {
       if (state.wakeError) throw state.wakeError;
-      return { sandbox: { userId: req.userId, state: SandboxState.AWAKE }, wasStopped: true };
+      return { sandbox: sandboxView(req.userId, SandboxState.AWAKE), wasStopped: true };
     },
     async *deliver(req: Delivery) {
       deliveries.push({ ...req });
       yield { type: DeliverEventType.ACCEPTED, message: '', platformFault: false };
       const token = tokens.get(req.userId)!;
+      const failure = state.turnError;
+      state.turnError = null;
+      if (failure) {
+        yield { type: DeliverEventType.ERROR, ...failure };
+        return;
+      }
       await state.agent(req, (tool, args) => mcpCall(token, tool, args));
       yield { type: DeliverEventType.TURN_DONE, message: '', platformFault: false };
     },
@@ -101,8 +136,10 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
     },
     async getSandbox(req: { userId: string }) {
       return {
-        userId: req.userId,
-        state: tokens.has(req.userId) ? SandboxState.AWAKE : SandboxState.STOPPED,
+        ...sandboxView(
+          req.userId,
+          tokens.has(req.userId) ? SandboxState.AWAKE : SandboxState.STOPPED,
+        ),
         lastActiveAtUnixMs: BigInt(Date.now()),
       };
     },
@@ -118,13 +155,59 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
       allowlists.push(req);
       return {};
     },
-    async getUsage() {
-      return { usage: [] };
+    async getUsage(req: { userId: string }) {
+      const u = state.usage.get(req.userId);
+      return { usage: u ? [{ userId: req.userId, ...u }] : [] };
+    },
+    async setAgentRuntime(req: { userId: string; runtime: AgentRuntime }) {
+      runtimeCalls.push({ userId: req.userId, runtime: req.runtime });
+      if (!tokens.has(req.userId)) throw new ConnectError('sandbox not found', Code.NotFound);
+      runtimes.set(req.userId, req.runtime);
+      return { sandbox: sandboxView(req.userId, SandboxState.AWAKE) };
+    },
+    async startClaudeLogin(req: { userId: string }) {
+      takeClaudeError();
+      if (!tokens.has(req.userId)) throw new ConnectError('sandbox not found', Code.NotFound);
+      const loginId = `login_${++loginSeq}`;
+      logins.set(loginId, { userId: req.userId, code: `anthropic-code-${loginSeq}-secret` });
+      return {
+        loginId,
+        authorizeUrl: `https://claude.ai/oauth/authorize?code=true&state=${loginId}`,
+        expiresAtUnixMs: BigInt(Date.now() + 10 * 60_000),
+      };
+    },
+    async completeClaudeLogin(req: { userId: string; loginId: string; code: string }) {
+      const login = logins.get(req.loginId);
+      if (!login || login.userId !== req.userId)
+        throw new ConnectError('login not found', Code.NotFound);
+      if (req.code !== login.code)
+        return { connected: false, message: 'That code is wrong or expired. Start again.' };
+      logins.delete(req.loginId);
+      claudeConnected.add(req.userId);
+      return { connected: true, message: '' };
+    },
+    async claudeLogout(req: { userId: string }) {
+      takeClaudeError();
+      logouts.push(req.userId);
+      claudeConnected.delete(req.userId);
+      return {};
     },
   };
   setVmClient(fake as unknown as VmClient);
   installFakeLiteLLM();
-  return { tokens, deliveries, created, touches, allowlists, state };
+  return {
+    tokens,
+    deliveries,
+    created,
+    touches,
+    allowlists,
+    state,
+    runtimes,
+    claudeConnected,
+    runtimeCalls,
+    logins,
+    logouts,
+  };
 }
 
 export interface SentTelegram {

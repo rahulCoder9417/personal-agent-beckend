@@ -16,6 +16,7 @@ import { byokRoutes } from './routes/byok.ts';
 import { couponRoutes } from './routes/coupons.ts';
 import { creditRoutes } from './routes/credits.ts';
 import { agentRoutes } from './routes/agent.ts';
+import { agentSettingsRoutes } from './routes/agent-settings.ts';
 import { appRoutes } from './routes/apps.ts';
 import { approvalRoutes } from './routes/approvals.ts';
 import { automationRoutes } from './routes/automations.ts';
@@ -35,6 +36,7 @@ export const allRoutes: RouteDef[] = [
   ...channelRoutes,
   ...chatRoutes,
   ...agentRoutes,
+  ...agentSettingsRoutes,
   ...approvalRoutes,
   ...appRoutes,
   ...automationRoutes,

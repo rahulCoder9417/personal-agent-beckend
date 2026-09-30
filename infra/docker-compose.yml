@@ -26,6 +26,9 @@ networks:
     ipam:
       config:
         - subnet: 172.30.0.0/16
+          # Dynamic addresses (vm-manager, user containers) come from the upper half only, so
+          # the egress proxy's fixed 172.30.0.2 is never handed to a container that started first.
+          ip_range: 172.30.128.0/17
 
 volumes:
   pgdata: {}
@@ -123,6 +126,7 @@ services:
       LITELLM_BASE_URL: http://litellm:4000
       PLATFORM_MCP_URL: ${PLATFORM_MCP_URL:-http://api:8080/mcp}
       AGENT_IMAGE: personal-agent/agent:dev
+      SANDBOX_RUNTIME: ${SANDBOX_RUNTIME:-runsc}
       AWAKE_CAP: ${AWAKE_CAP:-15}
       SNAPSHOT_ROOT: /backups
     volumes:

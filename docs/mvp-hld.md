@@ -33,7 +33,7 @@
 |---|---|---|
 | **Web user** | Signs in with **Clerk** → the web app sends Clerk's session token on every request → the api checks it with Clerk's SDK | The user id |
 | **Chat user** (WhatsApp / Telegram / iMessage) | Their chat id must be **linked** to an account first (below) | The user id, looked up from `channel_links` |
-| **External service webhooks** (Meta, Telegram, Sendblue, Clerk, Dodo, Composio) | Each is **signed or carries our secret**; the api checks before reading anything | "This really came from Meta/Clerk/…" |
+| **External service webhooks** (Meta, Telegram, Sendblue, Clerk, Polar, Composio) | Each is **signed or carries our secret**; the api checks before reading anything | "This really came from Meta/Clerk/…" |
 | **A user's container** (Hermes calling the Platform MCP) | A **per-container token**, made by the vm-manager at creation and stored only as a hash. The api turns it into the user id | The user id, which the container **can't choose or fake** |
 | **Internal services** (backend → vm-manager over gRPC, vm-manager → Bridge) | A shared internal secret in gRPC metadata on the private network (mutual TLS later); a per-container Bridge secret | "This is our own service" |
 
@@ -160,7 +160,7 @@
 | **orchestrator** | Per-user lock, Jev routing, the wake → deliver flow |
 | **platform-mcp** | The MCP server the agents call |
 | **integrations** | Composio (connect, run actions, triggers), user MCP servers |
-| **billing** | Plans, subscriptions, credit grants, ledger, coupons, Dodo, LiteLLM keys and budgets |
+| **billing** | Plans, subscriptions, credit grants, ledger, coupons, Polar, LiteLLM keys and budgets |
 | **automations** | Automation rows and timers |
 | **admin** | Admin APIs, Bull Board, coupon creation |
 
@@ -177,7 +177,7 @@
 | vm-manager → Bridge (in container) | **HTTP (JSON)** on the sandbox network | Bridge is Python inside Hermes; kept simple; one secret per container |
 | Container → Platform MCP (api) | **MCP over streamable HTTP**, via the egress proxy | The standard way agents call tools |
 | Container → LiteLLM | **OpenAI-compatible HTTP**, via the egress proxy | What Hermes speaks |
-| Backend → Composio / Jev / LiteLLM admin / channel APIs / Dodo | Their **HTTP APIs / SDKs** | External |
+| Backend → Composio / Jev / LiteLLM admin / channel APIs / Polar | Their **HTTP APIs / SDKs** | External |
 
 **The gRPC contract** (`vm-manager/proto/vm/v1/vm.proto`) is the source of truth. The backend generates its TypeScript client from it with **buf** (Connect-ES or grpc-js). Its RPCs:
 
@@ -251,7 +251,7 @@ The web app lives in `user-frontend/` and is built from `openapi.yaml` + `ignore
 | Egress proxy | infra | Squid (or Smokescreen) | The only way out of containers |
 | Caddy | infra | – | HTTPS |
 
-**External services:** Clerk, Meta WhatsApp Cloud API, Telegram Bot API, Sendblue (iMessage, enabled last), Composio, OpenRouter (cheap models), Anthropic/OpenAI (paid plans), TypeSafe **Jev** (routing decisions), **Dodo Payments**, off-server backup storage.
+**External services:** Clerk, Meta WhatsApp Cloud API, Telegram Bot API, Sendblue (iMessage, enabled last), Composio, OpenRouter (cheap models), Anthropic/OpenAI (paid plans), TypeSafe **Jev** (routing decisions), **Polar** (payments, merchant of record), off-server backup storage.
 
 ---
 
@@ -275,7 +275,7 @@ The web app lives in `user-frontend/` and is built from `openapi.yaml` + `ignore
 
 ### 5.1 api
 
-- **Webhooks:** WhatsApp, Telegram, Sendblue, Clerk, Dodo, Composio. Each one: verify → save the event (unique key) → add a job → 200.
+- **Webhooks:** WhatsApp, Telegram, Sendblue, Clerk, Polar, Composio. Each one: verify → save the event (unique key) → add a job → 200.
 - **REST + SSE for the web app** (every endpoint, schema and error is in `openapi/openapi.yaml`): profile, link codes, channels, apps (Composio connect links), user MCP servers, approvals, chat history, **plans / checkout / credits balance / usage history / coupon redeem**, bring-your-own key, automations list.
 - **Platform MCP (`/mcp`)**, called with the container token:
 
@@ -303,7 +303,7 @@ Every call is audit-logged and triggers a vm-manager *Touch*.
 | send-outbound (outbound) | Send via the channel (24-hour rule → template) |
 | create-sandbox / delete-sandbox (system) | LiteLLM key create/revoke + vm-manager Create/Delete |
 | sync-usage (system, every 5 min) | LiteLLM spend + vm-manager *GetUsage* → **charges** (section 7.4) → enforce zero balance |
-| grant-monthly-credits (system) | On subscription renewal (from the Dodo webhook) → a new monthly grant |
+| grant-monthly-credits (system) | On subscription renewal (Polar's paid renewal order) → a new monthly grant |
 | expire-credits (system, hourly) | Expire grants past their end date |
 | cleanup (system, daily) | Old events and messages, used link codes |
 | backup (system, nightly) | Postgres dump + *SnapshotVolume* for every user → off-server |
@@ -371,7 +371,7 @@ _Updated 2026-09-29 to match the pricing page: Max $30, automations 1 / 5 / 50, 
 
 **Bring your own key:** the user's own API key (encrypted at rest). AI costs are then not charged in credits; only awake time and paid tools are. For the MVP, AI is expected to come from the user's own key; the platform model tiers stay in the code for later.
 
-**Waitlist offer:** waitlist members get **50% off their first month** of Pro ($6) or Max ($15), applied automatically at checkout (a Dodo discount code, once per waitlist entry, verified email only).
+**Waitlist offer:** waitlist members get **50% off their first month** of Pro ($6) or Max ($15), applied automatically at checkout (a Polar discount applied by id at checkout, once per waitlist entry, verified email only).
 
 ### 7.2 What a credit is and what costs credits
 
@@ -422,21 +422,22 @@ Credits are held as **grants**. Each grant has an amount, **what's left of it**,
 
 A small negative balance (one turn's overrun) is allowed and recovered from the next grant.
 
-### 7.6 Payments with Dodo
+### 7.6 Payments with Polar
 
-- **Checkout:** web → api creates a Dodo checkout session for the chosen plan or top-up (user id in the metadata) → Dodo's hosted page.
-- **Webhooks:**
+- **Checkout:** web → api creates a Polar checkout session for the chosen plan or top-up (user id as `external_customer_id` and in the metadata) → Polar's hosted page.
+- **Webhooks** (Polar event names):
 
 | Event | Action |
 |---|---|
-| Subscription activated | Set plan → grant the monthly credits → raise the budget |
-| Subscription renewed | New monthly grant (90 days); earlier monthly credits keep their own expiry |
-| Subscription cancelled / expired | At the end of the period → back to Free (credits already granted keep their 90-day expiry) |
-| Top-up payment succeeded | Top-up grant (800 credits per $10) |
-| Refund / chargeback | Negative grant; if a chargeback, flag the account |
+| `subscription.active` (or the first `order.paid`) | Set plan → grant the monthly credits → raise the budget |
+| `order.paid` for a renewal | New monthly grant (90 days); earlier monthly credits keep their own expiry |
+| `subscription.canceled` → `subscription.revoked` | Plan kept until the end of the period → back to Free (credits already granted keep their 90-day expiry) |
+| `order.paid` for a top-up | Top-up grant (800 credits per $10) |
+| `refund.created` / `refund.updated` (succeeded) | Negative grant for the refunded share; if Polar refunded to prevent a chargeback, take back all of it and flag the account |
 
-- **No double-crediting:** every payment and subscription event id is unique in `events`.
-- **Plan changes** take effect when Dodo's webhook arrives, never from the web app directly.
+- **No double-crediting:** every webhook id is unique in `events`, and every grant's idempotency key comes from Polar's ids (order, refund, subscription + period).
+- **Plan changes** take effect when Polar's webhook arrives, never from the web app directly.
+- **Disputes:** Polar has no dispute webhook. Polar refunds many disputed payments itself before they become chargebacks; those arrive as refunds and are handled above. A dispute Polar does not refund is handled by hand (admin credit adjustment + flag).
 
 ### 7.7 Coupon codes (free top-up credits)
 
@@ -492,7 +493,7 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 | integrations | user_mcp_servers | user_id, url, domain, auth_secret (encrypted), enabled |
 | integrations | byok_keys | user_id, provider, key (encrypted) |
 | automations | automations | id, user_id, kind (once/repeat/event), schedule/cron, timezone, trigger_ref, instruction, enabled, fail_count, next_run_at |
-| billing | subscriptions | user_id, plan, dodo_subscription_id, status, period_start, period_end |
+| billing | subscriptions | user_id, plan, polar_subscription_id, status, period_start, period_end |
 | billing | credit_grants | id, user_id, source, amount, remaining, expires_at, cheap_model_only, ref (payment/coupon id) |
 | billing | credit_ledger | id, user_id, grant_id, delta, reason (grant/charge/expire/refund/adjust), idempotency_key (unique), meta, created_at |
 | billing | usage_periods | user_id, period_start, period_end, ai_cost, awake_seconds, credits_charged |
@@ -583,7 +584,7 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
   - LiteLLM key per user with a budget
   - sync-usage + charging with spending order + idempotency
   - balance enforcement (before, during, at zero)
-  - Dodo checkout + webhooks (subscribe, renew, cancel, top-up, refund)
+  - Polar checkout + webhooks (subscribe, renew, cancel, top-up, refund)
   - monthly grants + expiry jobs
   - **coupons**: admin create, redeem with every rule in 7.7 (endpoints `/v1/coupons/redeem` and `/v1/admin/coupons*` as in the spec)
   - plan limits (apps, automations, models)
@@ -591,7 +592,7 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 - **Done when:**
   - usage lowers the balance correctly and re-running a sync doesn't double-charge
   - at 0 credits the agent stops and says so
-  - Dodo test-mode purchases add credits exactly once
+  - Polar sandbox purchases add credits exactly once
   - **coupon tests pass:** a second redemption by the same user fails, the (max+1)th redemption fails even with 50 parallel attempts, expired and disabled codes fail with the generic message, the rate limit kicks in, unverified users can't redeem, and coupon credits expire after 90 days and pay only for the cheap model
 
 ### Phase 6: WhatsApp, media, Jev
@@ -640,7 +641,7 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 | Composio down | The tool returns an error to the agent; the user is told |
 | vm-manager down | Wake/Deliver jobs retry with backoff; the rest keeps working |
 | Jev down | Treat every message as a task (no routing shortcut) |
-| Dodo webhook late | Credits are added when it arrives; the web app shows "processing" |
+| Polar webhook late | Credits are added when it arrives; the web app shows "processing" |
 | Redis lost | Rebuild jobs from `events`; re-register automations |
 
 ### 10.2 Security checklist

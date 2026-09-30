@@ -22,7 +22,7 @@ This repo holds the **backend**: one TypeScript codebase run as **two processes*
 
 ## Stack (don't swap without asking)
 
-Node 22 · TypeScript (strict) · Hono (api) · BullMQ + Redis (jobs) · Postgres + Drizzle (migrations in `migrations/`) · Zod · Clerk (auth) · MCP TypeScript SDK (Platform MCP at `/mcp`) · gRPC client generated with buf · Composio SDK · Jev SDK · LiteLLM (via HTTP) · Dodo Payments · Docker Compose for local dev (`infra/`).
+Node 22 · TypeScript (strict) · Hono (api) · BullMQ + Redis (jobs) · Postgres + Drizzle (migrations in `migrations/`) · Zod · Clerk (auth) · MCP TypeScript SDK (Platform MCP at `/mcp`) · gRPC client generated with buf · Composio SDK · Jev SDK · LiteLLM (via HTTP) · Polar (payments) · Docker Compose for local dev (`infra/`).
 
 ## Architecture rules (never break these)
 

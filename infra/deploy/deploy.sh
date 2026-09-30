@@ -17,10 +17,15 @@ main() {
   local root="${ROOT:-/opt/textcrew}"
   local branch="${DEPLOY_BRANCH:-main}"
   local be="$root/beckend" vmm="$root/vm-manager"
-  local compose=(docker compose --env-file "$root/compose.env" -f "$be/infra/docker-compose.yml" --profile app)
-  [ "$(id -u)" = 0 ] || compose=(sudo "${compose[@]}")
-  local docker=(docker)
-  [ "$(id -u)" = 0 ] || docker=(sudo docker)
+  # sudo only when this user can't reach Docker; AGENT_IMAGE_VERSION is passed explicitly
+  # because sudo drops the environment.
+  local sudo=()
+  docker info >/dev/null 2>&1 || sudo=(sudo)
+  local docker=("${sudo[@]}" docker)
+  compose() {
+    "${sudo[@]}" env AGENT_IMAGE_VERSION="${AGENT_IMAGE_VERSION:-dev}" docker compose \
+      --env-file "$root/compose.env" -f "$be/infra/docker-compose.yml" --profile app "$@"
+  }
 
   if [ "${1:-}" != "--no-pull" ]; then
     local old_be new_be
@@ -38,24 +43,24 @@ main() {
   fi
 
   echo "== build"
-  "${compose[@]}" build --quiet
+  compose build --quiet
   # User containers are re-created from a new agent image on their next wake (vm-manager rollout).
   AGENT_IMAGE_VERSION=$("${docker[@]}" image inspect personal-agent/agent:dev --format '{{.Id}}')
   export AGENT_IMAGE_VERSION
 
   echo "== migrations"
-  "${compose[@]}" up -d --wait postgres redis
-  "${compose[@]}" run --rm --no-deps api pnpm --silent db:migrate
+  compose up -d --wait postgres redis
+  compose run --rm --no-deps api pnpm --silent db:migrate
 
   echo "== up"
-  "${compose[@]}" up -d --remove-orphans
+  compose up -d --remove-orphans
   local svc=()
   case "${RECREATE:-}" in *infra/caddy*) svc+=(caddy) ;; esac
   case "${RECREATE:-}" in *infra/litellm*) svc+=(litellm) ;; esac
   case "${RECREATE:-}" in *squid.conf*) svc+=(egress-proxy vm-manager) ;; esac
   if [ ${#svc[@]} -gt 0 ]; then
     echo "config changed, recreating: ${svc[*]}"
-    "${compose[@]}" up -d --force-recreate --no-deps "${svc[@]}"
+    compose up -d --force-recreate --no-deps "${svc[@]}"
   fi
 
   echo "== health"
@@ -66,9 +71,9 @@ main() {
     if curl -fsS -m 5 "$url" >/dev/null 2>&1; then ok=1; break; fi
     sleep 2
   done
-  "${compose[@]}" ps -a --format 'table {{.Service}}\t{{.Status}}'
+  compose ps -a --format 'table {{.Service}}\t{{.Status}}'
   local down
-  down=$("${compose[@]}" ps -a --format '{{.Service}} {{.State}}' | awk '$1 != "agent-image" && $2 != "running" {print $1}')
+  down=$(compose ps -a --format '{{.Service}} {{.State}}' | awk '$1 != "agent-image" && $2 != "running" {print $1}')
   if [ "$ok" != 1 ] || [ -n "$down" ]; then
     echo "DEPLOY FAILED: health=$ok not running: ${down:-none}" >&2
     exit 1

@@ -8,3 +8,5 @@ dist
 *.log
 .worktrees
 infra/.backups
+infra/egress-proxy/allowlists/*.conf
+!infra/egress-proxy/allowlists/_empty.conf

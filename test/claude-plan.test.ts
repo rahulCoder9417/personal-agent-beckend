@@ -375,6 +375,14 @@ describe('switching the agent and disconnecting', () => {
       await call('/v1/agent/claude', { method: 'DELETE', token: fresh.token }),
       204,
     );
+    // vm-manager down → 503 (documented), the user can retry.
+    await connectClaude(fresh);
+    fake.state.claudeError = new ConnectError('vm-manager down', Code.Unavailable);
+    await expectContract(
+      'disconnectClaude',
+      await call('/v1/agent/claude', { method: 'DELETE', token: fresh.token }),
+      503,
+    );
   });
 
   it('a new container is created with the runtime from the settings', async () => {

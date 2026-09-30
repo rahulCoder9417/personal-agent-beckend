@@ -719,6 +719,11 @@ paths:
       responses:
         "204": { description: Disconnected }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "503":
+          description: The agent container is unavailable right now; retry
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   # ---------------------------------------------------------------- billing
   /v1/billing/plans:

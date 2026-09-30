@@ -4,6 +4,7 @@ import { db } from '../../shared/db/client.ts';
 import { sha256Hex } from '../../shared/crypto.ts';
 import { logger } from '../../shared/logger.ts';
 import { getActiveUser } from '../auth/users.ts';
+import { sandboxRuntime } from './agent-settings.ts';
 import { sandboxTokens } from './schema.ts';
 import { planPriority, SandboxState, vm } from './vm.ts';
 
@@ -48,6 +49,7 @@ export async function ensureSandbox(userId: string): Promise<void> {
     allowlist: await provider.allowlist(userId),
     mcpServers: await provider.mcpServers(userId),
     timezone: user.timezone,
+    runtime: await sandboxRuntime(userId),
   });
   await db()
     .insert(sandboxTokens)

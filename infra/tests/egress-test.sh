@@ -19,8 +19,9 @@ check "direct LiteLLM is blocked" blocked "$r"
 # 3. Through the proxy, a non-allowlisted domain is refused.
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -x "$PROXY" http://example.com/)
 check "proxy refuses non-allowlisted domain" 403 "$code"
-code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -x "$PROXY" https://example.com/ 2>/dev/null || echo 403)
-[ "$code" = "000" ] && code=403
+# A refused CONNECT has no HTTP response (http_code 000, curl exits non-zero): check the proxy's
+# answer to the CONNECT itself.
+code=$(curl -s -o /dev/null -w '%{http_connect}' --max-time 10 -x "$PROXY" https://example.com/ 2>/dev/null)
 check "proxy refuses non-allowlisted CONNECT" 403 "$code"
 
 # 4. Through the proxy, LiteLLM is reachable.

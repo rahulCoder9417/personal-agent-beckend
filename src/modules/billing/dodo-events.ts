@@ -18,7 +18,7 @@ import { PLANS, TOP_UPS, PLAN_IDS, creditExpiry, type PlanId } from './plans.ts'
 import { creditGrants, payments } from './schema.ts';
 import {
   endSubscription,
-  getSubscriptionByDodoId,
+  getSubscriptionByPolarId,
   upsertSubscriptionInTx,
   type SubscriptionStatus,
 } from './subscriptions.ts';
@@ -66,7 +66,7 @@ async function resolveUserId(d: Data): Promise<string | undefined> {
   if (fromMeta && (await getUser(fromMeta))) return fromMeta;
   const subId = str(d, 'subscription_id');
   if (subId) {
-    const sub = await getSubscriptionByDodoId(subId);
+    const sub = await getSubscriptionByPolarId(subId);
     if (sub) return sub.userId;
   }
   const paymentId = str(d, 'payment_id');
@@ -84,8 +84,8 @@ function planOf(d: Data): PlanId | undefined {
   return p && PLAN_IDS.includes(p) && p !== 'free' ? p : undefined;
 }
 
-async function getPayment(dodoPaymentId: string) {
-  const [row] = await db().select().from(payments).where(eq(payments.dodoPaymentId, dodoPaymentId));
+async function getPayment(polarOrderId: string) {
+  const [row] = await db().select().from(payments).where(eq(payments.polarOrderId, polarOrderId));
   return row;
 }
 
@@ -111,7 +111,7 @@ async function startPeriod(d: Data, event: DodoWebhook, kind: 'activated' | 'ren
     await upsertSubscriptionInTx(tx, {
       userId,
       plan,
-      dodoSubscriptionId: subId,
+      polarSubscriptionId: subId,
       status,
       periodStart,
       periodEnd,
@@ -157,7 +157,7 @@ async function planChanged(d: Data, event: DodoWebhook) {
     await upsertSubscriptionInTx(tx, {
       userId,
       plan,
-      dodoSubscriptionId: subId,
+      polarSubscriptionId: subId,
       status: d.cancel_at_next_billing_date ? 'cancel_at_period_end' : 'active',
       periodStart: date(d, 'previous_billing_date') ?? null,
       periodEnd: date(d, 'next_billing_date') ?? null,
@@ -170,14 +170,14 @@ async function planChanged(d: Data, event: DodoWebhook) {
 
 async function updated(d: Data, event: DodoWebhook) {
   const subId = str(d, 'subscription_id');
-  const sub = subId ? await getSubscriptionByDodoId(subId) : undefined;
+  const sub = subId ? await getSubscriptionByPolarId(subId) : undefined;
   if (!sub) return unresolved(event, { subId });
   if (str(d, 'status') !== 'active' || sub.endedAt) return IGNORED;
   await db().transaction((tx) =>
     upsertSubscriptionInTx(tx, {
       userId: sub.userId,
       plan: sub.plan,
-      dodoSubscriptionId: sub.dodoSubscriptionId,
+      polarSubscriptionId: sub.polarSubscriptionId,
       status: d.cancel_at_next_billing_date ? 'cancel_at_period_end' : 'active',
       periodStart: date(d, 'previous_billing_date') ?? sub.periodStart,
       periodEnd: date(d, 'next_billing_date') ?? sub.periodEnd,
@@ -188,14 +188,14 @@ async function updated(d: Data, event: DodoWebhook) {
 
 async function pastDue(d: Data, event: DodoWebhook) {
   const subId = str(d, 'subscription_id');
-  const sub = subId ? await getSubscriptionByDodoId(subId) : undefined;
+  const sub = subId ? await getSubscriptionByPolarId(subId) : undefined;
   if (!sub) return unresolved(event, { subId });
   if (sub.endedAt || sub.status === 'cancelled') return IGNORED;
   await db().transaction((tx) =>
     upsertSubscriptionInTx(tx, {
       userId: sub.userId,
       plan: sub.plan,
-      dodoSubscriptionId: sub.dodoSubscriptionId,
+      polarSubscriptionId: sub.polarSubscriptionId,
       status: 'past_due',
     }),
   );
@@ -206,7 +206,7 @@ async function pastDue(d: Data, event: DodoWebhook) {
 async function ended(d: Data, event: DodoWebhook) {
   const subId = str(d, 'subscription_id');
   const userId = await resolveUserId(d);
-  const existing = subId ? await getSubscriptionByDodoId(subId) : undefined;
+  const existing = subId ? await getSubscriptionByPolarId(subId) : undefined;
   if (!subId || !userId) return unresolved(event, { subId, userId });
   const plan = existing?.plan ?? planOf(d);
   if (!plan) return unresolved(event, { subId, plan });
@@ -215,7 +215,7 @@ async function ended(d: Data, event: DodoWebhook) {
     upsertSubscriptionInTx(tx, {
       userId,
       plan,
-      dodoSubscriptionId: subId,
+      polarSubscriptionId: subId,
       status: 'cancelled',
       periodEnd,
     }),
@@ -236,7 +236,7 @@ async function paymentSucceeded(d: Data, event: DodoWebhook) {
     .reduce((n, p) => n + (num(p, 'quantity') ?? 1), 0);
   const isTopUp = !subId && (packs > 0 || meta(d).kind === 'topup');
   const pack = TOP_UPS[0]!;
-  const sub = subId ? await getSubscriptionByDodoId(subId) : undefined;
+  const sub = subId ? await getSubscriptionByPolarId(subId) : undefined;
   const plan = sub?.plan ?? planOf(d);
   const credits = isTopUp
     ? pack.credits * Math.max(packs, 1)
@@ -250,13 +250,13 @@ async function paymentSucceeded(d: Data, event: DodoWebhook) {
       .values({
         id: newId('pay'),
         userId,
-        dodoPaymentId: paymentId,
-        dodoSubscriptionId: subId,
+        polarOrderId: paymentId,
+        polarSubscriptionId: subId,
         kind: isTopUp ? 'topup' : 'plan',
         amountCents: num(d, 'total_amount') ?? 0,
         credits,
       })
-      .onConflictDoNothing({ target: payments.dodoPaymentId });
+      .onConflictDoNothing({ target: payments.polarOrderId });
     if (!isTopUp) return false;
     const { created } = await createGrantInTx(tx, {
       userId,
@@ -309,7 +309,7 @@ async function takeBack(
       ),
     );
   const credits = Math.max(0, opts.credits(payment, Number(taken?.n ?? 0)));
-  const refs = [paymentId, payment.dodoSubscriptionId].filter((r): r is string => Boolean(r));
+  const refs = [paymentId, payment.polarSubscriptionId].filter((r): r is string => Boolean(r));
   const own = await db()
     .select({ id: creditGrants.id })
     .from(creditGrants)

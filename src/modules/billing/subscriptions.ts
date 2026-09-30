@@ -40,11 +40,11 @@ export async function getRenewingSubscription(userId: string): Promise<Subscript
   return row;
 }
 
-export async function getSubscriptionByDodoId(dodoId: string, tx: Tx = db()) {
+export async function getSubscriptionByPolarId(polarId: string, tx: Tx = db()) {
   const [row] = await tx
     .select()
     .from(subscriptions)
-    .where(eq(subscriptions.dodoSubscriptionId, dodoId));
+    .where(eq(subscriptions.polarSubscriptionId, polarId));
   return row;
 }
 
@@ -53,7 +53,7 @@ export async function upsertSubscriptionInTx(
   input: {
     userId: string;
     plan: PlanId;
-    dodoSubscriptionId: string;
+    polarSubscriptionId: string;
     status: SubscriptionStatus;
     periodStart?: Date | null;
     periodEnd?: Date | null;
@@ -72,10 +72,10 @@ export async function upsertSubscriptionInTx(
     .values({
       id: newId('sub'),
       userId: input.userId,
-      dodoSubscriptionId: input.dodoSubscriptionId,
+      polarSubscriptionId: input.polarSubscriptionId,
       ...set,
     })
-    .onConflictDoUpdate({ target: subscriptions.dodoSubscriptionId, set })
+    .onConflictDoUpdate({ target: subscriptions.polarSubscriptionId, set })
     .returning();
   return row!;
 }

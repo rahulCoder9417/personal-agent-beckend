@@ -168,7 +168,7 @@ export async function cancelSubscription(userId: string): Promise<Subscription> 
   if (current?.status === 'cancel_at_period_end') return current;
   const renewing = await getRenewingSubscription(userId);
   if (!renewing) throw conflict('No active paid subscription');
-  await dodo().cancelAtPeriodEnd(renewing.dodoSubscriptionId);
+  await dodo().cancelAtPeriodEnd(renewing.polarSubscriptionId);
   return (await setSubscriptionStatus(renewing.id, 'cancel_at_period_end'))!;
 }
 

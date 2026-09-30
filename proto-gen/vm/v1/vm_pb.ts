@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file vm/v1/vm.proto.
  */
 export const file_vm_v1_vm: GenFile = /*@__PURE__*/
-  fileDesc("Cg52bS92MS92bS5wcm90bxIFdm0udjEiZQoNVXNlck1jcFNlcnZlchIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEgsKA3VybBgDIAEoCRIYChBhdXRoX2hlYWRlcl9uYW1lGAQgASgJEhMKC2F1dGhfc2VjcmV0GAUgASgJIrQBCgdTYW5kYm94Eg8KB3VzZXJfaWQYASABKAkSFAoMY29udGFpbmVyX2lkGAIgASgJEhUKDWltYWdlX3ZlcnNpb24YAyABKAkSIgoFc3RhdGUYBCABKA4yEy52bS52MS5TYW5kYm94U3RhdGUSHgoWbGFzdF9hY3RpdmVfYXRfdW5peF9tcxgFIAEoAxIUCgxtZW1vcnlfYnl0ZXMYBiABKAMSEQoJYWxsb3dsaXN0GAcgAygJIq8BChRDcmVhdGVTYW5kYm94UmVxdWVzdBIPCgd1c2VyX2lkGAEgASgJEhMKC2xpdGVsbG1fa2V5GAIgASgJEiEKCHByaW9yaXR5GAMgASgOMg8udm0udjEuUHJpb3JpdHkSEQoJYWxsb3dsaXN0GAQgAygJEikKC21jcF9zZXJ2ZXJzGAUgAygLMhQudm0udjEuVXNlck1jcFNlcnZlchIQCgh0aW1lem9uZRgGIAEoCSJQChVDcmVhdGVTYW5kYm94UmVzcG9uc2USHwoHc2FuZGJveBgBIAEoCzIOLnZtLnYxLlNhbmRib3gSFgoObWNwX3Rva2VuX2hhc2gYAiABKAkiSAoSV2FrZVNhbmRib3hSZXF1ZXN0Eg8KB3VzZXJfaWQYASABKAkSIQoIcHJpb3JpdHkYAiABKA4yDy52bS52MS5Qcmlvcml0eSJLChNXYWtlU2FuZGJveFJlc3BvbnNlEh8KB3NhbmRib3gYASABKAsyDi52bS52MS5TYW5kYm94EhMKC3dhc19zdG9wcGVkGAIgASgIIkYKCkF0dGFjaG1lbnQSCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIRCgltaW1lX3R5cGUYAyABKAkSCwoDdXJsGAQgASgJIosCCg5EZWxpdmVyUmVxdWVzdBIPCgd1c2VyX2lkGAEgASgJEhMKC2RlbGl2ZXJ5X2lkGAIgASgJEiAKBGtpbmQYAyABKA4yEi52bS52MS5EZWxpdmVyS2luZBITCgtzZXNzaW9uX2tleRgEIAEoCRIPCgdjaGFubmVsGAUgASgJEgwKBHRleHQYBiABKAkSJgoLYXR0YWNobWVudHMYByADKAsyES52bS52MS5BdHRhY2htZW50EhMKC2FwcHJvdmFsX2lkGAggASgJEhAKCGFwcHJvdmVkGAkgASgIEhUKDW1ldGFkYXRhX2pzb24YCiABKAkSFwoPdGltZW91dF9zZWNvbmRzGAsgASgFInIKDERlbGl2ZXJFdmVudBIlCgR0eXBlGAEgASgOMhcudm0udjEuRGVsaXZlckV2ZW50VHlwZRIPCgdtZXNzYWdlGAIgASgJEhYKDnBsYXRmb3JtX2ZhdWx0GAMgASgIEhIKCmF0X3VuaXhfbXMYBCABKAMiHwoMVG91Y2hSZXF1ZXN0Eg8KB3VzZXJfaWQYASABKAkiDwoNVG91Y2hSZXNwb25zZSJEChJTdG9wU2FuZGJveFJlcXVlc3QSDwoHdXNlcl9pZBgBIAEoCRINCgVmb3JjZRgCIAEoCBIOCgZyZWFzb24YAyABKAkiNgoTU3RvcFNhbmRib3hSZXNwb25zZRIfCgdzYW5kYm94GAEgASgLMg4udm0udjEuU2FuZGJveCInChREZWxldGVTYW5kYm94UmVxdWVzdBIPCgd1c2VyX2lkGAEgASgJIhcKFURlbGV0ZVNhbmRib3hSZXNwb25zZSIkChFHZXRTYW5kYm94UmVxdWVzdBIPCgd1c2VyX2lkGAEgASgJIjsKFExpc3RTYW5kYm94ZXNSZXF1ZXN0EiMKBnN0YXRlcxgBIAMoDjITLnZtLnYxLlNhbmRib3hTdGF0ZSI6ChVMaXN0U2FuZGJveGVzUmVzcG9uc2USIQoJc2FuZGJveGVzGAEgAygLMg4udm0udjEuU2FuZGJveCJQCg9HZXRVc2FnZVJlcXVlc3QSFQoNc2luY2VfdW5peF9tcxgBIAEoAxIVCg11bnRpbF91bml4X21zGAIgASgDEg8KB3VzZXJfaWQYAyABKAkiTAoJVXNlclVzYWdlEg8KB3VzZXJfaWQYASABKAkSFQoNYXdha2Vfc2Vjb25kcxgCIAEoAxIXCg9icm93c2VyX3NlY29uZHMYAyABKAMiMwoQR2V0VXNhZ2VSZXNwb25zZRIfCgV1c2FnZRgBIAMoCzIQLnZtLnYxLlVzZXJVc2FnZSJoChlTZXRFZ3Jlc3NBbGxvd2xpc3RSZXF1ZXN0Eg8KB3VzZXJfaWQYASABKAkSDwoHZG9tYWlucxgCIAMoCRIpCgttY3Bfc2VydmVycxgDIAMoCzIULnZtLnYxLlVzZXJNY3BTZXJ2ZXIiHAoaU2V0RWdyZXNzQWxsb3dsaXN0UmVzcG9uc2UiPQoVU25hcHNob3RWb2x1bWVSZXF1ZXN0Eg8KB3VzZXJfaWQYASABKAkSEwoLZGVzdGluYXRpb24YAiABKAkiPgoWU25hcHNob3RWb2x1bWVSZXNwb25zZRIQCghsb2NhdGlvbhgBIAEoCRISCgpzaXplX2J5dGVzGAIgASgDKq0BCgxTYW5kYm94U3RhdGUSHQoZU0FOREJPWF9TVEFURV9VTlNQRUNJRklFRBAAEhkKFVNBTkRCT1hfU1RBVEVfU1RPUFBFRBABEhgKFFNBTkRCT1hfU1RBVEVfV0FLSU5HEAISFwoTU0FOREJPWF9TVEFURV9BV0FLRRADEhYKElNBTkRCT1hfU1RBVEVfQlVTWRAEEhgKFFNBTkRCT1hfU1RBVEVfQlJPS0VOEAUqXgoIUHJpb3JpdHkSGAoUUFJJT1JJVFlfVU5TUEVDSUZJRUQQABIQCgxQUklPUklUWV9MT1cQARITCg9QUklPUklUWV9OT1JNQUwQAhIRCg1QUklPUklUWV9ISUdIEAMqoAEKC0RlbGl2ZXJLaW5kEhwKGERFTElWRVJfS0lORF9VTlNQRUNJRklFRBAAEhgKFERFTElWRVJfS0lORF9NRVNTQUdFEAESIAocREVMSVZFUl9LSU5EX0FQUFJPVkFMX0FOU1dFUhACEhsKF0RFTElWRVJfS0lORF9BVVRPTUFUSU9OEAMSGgoWREVMSVZFUl9LSU5EX0FQUF9FVkVOVBAEKrcBChBEZWxpdmVyRXZlbnRUeXBlEiIKHkRFTElWRVJfRVZFTlRfVFlQRV9VTlNQRUNJRklFRBAAEh8KG0RFTElWRVJfRVZFTlRfVFlQRV9BQ0NFUFRFRBABEh4KGkRFTElWRVJfRVZFTlRfVFlQRV9XT1JLSU5HEAISIAocREVMSVZFUl9FVkVOVF9UWVBFX1RVUk5fRE9ORRADEhwKGERFTElWRVJfRVZFTlRfVFlQRV9FUlJPUhAEMocGCglWbU1hbmFnZXISSgoNQ3JlYXRlU2FuZGJveBIbLnZtLnYxLkNyZWF0ZVNhbmRib3hSZXF1ZXN0Ghwudm0udjEuQ3JlYXRlU2FuZGJveFJlc3BvbnNlEkQKC1dha2VTYW5kYm94Ehkudm0udjEuV2FrZVNhbmRib3hSZXF1ZXN0Ghoudm0udjEuV2FrZVNhbmRib3hSZXNwb25zZRI3CgdEZWxpdmVyEhUudm0udjEuRGVsaXZlclJlcXVlc3QaEy52bS52MS5EZWxpdmVyRXZlbnQwARIyCgVUb3VjaBITLnZtLnYxLlRvdWNoUmVxdWVzdBoULnZtLnYxLlRvdWNoUmVzcG9uc2USRAoLU3RvcFNhbmRib3gSGS52bS52MS5TdG9wU2FuZGJveFJlcXVlc3QaGi52bS52MS5TdG9wU2FuZGJveFJlc3BvbnNlEkoKDURlbGV0ZVNhbmRib3gSGy52bS52MS5EZWxldGVTYW5kYm94UmVxdWVzdBocLnZtLnYxLkRlbGV0ZVNhbmRib3hSZXNwb25zZRI2CgpHZXRTYW5kYm94Ehgudm0udjEuR2V0U2FuZGJveFJlcXVlc3QaDi52bS52MS5TYW5kYm94EkoKDUxpc3RTYW5kYm94ZXMSGy52bS52MS5MaXN0U2FuZGJveGVzUmVxdWVzdBocLnZtLnYxLkxpc3RTYW5kYm94ZXNSZXNwb25zZRI7CghHZXRVc2FnZRIWLnZtLnYxLkdldFVzYWdlUmVxdWVzdBoXLnZtLnYxLkdldFVzYWdlUmVzcG9uc2USWQoSU2V0RWdyZXNzQWxsb3dsaXN0EiAudm0udjEuU2V0RWdyZXNzQWxsb3dsaXN0UmVxdWVzdBohLnZtLnYxLlNldEVncmVzc0FsbG93bGlzdFJlc3BvbnNlEk0KDlNuYXBzaG90Vm9sdW1lEhwudm0udjEuU25hcHNob3RWb2x1bWVSZXF1ZXN0Gh0udm0udjEuU25hcHNob3RWb2x1bWVSZXNwb25zZUI1WjNnaXRodWIuY29tL3BlcnNvbmFsLWFnZW50L3ZtLW1hbmFnZXIvZ2VuL3ZtL3YxO3ZtdjFiBnByb3RvMw");
+  fileDesc("Cg52bS92MS92bS5wcm90bxIFdm0udjEiZQoNVXNlck1jcFNlcnZlchIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEgsKA3VybBgDIAEoCRIYChBhdXRoX2hlYWRlcl9uYW1lGAQgASgJEhMKC2F1dGhfc2VjcmV0GAUgASgJIvQBCgdTYW5kYm94Eg8KB3VzZXJfaWQYASABKAkSFAoMY29udGFpbmVyX2lkGAIgASgJEhUKDWltYWdlX3ZlcnNpb24YAyABKAkSIgoFc3RhdGUYBCABKA4yEy52bS52MS5TYW5kYm94U3RhdGUSHgoWbGFzdF9hY3RpdmVfYXRfdW5peF9tcxgFIAEoAxIUCgxtZW1vcnlfYnl0ZXMYBiABKAMSEQoJYWxsb3dsaXN0GAcgAygJEiQKB3J1bnRpbWUYCCABKA4yEy52bS52MS5BZ2VudFJ1bnRpbWUSGAoQY2xhdWRlX2Nvbm5lY3RlZBgJIAEoCCLVAQoUQ3JlYXRlU2FuZGJveFJlcXVlc3QSDwoHdXNlcl9pZBgBIAEoCRITCgtsaXRlbGxtX2tleRgCIAEoCRIhCghwcmlvcml0eRgDIAEoDjIPLnZtLnYxLlByaW9yaXR5EhEKCWFsbG93bGlzdBgEIAMoCRIpCgttY3Bfc2VydmVycxgFIAMoCzIULnZtLnYxLlVzZXJNY3BTZXJ2ZXISEAoIdGltZXpvbmUYBiABKAkSJAoHcnVudGltZRgHIAEoDjITLnZtLnYxLkFnZW50UnVudGltZSJQChVDcmVhdGVTYW5kYm94UmVzcG9uc2USHwoHc2FuZGJveBgBIAEoCzIOLnZtLnYxLlNhbmRib3gSFgoObWNwX3Rva2VuX2hhc2gYAiABKAkiSAoSV2FrZVNhbmRib3hSZXF1ZXN0Eg8KB3VzZXJfaWQYASABKAkSIQoIcHJpb3JpdHkYAiABKA4yDy52bS52MS5Qcmlvcml0eSJLChNXYWtlU2FuZGJveFJlc3BvbnNlEh8KB3NhbmRib3gYASABKAsyDi52bS52MS5TYW5kYm94EhMKC3dhc19zdG9wcGVkGAIgASgIIkYKCkF0dGFjaG1lbnQSCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIRCgltaW1lX3R5cGUYAyABKAkSCwoDdXJsGAQgASgJIosCCg5EZWxpdmVyUmVxdWVzdBIPCgd1c2VyX2lkGAEgASgJEhMKC2RlbGl2ZXJ5X2lkGAIgASgJEiAKBGtpbmQYAyABKA4yEi52bS52MS5EZWxpdmVyS2luZBITCgtzZXNzaW9uX2tleRgEIAEoCRIPCgdjaGFubmVsGAUgASgJEgwKBHRleHQYBiABKAkSJgoLYXR0YWNobWVudHMYByADKAsyES52bS52MS5BdHRhY2htZW50EhMKC2FwcHJvdmFsX2lkGAggASgJEhAKCGFwcHJvdmVkGAkgASgIEhUKDW1ldGFkYXRhX2pzb24YCiABKAkSFwoPdGltZW91dF9zZWNvbmRzGAsgASgFInIKDERlbGl2ZXJFdmVudBIlCgR0eXBlGAEgASgOMhcudm0udjEuRGVsaXZlckV2ZW50VHlwZRIPCgdtZXNzYWdlGAIgASgJEhYKDnBsYXRmb3JtX2ZhdWx0GAMgASgIEhIKCmF0X3VuaXhfbXMYBCABKAMiHwoMVG91Y2hSZXF1ZXN0Eg8KB3VzZXJfaWQYASABKAkiDwoNVG91Y2hSZXNwb25zZSJEChJTdG9wU2FuZGJveFJlcXVlc3QSDwoHdXNlcl9pZBgBIAEoCRINCgVmb3JjZRgCIAEoCBIOCgZyZWFzb24YAyABKAkiNgoTU3RvcFNhbmRib3hSZXNwb25zZRIfCgdzYW5kYm94GAEgASgLMg4udm0udjEuU2FuZGJveCInChREZWxldGVTYW5kYm94UmVxdWVzdBIPCgd1c2VyX2lkGAEgASgJIhcKFURlbGV0ZVNhbmRib3hSZXNwb25zZSIkChFHZXRTYW5kYm94UmVxdWVzdBIPCgd1c2VyX2lkGAEgASgJIjsKFExpc3RTYW5kYm94ZXNSZXF1ZXN0EiMKBnN0YXRlcxgBIAMoDjITLnZtLnYxLlNhbmRib3hTdGF0ZSI6ChVMaXN0U2FuZGJveGVzUmVzcG9uc2USIQoJc2FuZGJveGVzGAEgAygLMg4udm0udjEuU2FuZGJveCJQCg9HZXRVc2FnZVJlcXVlc3QSFQoNc2luY2VfdW5peF9tcxgBIAEoAxIVCg11bnRpbF91bml4X21zGAIgASgDEg8KB3VzZXJfaWQYAyABKAkiTAoJVXNlclVzYWdlEg8KB3VzZXJfaWQYASABKAkSFQoNYXdha2Vfc2Vjb25kcxgCIAEoAxIXCg9icm93c2VyX3NlY29uZHMYAyABKAMiMwoQR2V0VXNhZ2VSZXNwb25zZRIfCgV1c2FnZRgBIAMoCzIQLnZtLnYxLlVzZXJVc2FnZSJoChlTZXRFZ3Jlc3NBbGxvd2xpc3RSZXF1ZXN0Eg8KB3VzZXJfaWQYASABKAkSDwoHZG9tYWlucxgCIAMoCRIpCgttY3Bfc2VydmVycxgDIAMoCzIULnZtLnYxLlVzZXJNY3BTZXJ2ZXIiHAoaU2V0RWdyZXNzQWxsb3dsaXN0UmVzcG9uc2UiPQoVU25hcHNob3RWb2x1bWVSZXF1ZXN0Eg8KB3VzZXJfaWQYASABKAkSEwoLZGVzdGluYXRpb24YAiABKAkiPgoWU25hcHNob3RWb2x1bWVSZXNwb25zZRIQCghsb2NhdGlvbhgBIAEoCRISCgpzaXplX2J5dGVzGAIgASgDIk8KFlNldEFnZW50UnVudGltZVJlcXVlc3QSDwoHdXNlcl9pZBgBIAEoCRIkCgdydW50aW1lGAIgASgOMhMudm0udjEuQWdlbnRSdW50aW1lIjoKF1NldEFnZW50UnVudGltZVJlc3BvbnNlEh8KB3NhbmRib3gYASABKAsyDi52bS52MS5TYW5kYm94IioKF1N0YXJ0Q2xhdWRlTG9naW5SZXF1ZXN0Eg8KB3VzZXJfaWQYASABKAkiXwoYU3RhcnRDbGF1ZGVMb2dpblJlc3BvbnNlEhAKCGxvZ2luX2lkGAEgASgJEhUKDWF1dGhvcml6ZV91cmwYAiABKAkSGgoSZXhwaXJlc19hdF91bml4X21zGAMgASgDIk0KGkNvbXBsZXRlQ2xhdWRlTG9naW5SZXF1ZXN0Eg8KB3VzZXJfaWQYASABKAkSEAoIbG9naW5faWQYAiABKAkSDAoEY29kZRgDIAEoCSJBChtDb21wbGV0ZUNsYXVkZUxvZ2luUmVzcG9uc2USEQoJY29ubmVjdGVkGAEgASgIEg8KB21lc3NhZ2UYAiABKAkiJgoTQ2xhdWRlTG9nb3V0UmVxdWVzdBIPCgd1c2VyX2lkGAEgASgJIhYKFENsYXVkZUxvZ291dFJlc3BvbnNlKmYKDEFnZW50UnVudGltZRIdChlBR0VOVF9SVU5USU1FX1VOU1BFQ0lGSUVEEAASGAoUQUdFTlRfUlVOVElNRV9IRVJNRVMQARIdChlBR0VOVF9SVU5USU1FX0NMQVVERV9DT0RFEAIqrQEKDFNhbmRib3hTdGF0ZRIdChlTQU5EQk9YX1NUQVRFX1VOU1BFQ0lGSUVEEAASGQoVU0FOREJPWF9TVEFURV9TVE9QUEVEEAESGAoUU0FOREJPWF9TVEFURV9XQUtJTkcQAhIXChNTQU5EQk9YX1NUQVRFX0FXQUtFEAMSFgoSU0FOREJPWF9TVEFURV9CVVNZEAQSGAoUU0FOREJPWF9TVEFURV9CUk9LRU4QBSpeCghQcmlvcml0eRIYChRQUklPUklUWV9VTlNQRUNJRklFRBAAEhAKDFBSSU9SSVRZX0xPVxABEhMKD1BSSU9SSVRZX05PUk1BTBACEhEKDVBSSU9SSVRZX0hJR0gQAyqgAQoLRGVsaXZlcktpbmQSHAoYREVMSVZFUl9LSU5EX1VOU1BFQ0lGSUVEEAASGAoUREVMSVZFUl9LSU5EX01FU1NBR0UQARIgChxERUxJVkVSX0tJTkRfQVBQUk9WQUxfQU5TV0VSEAISGwoXREVMSVZFUl9LSU5EX0FVVE9NQVRJT04QAxIaChZERUxJVkVSX0tJTkRfQVBQX0VWRU5UEAQqtwEKEERlbGl2ZXJFdmVudFR5cGUSIgoeREVMSVZFUl9FVkVOVF9UWVBFX1VOU1BFQ0lGSUVEEAASHwobREVMSVZFUl9FVkVOVF9UWVBFX0FDQ0VQVEVEEAESHgoaREVMSVZFUl9FVkVOVF9UWVBFX1dPUktJTkcQAhIgChxERUxJVkVSX0VWRU5UX1RZUEVfVFVSTl9ET05FEAMSHAoYREVMSVZFUl9FVkVOVF9UWVBFX0VSUk9SEAQy1QgKCVZtTWFuYWdlchJKCg1DcmVhdGVTYW5kYm94Ehsudm0udjEuQ3JlYXRlU2FuZGJveFJlcXVlc3QaHC52bS52MS5DcmVhdGVTYW5kYm94UmVzcG9uc2USRAoLV2FrZVNhbmRib3gSGS52bS52MS5XYWtlU2FuZGJveFJlcXVlc3QaGi52bS52MS5XYWtlU2FuZGJveFJlc3BvbnNlEjcKB0RlbGl2ZXISFS52bS52MS5EZWxpdmVyUmVxdWVzdBoTLnZtLnYxLkRlbGl2ZXJFdmVudDABEjIKBVRvdWNoEhMudm0udjEuVG91Y2hSZXF1ZXN0GhQudm0udjEuVG91Y2hSZXNwb25zZRJECgtTdG9wU2FuZGJveBIZLnZtLnYxLlN0b3BTYW5kYm94UmVxdWVzdBoaLnZtLnYxLlN0b3BTYW5kYm94UmVzcG9uc2USSgoNRGVsZXRlU2FuZGJveBIbLnZtLnYxLkRlbGV0ZVNhbmRib3hSZXF1ZXN0Ghwudm0udjEuRGVsZXRlU2FuZGJveFJlc3BvbnNlEjYKCkdldFNhbmRib3gSGC52bS52MS5HZXRTYW5kYm94UmVxdWVzdBoOLnZtLnYxLlNhbmRib3gSSgoNTGlzdFNhbmRib3hlcxIbLnZtLnYxLkxpc3RTYW5kYm94ZXNSZXF1ZXN0Ghwudm0udjEuTGlzdFNhbmRib3hlc1Jlc3BvbnNlEjsKCEdldFVzYWdlEhYudm0udjEuR2V0VXNhZ2VSZXF1ZXN0Ghcudm0udjEuR2V0VXNhZ2VSZXNwb25zZRJZChJTZXRFZ3Jlc3NBbGxvd2xpc3QSIC52bS52MS5TZXRFZ3Jlc3NBbGxvd2xpc3RSZXF1ZXN0GiEudm0udjEuU2V0RWdyZXNzQWxsb3dsaXN0UmVzcG9uc2USTQoOU25hcHNob3RWb2x1bWUSHC52bS52MS5TbmFwc2hvdFZvbHVtZVJlcXVlc3QaHS52bS52MS5TbmFwc2hvdFZvbHVtZVJlc3BvbnNlElAKD1NldEFnZW50UnVudGltZRIdLnZtLnYxLlNldEFnZW50UnVudGltZVJlcXVlc3QaHi52bS52MS5TZXRBZ2VudFJ1bnRpbWVSZXNwb25zZRJTChBTdGFydENsYXVkZUxvZ2luEh4udm0udjEuU3RhcnRDbGF1ZGVMb2dpblJlcXVlc3QaHy52bS52MS5TdGFydENsYXVkZUxvZ2luUmVzcG9uc2USXAoTQ29tcGxldGVDbGF1ZGVMb2dpbhIhLnZtLnYxLkNvbXBsZXRlQ2xhdWRlTG9naW5SZXF1ZXN0GiIudm0udjEuQ29tcGxldGVDbGF1ZGVMb2dpblJlc3BvbnNlEkcKDENsYXVkZUxvZ291dBIaLnZtLnYxLkNsYXVkZUxvZ291dFJlcXVlc3QaGy52bS52MS5DbGF1ZGVMb2dvdXRSZXNwb25zZUI1WjNnaXRodWIuY29tL3BlcnNvbmFsLWFnZW50L3ZtLW1hbmFnZXIvZ2VuL3ZtL3YxO3ZtdjFiBnByb3RvMw");
 
 /**
  * @generated from message vm.v1.UserMcpServer
@@ -93,6 +93,18 @@ export type Sandbox = Message<"vm.v1.Sandbox"> & {
    * @generated from field: repeated string allowlist = 7;
    */
   allowlist: string[];
+
+  /**
+   * @generated from field: vm.v1.AgentRuntime runtime = 8;
+   */
+  runtime: AgentRuntime;
+
+  /**
+   * Claude Code has valid credentials in /data (as last seen by the vm-manager).
+   *
+   * @generated from field: bool claude_connected = 9;
+   */
+  claudeConnected: boolean;
 };
 
 /**
@@ -137,6 +149,11 @@ export type CreateSandboxRequest = Message<"vm.v1.CreateSandboxRequest"> & {
    * @generated from field: string timezone = 6;
    */
   timezone: string;
+
+  /**
+   * @generated from field: vm.v1.AgentRuntime runtime = 7;
+   */
+  runtime: AgentRuntime;
 };
 
 /**
@@ -679,6 +696,200 @@ export const SnapshotVolumeResponseSchema: GenMessage<SnapshotVolumeResponse> = 
   messageDesc(file_vm_v1_vm, 24);
 
 /**
+ * @generated from message vm.v1.SetAgentRuntimeRequest
+ */
+export type SetAgentRuntimeRequest = Message<"vm.v1.SetAgentRuntimeRequest"> & {
+  /**
+   * @generated from field: string user_id = 1;
+   */
+  userId: string;
+
+  /**
+   * @generated from field: vm.v1.AgentRuntime runtime = 2;
+   */
+  runtime: AgentRuntime;
+};
+
+/**
+ * Describes the message vm.v1.SetAgentRuntimeRequest.
+ * Use `create(SetAgentRuntimeRequestSchema)` to create a new message.
+ */
+export const SetAgentRuntimeRequestSchema: GenMessage<SetAgentRuntimeRequest> = /*@__PURE__*/
+  messageDesc(file_vm_v1_vm, 25);
+
+/**
+ * @generated from message vm.v1.SetAgentRuntimeResponse
+ */
+export type SetAgentRuntimeResponse = Message<"vm.v1.SetAgentRuntimeResponse"> & {
+  /**
+   * @generated from field: vm.v1.Sandbox sandbox = 1;
+   */
+  sandbox?: Sandbox | undefined;
+};
+
+/**
+ * Describes the message vm.v1.SetAgentRuntimeResponse.
+ * Use `create(SetAgentRuntimeResponseSchema)` to create a new message.
+ */
+export const SetAgentRuntimeResponseSchema: GenMessage<SetAgentRuntimeResponse> = /*@__PURE__*/
+  messageDesc(file_vm_v1_vm, 26);
+
+/**
+ * @generated from message vm.v1.StartClaudeLoginRequest
+ */
+export type StartClaudeLoginRequest = Message<"vm.v1.StartClaudeLoginRequest"> & {
+  /**
+   * @generated from field: string user_id = 1;
+   */
+  userId: string;
+};
+
+/**
+ * Describes the message vm.v1.StartClaudeLoginRequest.
+ * Use `create(StartClaudeLoginRequestSchema)` to create a new message.
+ */
+export const StartClaudeLoginRequestSchema: GenMessage<StartClaudeLoginRequest> = /*@__PURE__*/
+  messageDesc(file_vm_v1_vm, 27);
+
+/**
+ * @generated from message vm.v1.StartClaudeLoginResponse
+ */
+export type StartClaudeLoginResponse = Message<"vm.v1.StartClaudeLoginResponse"> & {
+  /**
+   * @generated from field: string login_id = 1;
+   */
+  loginId: string;
+
+  /**
+   * @generated from field: string authorize_url = 2;
+   */
+  authorizeUrl: string;
+
+  /**
+   * @generated from field: int64 expires_at_unix_ms = 3;
+   */
+  expiresAtUnixMs: bigint;
+};
+
+/**
+ * Describes the message vm.v1.StartClaudeLoginResponse.
+ * Use `create(StartClaudeLoginResponseSchema)` to create a new message.
+ */
+export const StartClaudeLoginResponseSchema: GenMessage<StartClaudeLoginResponse> = /*@__PURE__*/
+  messageDesc(file_vm_v1_vm, 28);
+
+/**
+ * @generated from message vm.v1.CompleteClaudeLoginRequest
+ */
+export type CompleteClaudeLoginRequest = Message<"vm.v1.CompleteClaudeLoginRequest"> & {
+  /**
+   * @generated from field: string user_id = 1;
+   */
+  userId: string;
+
+  /**
+   * @generated from field: string login_id = 2;
+   */
+  loginId: string;
+
+  /**
+   * The code from Anthropic's page. Not logged, not stored.
+   *
+   * @generated from field: string code = 3;
+   */
+  code: string;
+};
+
+/**
+ * Describes the message vm.v1.CompleteClaudeLoginRequest.
+ * Use `create(CompleteClaudeLoginRequestSchema)` to create a new message.
+ */
+export const CompleteClaudeLoginRequestSchema: GenMessage<CompleteClaudeLoginRequest> = /*@__PURE__*/
+  messageDesc(file_vm_v1_vm, 29);
+
+/**
+ * @generated from message vm.v1.CompleteClaudeLoginResponse
+ */
+export type CompleteClaudeLoginResponse = Message<"vm.v1.CompleteClaudeLoginResponse"> & {
+  /**
+   * @generated from field: bool connected = 1;
+   */
+  connected: boolean;
+
+  /**
+   * Why it failed (wrong/expired code), safe to show the user.
+   *
+   * @generated from field: string message = 2;
+   */
+  message: string;
+};
+
+/**
+ * Describes the message vm.v1.CompleteClaudeLoginResponse.
+ * Use `create(CompleteClaudeLoginResponseSchema)` to create a new message.
+ */
+export const CompleteClaudeLoginResponseSchema: GenMessage<CompleteClaudeLoginResponse> = /*@__PURE__*/
+  messageDesc(file_vm_v1_vm, 30);
+
+/**
+ * @generated from message vm.v1.ClaudeLogoutRequest
+ */
+export type ClaudeLogoutRequest = Message<"vm.v1.ClaudeLogoutRequest"> & {
+  /**
+   * @generated from field: string user_id = 1;
+   */
+  userId: string;
+};
+
+/**
+ * Describes the message vm.v1.ClaudeLogoutRequest.
+ * Use `create(ClaudeLogoutRequestSchema)` to create a new message.
+ */
+export const ClaudeLogoutRequestSchema: GenMessage<ClaudeLogoutRequest> = /*@__PURE__*/
+  messageDesc(file_vm_v1_vm, 31);
+
+/**
+ * @generated from message vm.v1.ClaudeLogoutResponse
+ */
+export type ClaudeLogoutResponse = Message<"vm.v1.ClaudeLogoutResponse"> & {
+};
+
+/**
+ * Describes the message vm.v1.ClaudeLogoutResponse.
+ * Use `create(ClaudeLogoutResponseSchema)` to create a new message.
+ */
+export const ClaudeLogoutResponseSchema: GenMessage<ClaudeLogoutResponse> = /*@__PURE__*/
+  messageDesc(file_vm_v1_vm, 32);
+
+/**
+ * @generated from enum vm.v1.AgentRuntime
+ */
+export enum AgentRuntime {
+  /**
+   * = HERMES
+   *
+   * @generated from enum value: AGENT_RUNTIME_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: AGENT_RUNTIME_HERMES = 1;
+   */
+  HERMES = 1,
+
+  /**
+   * @generated from enum value: AGENT_RUNTIME_CLAUDE_CODE = 2;
+   */
+  CLAUDE_CODE = 2,
+}
+
+/**
+ * Describes the enum vm.v1.AgentRuntime.
+ */
+export const AgentRuntimeSchema: GenEnum<AgentRuntime> = /*@__PURE__*/
+  enumDesc(file_vm_v1_vm, 0);
+
+/**
  * @generated from enum vm.v1.SandboxState
  */
 export enum SandboxState {
@@ -717,7 +928,7 @@ export enum SandboxState {
  * Describes the enum vm.v1.SandboxState.
  */
 export const SandboxStateSchema: GenEnum<SandboxState> = /*@__PURE__*/
-  enumDesc(file_vm_v1_vm, 0);
+  enumDesc(file_vm_v1_vm, 1);
 
 /**
  * Awake-cap priority: lower is evicted first.
@@ -756,7 +967,7 @@ export enum Priority {
  * Describes the enum vm.v1.Priority.
  */
 export const PrioritySchema: GenEnum<Priority> = /*@__PURE__*/
-  enumDesc(file_vm_v1_vm, 1);
+  enumDesc(file_vm_v1_vm, 2);
 
 /**
  * @generated from enum vm.v1.DeliverKind
@@ -792,7 +1003,7 @@ export enum DeliverKind {
  * Describes the enum vm.v1.DeliverKind.
  */
 export const DeliverKindSchema: GenEnum<DeliverKind> = /*@__PURE__*/
-  enumDesc(file_vm_v1_vm, 2);
+  enumDesc(file_vm_v1_vm, 3);
 
 /**
  * @generated from enum vm.v1.DeliverEventType
@@ -828,7 +1039,7 @@ export enum DeliverEventType {
  * Describes the enum vm.v1.DeliverEventType.
  */
 export const DeliverEventTypeSchema: GenEnum<DeliverEventType> = /*@__PURE__*/
-  enumDesc(file_vm_v1_vm, 3);
+  enumDesc(file_vm_v1_vm, 4);
 
 /**
  * @generated from service vm.v1.VmManager
@@ -941,6 +1152,49 @@ export const VmManager: GenService<{
     methodKind: "unary";
     input: typeof SnapshotVolumeRequestSchema;
     output: typeof SnapshotVolumeResponseSchema;
+  },
+  /**
+   * --- Agent runtime: Hermes (API key / platform models) or Claude Code (user's Claude plan) ---
+   * Which agent answers in this sandbox. Applied on the next delivery (restart not needed).
+   *
+   * @generated from rpc vm.v1.VmManager.SetAgentRuntime
+   */
+  setAgentRuntime: {
+    methodKind: "unary";
+    input: typeof SetAgentRuntimeRequestSchema;
+    output: typeof SetAgentRuntimeResponseSchema;
+  },
+  /**
+   * Starts the official Claude Code sign-in inside the user's container (wakes it) and returns
+   * Anthropic's authorize URL. The user completes sign-in on Anthropic's own page.
+   *
+   * @generated from rpc vm.v1.VmManager.StartClaudeLogin
+   */
+  startClaudeLogin: {
+    methodKind: "unary";
+    input: typeof StartClaudeLoginRequestSchema;
+    output: typeof StartClaudeLoginResponseSchema;
+  },
+  /**
+   * Hands the code Anthropic showed the user to the waiting Claude Code sign-in. The code is
+   * passed straight through and never stored; Claude Code keeps its own credentials in /data.
+   *
+   * @generated from rpc vm.v1.VmManager.CompleteClaudeLogin
+   */
+  completeClaudeLogin: {
+    methodKind: "unary";
+    input: typeof CompleteClaudeLoginRequestSchema;
+    output: typeof CompleteClaudeLoginResponseSchema;
+  },
+  /**
+   * Signs Claude Code out (removes its credentials from /data).
+   *
+   * @generated from rpc vm.v1.VmManager.ClaudeLogout
+   */
+  claudeLogout: {
+    methodKind: "unary";
+    input: typeof ClaudeLogoutRequestSchema;
+    output: typeof ClaudeLogoutResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_vm_v1_vm, 0);

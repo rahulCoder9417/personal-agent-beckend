@@ -138,7 +138,9 @@ export const configSchema = z.object({
 export type Config = z.infer<typeof configSchema>;
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const parsed = configSchema.safeParse(env);
+  // `KEY=` (as in .env.example) means unset: defaults apply and numbers aren't coerced from "".
+  const set = Object.fromEntries(Object.entries(env).filter(([, v]) => v !== ''));
+  const parsed = configSchema.safeParse(set);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `  ${i.path.join('.')}: ${i.message}`);
     throw new Error(`Invalid configuration:\n${issues.join('\n')}`);

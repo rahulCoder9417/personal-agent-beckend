@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from './config.ts';
 
@@ -17,6 +18,23 @@ describe('loadConfig', () => {
 
   it('treats empty strings as unset for optional values', () => {
     expect(loadConfig({ ...base, TELEGRAM_BOT_TOKEN: '' }).TELEGRAM_BOT_TOKEN).toBeUndefined();
+  });
+
+  it('treats empty numbers as unset (FREE_CREDITS_MONTHLY_CAP= from .env.example)', () => {
+    const c = loadConfig({ ...base, FREE_CREDITS_MONTHLY_CAP: '', JEV_TIMEOUT_MS: '' });
+    expect(c.FREE_CREDITS_MONTHLY_CAP).toBeUndefined();
+    expect(c.JEV_TIMEOUT_MS).toBe(3000);
+  });
+
+  it('loads .env.example as-is once the one secret without a default is filled in', () => {
+    const env: Record<string, string> = {};
+    for (const line of readFileSync(new URL('../../.env.example', import.meta.url), 'utf8').split(
+      '\n',
+    )) {
+      const m = /^([A-Z0-9_]+)=(.*)$/.exec(line);
+      if (m) env[m[1]!] = m[2]!;
+    }
+    expect(() => loadConfig({ ...env, ENCRYPTION_KEY: base.ENCRYPTION_KEY })).not.toThrow();
   });
 
   it('rejects a bad encryption key and missing required vars with a readable error', () => {

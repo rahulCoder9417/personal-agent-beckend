@@ -110,11 +110,14 @@ services:
     container_name: egress-proxy
     # Squid must be PID 1: the vm-manager applies allowlist changes with `docker kill -s HUP`, and
     # the image's bash entrypoint (PID 1) would silently drop the signal. The tail keeps the
-    # logs on the container's stdout like the stock entrypoint does.
+    # logs on the container's stdout like the stock entrypoint does. A hard stop (server reboot)
+    # leaves /run/squid.pid behind saying "PID 1", which is Squid's own PID on the next start, so
+    # it would refuse to start ("already running"): remove the stale file first.
     entrypoint:
       - /bin/bash
       - -c
       - >-
+        rm -f /run/squid.pid;
         tail -F /var/log/squid/access.log /var/log/squid/cache.log 2>/dev/null &
         /usr/sbin/squid -Nz -f /etc/squid/squid.conf &&
         exec /usr/sbin/squid -f /etc/squid/squid.conf -NYC

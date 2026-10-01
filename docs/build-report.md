@@ -424,6 +424,16 @@ Step by step (`orchestrator/process-message.ts` → `turn.ts`):
 
 The 9 tools are listed in §8.3.
 
+**Git gateway (`/git/<owner>/<repo>`).** Real git for the user's GitHub, without a GitHub token in the container (`src/api/git.ts`, `src/modules/integrations/git-gateway.ts`, HLD §5.1).
+
+- **In the container:** the Bridge writes a managed git config at every start. `https://github.com/…` (and the ssh forms) are rewritten to `http://api:8080/git/…`, with the container token as the `Authorization` header. So `git clone https://github.com/<owner>/<repo>` works as usual.
+- **Auth:** the same container token as `/mcp` (Bearer, or Basic with the token as the password) → user id. Unknown token → `401`. The limit is 300 requests per minute per user.
+- **Forwarding:** only `GET info/refs?service=…`, `POST git-upload-pack` and `POST git-receive-pack` exist. Each is streamed to `https://github.com/<owner>/<repo>.git/…` with the OAuth token of the user's **active Composio GitHub connection**. The token is read per request, cached in memory for 60 seconds, and never logged or stored.
+- **Push rules,** checked on the command list before anything reaches GitHub: only branches; never the repo's default branch (looked up from the GitHub API, cached 5 minutes, and the push is refused if the lookup fails); no deletes; no tags. A pull request is opened with the GitHub app action (`run_app_action`).
+- **Errors** are `text/plain`, which git prints as `remote: …`: no GitHub connection `403`, GitHub refuses the account `403`, repo not found `404`, GitHub down `502`.
+- **Audit:** `git_fetch` per clone/fetch and `git_push` per push (repo and branch names), each with a `Touch`.
+- **Not in `openapi.yaml`:** like `/mcp`, it's a protocol endpoint, not REST.
+
 ### 6.8 Apps (Composio) and approvals
 
 **Connecting an app:**
@@ -450,7 +460,7 @@ The 9 tools are listed in §8.3.
 - **Max plan only.** The URL must be `https`, a public host name, not an IP, not one of our service names, and have no credentials in it. The secret is encrypted and never returned (`hasSecret: true`).
 - Any change queues `system/sync-allowlist`. That job sends `SetEgressAllowlist(domains, servers with decrypted secrets)` to the vm-manager.
 - The vm-manager writes `<user>.conf` for Squid, containing an ACL from the container's IP to those domains, and reloads the proxy.
-- Every container may always reach LiteLLM and `api:8080/mcp`, and nothing else.
+- Every container may always reach LiteLLM, `api:8080/mcp` and the git gateway's three paths under `api:8080/git/`, and nothing else. `github.com` itself is blocked.
 
 ### 6.10 Credits, charging and enforcement
 
@@ -962,6 +972,7 @@ Commands: `pnpm lint && pnpm typecheck && pnpm test` · `pnpm openapi:lint` · i
 | 7 | Backups restore | `scripts/restore-test.sh` on the server |
 | 8 | Load at the awake cap | `pnpm tsx scripts/load-test.ts` |
 | 9 | Claude plan sign-in with the real Claude Code | Build the agent image (installer + signature check for 2.1.283), connect a test Pro/Max account from the web app through the Squid proxy, send a message, then disconnect. Check the real `auth login` screen, the stream-json shapes and error texts, whether the 4 Anthropic hosts are enough, and RAM with Hermes + Claude Code |
+| 10 | Git gateway against the real GitHub | Deployed 2026-10-01; unit tests use a fake GitHub. Ask the agent on Telegram to clone a repo, push a branch and open a PR. Check that Composio returns the GitHub token to the api (its "mask connected account secrets" setting must be off and the auth config needs the `repo` scope), that a large clone streams through Squid and the api, and that a push to the default branch is refused |
 
 Most likely to break on the first real run:
 - Hermes config keys and its run API

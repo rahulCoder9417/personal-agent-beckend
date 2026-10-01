@@ -119,15 +119,15 @@ You created the budget yourself: **`cloud-editor-zero-spend`**, $1 a month, with
 
 What Claude changed:
 
-1. **The recipient.** The alert was going to `rahulkumar@inboxkit.com`. It was changed to the root account address, `rahulkum94l94@gmail.com`:
+1. **The recipient.** The alert was going to a different address (a work mailbox that should not be used for this project). It was changed to the root account address, `rahulkum94l94@gmail.com`:
    ```sh
    aws budgets update-subscriber --account-id 152160819518 --budget-name cloud-editor-zero-spend \
      --notification NotificationType=ACTUAL,ComparisonOperator=GREATER_THAN,Threshold=0.01,ThresholdType=ABSOLUTE_VALUE \
-     --old-subscriber SubscriptionType=EMAIL,Address=rahulkumar@inboxkit.com \
+     --old-subscriber SubscriptionType=EMAIL,Address=<old address> \
      --new-subscriber SubscriptionType=EMAIL,Address=rahulkum94l94@gmail.com
    ```
 2. **Verification.** AWS sent a "Verify email" message to the Gmail address. It landed in **Spam**. You marked it "not spam" and clicked the link.
-3. **Check.** The budget page shows **1/1 email verified**, and `aws notificationscontacts list-email-contacts` lists the Gmail address as `active`. The old inboxkit address is still listed there as `inactive`; it is no longer on the alert.
+3. **Check.** The budget page shows **1/1 email verified**, and `aws notificationscontacts list-email-contacts` lists the Gmail address as `active`. The old address is still listed there as `inactive`; it is no longer on the alert.
 
 The budget page and the verify page often loaded blank under browser automation, which is why the change was made from CloudShell.
 

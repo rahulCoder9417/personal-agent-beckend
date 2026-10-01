@@ -4,6 +4,7 @@ import { wireModules } from '../wiring.ts';
 import { AppError } from '../shared/errors.ts';
 import { logger } from '../shared/logger.ts';
 import { mountAdminBoard } from './admin-board.ts';
+import { mountGit } from './git.ts';
 import { mountMcp } from './mcp.ts';
 import { accessLog, clientIpMiddleware, ipRateLimit } from './middleware.ts';
 import { renderMetrics } from '../modules/admin/metrics.ts';
@@ -69,6 +70,7 @@ export function createApp(): Hono<AppEnv> {
 
   mountRoutes(app, allRoutes);
   mountMcp(app);
+  mountGit(app);
 
   // Prometheus metrics, bearer-protected (disabled when METRICS_TOKEN is unset).
   app.get('/metrics', async (c) => {

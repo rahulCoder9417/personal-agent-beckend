@@ -176,6 +176,7 @@
 | **backend (api/worker) → vm-manager** | **gRPC** (protobuf) | Typed contract between TypeScript and Go; **streaming** for Deliver (progress → turn done); fast on the private network |
 | vm-manager → Bridge (in container) | **HTTP (JSON)** on the sandbox network | Bridge is Python inside Hermes; kept simple; one secret per container |
 | Container → Platform MCP (api) | **MCP over streamable HTTP**, via the egress proxy | The standard way agents call tools |
+| Container → Git gateway (api) | **Git smart HTTP** (`/git/<owner>/<repo>`), via the egress proxy | Real `git clone` / `fetch` / `push` for the user's GitHub without a GitHub token in the container (section 5.1) |
 | Container → LiteLLM | **OpenAI-compatible HTTP**, via the egress proxy | What Hermes speaks |
 | Backend → Composio / Jev / LiteLLM admin / channel APIs / Polar | Their **HTTP APIs / SDKs** | External |
 
@@ -265,7 +266,7 @@ The web app lives in `user-frontend/` and is built from `openapi.yaml` + `ignore
 
 **Rules:**
 - The internet reaches only Caddy → api.
-- Containers reach **only the egress proxy**, which allows: LiteLLM, the api's `/mcp`, and that user's allowlisted MCP domains.
+- Containers reach **only the egress proxy**, which allows: LiteLLM, the api's `/mcp` and `/git/`, and that user's allowlisted MCP domains. `github.com` itself is **not** allowed.
 - The worker **never** talks to containers directly; it goes through the vm-manager's *Deliver*.
 - The vm-manager's gRPC port is on the platform network only.
 
@@ -289,6 +290,14 @@ The web app lives in `user-frontend/` and is built from `openapi.yaml` + `ignore
 | get_profile | Name, timezone, plan, connected apps |
 
 Every call is audit-logged and triggers a vm-manager *Touch*.
+
+- **Git gateway (`/git/<owner>/<repo>`)**, called with the container token. It lets the agent work on a GitHub repo with normal git (clone, branch, commit, push) while the GitHub token stays on the platform:
+  - The agent image's git config rewrites `https://github.com/` (and the ssh forms) to `http://api:8080/git/` and adds the container token as the `Authorization` header. So `git clone https://github.com/<owner>/<repo>` just works inside the container.
+  - The api turns the container token into the user id (same as `/mcp`), takes that user's GitHub OAuth token from their **active Composio GitHub connection**, and forwards the three git smart-HTTP requests (`info/refs`, `git-upload-pack`, `git-receive-pack`) to `https://github.com/<owner>/<repo>.git`, streaming both ways. Nothing else under `/git/` is forwarded.
+  - **The GitHub token never enters the container** (it is fetched per request, cached in memory for 60 s, never logged or stored). No GitHub connection → `403` with a message git prints.
+  - **Push rules:** the agent may push branches, but a push that updates or deletes the repo's **default branch**, deletes any ref, or touches a tag is refused before it reaches GitHub. Changes reach the default branch through a pull request (opened with the GitHub app action via `run_app_action`).
+  - Every clone/fetch/push is audit-logged (`git_fetch` / `git_push`, with the repo) and triggers a *Touch*. Per-user rate limit.
+  - It is a protocol endpoint like `/mcp`, so it is described here and not in `openapi/openapi.yaml`; its errors are `text/plain` because that is what the git client shows.
 
 - **Admin API** (admin role only): create or disable coupons, view users, credits and failed jobs; Bull Board.
 
@@ -650,6 +659,7 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 - [ ] The Docker socket is mounted **only** in the vm-manager
 - [ ] Containers: gVisor, limits, read-only files, sandbox network, egress allowlist, only their own secrets
 - [ ] No Composio/provider/database keys in containers; the Platform MCP forces the user id from the token
+- [ ] No GitHub token in containers: git goes through the git gateway, which forces the user id from the container token and refuses pushes to the default branch
 - [ ] Secrets encrypted in Postgres; tokens and codes stored as hashes
 - [ ] Approvals before sending to others, deleting or paying; audit log for every action
 - [ ] Coupon rules from 7.7; rate limits on redeem, link codes and login-linked endpoints

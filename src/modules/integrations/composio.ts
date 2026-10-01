@@ -34,6 +34,12 @@ export interface ComposioApi {
   ): Promise<{ accountId: string; redirectUrl: string }>;
   listAccounts(userId: string): Promise<ComposioAccount[]>;
   deleteAccount(accountId: string): Promise<void>;
+  /**
+   * The provider OAuth access token of one connected account, or null when Composio doesn't
+   * return it (missing, or masked by the project's "mask connected account secrets" setting).
+   * Used only by the git gateway; the token never leaves the api.
+   */
+  accessToken(accountId: string): Promise<string | null>;
   listTools(toolkits: string[]): Promise<ComposioTool[]>;
   execute(
     slug: string,
@@ -88,6 +94,16 @@ const realApi: ComposioApi = {
   },
   async deleteAccount(accountId) {
     await sdk().connectedAccounts.delete(accountId);
+  },
+  async accessToken(accountId) {
+    const acc = (await sdk().connectedAccounts.get(accountId)) as unknown as {
+      state?: { val?: Record<string, unknown> };
+      data?: Record<string, unknown>;
+    };
+    const token = acc.state?.val?.access_token ?? acc.data?.access_token;
+    // A masked token looks like "gho_abcd..." or has stars in it: not usable.
+    if (typeof token !== 'string' || token.length < 20 || /\.\.\.|\*/.test(token)) return null;
+    return token;
   },
   async listTools(toolkits) {
     if (toolkits.length === 0) return [];

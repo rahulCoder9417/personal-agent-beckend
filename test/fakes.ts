@@ -281,6 +281,9 @@ export async function installFakeComposio() {
       return [];
     },
     async deleteAccount() {},
+    async accessToken(accountId) {
+      return `gho_fake_token_for_${accountId}`;
+    },
     async listTools(toolkits) {
       return toolkits.flatMap((t) => [
         {

@@ -5,7 +5,7 @@ What was planned, what was built and how, the tech used and where, how gRPC and 
 - **Diagrams:** GoDraw canvas **"Personal Agent — System Design (planned vs built)"** — page 1 original design · page 2 system now · page 3 one message end to end · page 4 container open/close.
 - **Reference (every table, endpoint, env var):** `docs/build-report.md`. **Original design:** `docs/mvp-hld.md`.
 - **Code:** `beckend/` (api + worker, TypeScript) and `vm-manager/` (Go + the agent image), branch `main`.
-- **Date:** 2026-09-30.
+- **Date:** 2026-09-30. **Updated:** 2026-10-03 with the launch basics (`docs/launch-plan.md`, package W1a): Parts B, C, D, F and G.
 
 ## Contents
 
@@ -96,14 +96,14 @@ Free $0 (100 sign-up credits, 3 automations, cheap model) · Pro $12 (1,500 cred
 
 ## B.1 Summary
 
-All 8 phases are built, plus four later changes. Everything is tested with real Postgres and Redis and fakes for outside services. **Nothing has run in Docker or against real outside services yet** (see Part F).
+All 8 phases are built, plus the later changes in B.2. Everything is tested with real Postgres and Redis and fakes for outside services. A test deployment ran on AWS on 2026-09-30 and 2026-10-01 (`docs/aws-setup.md`); that server is stopped now, and **the launch basics of 2026-10-03 have not run on it** (see Part F).
 
 | Area | Built | Status |
 |---|---|---|
-| Backend (api + worker) | 9 modules, 26 tables, 56 REST operations, 21 job types | ✅ 212 tests |
+| Backend (api + worker) | 9 modules, 26 tables, 56 REST operations, 22 job types | ✅ 281 tests in 32 files |
 | vm-manager | 15 gRPC calls, 5 background loops | ✅ Go tests, `-race` clean |
 | Agent image | Hermes + Claude Code + our Python Bridge | ✅ 54 Bridge tests (fakes) |
-| Infra | docker-compose (3 networks), Caddy, Squid, LiteLLM config | ⚠️ never started |
+| Infra | docker-compose (3 networks), Caddy, Squid, LiteLLM config | ⚠️ ran on the AWS test server; the Caddy rule of 2026-10-03 is untested live |
 
 ## B.2 What changed from the original design
 
@@ -116,6 +116,13 @@ All 8 phases are built, plus four later changes. Everything is tested with real 
 | **Platform network** | "no internet" | Outbound allowed, nothing exposed | The worker must call Telegram, Composio… |
 | **Spec** | — | 400/503 responses documented where the code returns them | Contract accuracy |
 | **Payments provider** | Hosted checkout + signed webhooks | **Polar** (merchant of record), same flow; webhook `/webhooks/polar` | The user's decision (2026-09-30) |
+| **Launch channels** (2026-10-03) | WhatsApp, Telegram, iMessage, web | **Telegram and web on; WhatsApp and iMessage switched off** by `ENABLED_CHANNELS` (the code stays) | WhatsApp's terms forbid a general AI assistant outside the EEA; the unofficial iMessage route can be cut off |
+| **AI, three ways** (2026-10-03) | Platform credits | Own API key (default, recommended) · Claude plan (beta, "runs Claude Code") · **Textcrew AI** (a rented model behind LiteLLM, on credits) | Launch plan D4 |
+| **App-action charge** (2026-10-03) | App actions free | **1 credit per successful app action that changes something**; reading and searching are free | Launch plan D6 |
+| **Connection check** (2026-10-03) | Webhook or app list finishes a connection | Also a `check-connection` job that asks Composio itself | Connections stayed "pending" on the test server |
+| **No purchase links on Telegram** (2026-10-03) | "Out of credits" linked to billing everywhere | On Telegram it names the web app, with no link; the Telegram sender removes purchase links from any text | Telegram requires Stars for sales inside the app |
+| **`/mcp` and `/git` closed** (2026-10-03) | Reachable through Caddy (token needed) | Caddy answers 404 for both | Only containers need them, and they don't go through Caddy |
+| **Browser use** (2026-10-03) | Later | **Planned for launch on the Max plan** (Scout drives a real browser, 2 credits per minute). **Not built yet**; designed in the crew package | The founder's decision |
 
 ## B.3 Backend modules — what each does
 
@@ -123,11 +130,11 @@ All 8 phases are built, plus four later changes. Everything is tested with real 
 |---|---|---|
 | **auth** | users, link_codes, channel_links, waitlist | Clerk sign-in, account lifecycle, linking chat apps with one-time codes, waitlist |
 | **events** | events | Webhook intake (event + job, deduplicated), the 4 queues, recovery after Redis loss, cleanup |
-| **channels** | messages, attachments | Telegram/WhatsApp/Sendblue/web adapters, sending (24-hour rule, buttons, long-text split), media + voice→text, SSE live updates |
+| **channels** | messages, attachments | Telegram/WhatsApp/Sendblue/web adapters, sending (24-hour rule, buttons, long-text split, no purchase links on Telegram, nothing to a switched-off channel), media + voice→text, SSE live updates |
 | **orchestrator** | sandbox_tokens, approvals, agent_settings | The turn flow, per-user lock, Jev routing, approvals, container tokens, which agent runs, Claude sign-in, the gRPC client |
 | **platform-mcp** | — | The `/mcp` server: 9 tools the agent calls |
-| **integrations** | connections, user_mcp_servers, byok_keys, composio_triggers | Composio (catalog, connect, actions, triggers), user MCP servers, own API keys |
-| **billing** | subscriptions, payments, credit_grants, credit_ledger, usage_periods, coupons, coupon_codes, coupon_redemptions, litellm_keys | Plans, credits, charging, LiteLLM keys and budgets, Polar, coupons |
+| **integrations** | connections, user_mcp_servers, byok_keys, composio_triggers | Composio (catalog, connect + the connection check, actions and whether they change something, triggers), user MCP servers, own API keys |
+| **billing** | subscriptions, payments, credit_grants, credit_ledger, usage_periods, coupons, coupon_codes, coupon_redemptions, litellm_keys | Plans, credits, charging (usage and app actions), LiteLLM keys and budgets, Polar, coupons |
 | **automations** | automations | Reminders and automations, timers, triggers, auto-pause |
 | **admin** | audit_log | Audit log, alerts, metrics, health check, backups |
 
@@ -137,26 +144,34 @@ All 8 phases are built, plus four later changes. Everything is tested with real 
 
 **Sign-up.** Clerk sends `user.created` (signed) → event + job → the worker creates the user, grants 100 credits (90 days), creates their LiteLLM key, then calls gRPC **CreateSandbox** (container created, left stopped) and stores the hash of the container's token.
 
-**Linking a chat.** The web app gets a code like `LINK-7KQ2-M9XP` (stored as a hash, 10 minutes). The user sends it to our bot; the worker links that chat id to the user.
+**Linking a chat.** The web app gets a code like `LINK-7KQ2-M9XP` (stored as a hash, 10 minutes). The user sends it to our bot; the worker links that chat id to the user. Only a channel that is switched on can be linked.
 
-**A message** (canvas page 3). Webhook → event + job → worker takes the user's lock → special cases (link code, approval answer, coupon code, media) → credits and AI-source check → Jev routing (simple questions answered by a cheap model without waking anything) → **WakeSandbox** → **Deliver** (gRPC stream) → the agent calls our tools on `/mcp` → `send_message` → outbound job → the channel. After the turn: charge usage, push `credits.updated`, release the lock.
+**The channels switch.** `ENABLED_CHANNELS` (default `telegram,web`) says which channels are on. A channel that is off gets no link code (`403 channel_disabled`), its webhook answers 200 and saves nothing, and the worker neither reads from it nor sends to it. `GET /v1/channels` tells the web app which channels are on (`available`).
+
+**A message** (canvas page 3). Webhook (if its channel is on) → event + job → worker takes the user's lock → special cases (link code, approval answer, coupon code, media) → credits and AI-source check → Jev routing (simple questions answered by a cheap model without waking anything) → **WakeSandbox** → **Deliver** (gRPC stream) → the agent calls our tools on `/mcp` → `send_message` → outbound job → the channel. After the turn: charge usage, push `credits.updated`, release the lock.
 
 **Tools the agent has** (Platform MCP): `send_message`, `get_profile`, `list_app_actions`, `run_app_action`, `request_approval`, `schedule_reminder`, `create_automation`, `list_automations`, `cancel_automation`. The user id always comes from the container's token.
 
 **Approvals.** The agent calls `request_approval` → the user gets ✅/❌ buttons → the agent ends its turn. The answer comes back later as a new delivery; risky actions (send, delete, pay…) only run with an approved, single-use approval for the **exact** same action and arguments.
 
+**App connections.** A connect link saves the connection as `pending`. It becomes `active` through Composio's webhook, the web app's app list, or the `check-connection` job, which asks Composio 15 s after the link is made and then after 30 s, 1, 2, 4 and 8 minutes, until the connection is no longer pending.
+
 **Credits.** Grants (each with its own 90-day expiry) + an append-only ledger (a database trigger blocks edits). Spent oldest-expiry first. Every 5 minutes and after each turn, `sync-usage` reads AI spend (LiteLLM) and awake time (vm-manager **GetUsage**) and writes **one** charge per user per period with a unique key, so re-runs never double-charge. At zero: automations pause and the LiteLLM budget closes.
+
+**App actions.** `run_app_action` charges **1 credit** when an action that changes something succeeds (send, create, update, delete), as its own ledger row with a unique key (the approval id, or an id for that run). Reading is free, a failed action costs nothing, and at zero credits a changing action is refused. The action's name decides which kind it is; a name that says nothing is charged unless Composio tags the tool `readOnlyHint`. Any grant may pay it. A turn reversed as our fault gives these credits back too. Users see it in the credit history, the activity log and usage.
+
+**No purchase links on Telegram.** The "out of credits" reply names the web app on Telegram and links to billing on other channels. The Telegram sender also replaces any purchase link (Polar, or a buying page of the web app) in any text it sends.
 
 **Payments.** Polar checkout (our user id is Polar's external customer id; waitlist members get 50% off the first month automatically through a Polar discount). Plans and credits change only when Polar's signed webhook arrives: `subscription.active` or a paid `order.paid` grants the period's credits once, `subscription.canceled` keeps the plan to the end of the period and `subscription.revoked` moves the user to Free, a top-up `order.paid` adds 800 credits, and a succeeded refund takes back its share (all of it, plus a flag, when Polar refunded to prevent a chargeback).
 
 **Automations.** Once (delayed job), repeating (BullMQ job scheduler with cron + timezone), or app event (Composio trigger → webhook). Postgres is the source of truth; timers are re-registered on every worker start.
 
-**Bring your own AI.**
+**AI, three ways.** Own API key (the default, recommended), Claude plan (beta) or Textcrew AI (a rented model, on credits). Awake time and app actions cost credits in all three.
 | User has | Agent | Pays for AI |
 |---|---|---|
 | Connected Claude plan (chose Claude Code) | Claude Code | Their Claude plan |
 | Own API key | Hermes | Their key |
-| Nothing | Hermes on credits — or "connect your AI" with `own_only` | Platform credits / — |
+| Nothing | Textcrew AI: Hermes on credits — or "connect your AI" with `own_only` | Platform credits / — |
 
 Connecting a Claude plan: gRPC **StartClaudeLogin** runs the official `claude auth login` inside the user's container → the user signs in on Anthropic's page → pastes the code → **CompleteClaudeLogin** types it into the waiting CLI → Claude Code saves its own login in `/data`. We never see or store the login.
 
@@ -216,7 +231,7 @@ Connecting a Claude plan: gRPC **StartClaudeLogin** runs the official `claude au
 
 | Component | Role |
 |---|---|
-| **Caddy** | HTTPS in front of the api (only public service) |
+| **Caddy** | HTTPS in front of the api (only public service). Answers 404 for `/mcp*` and `/git/*` |
 | **Squid** | Egress proxy — the only way out of containers |
 | **LiteLLM** | AI gateway (`cheap`, `claude`, `gpt`, `whisper` models + fallbacks) |
 | **Postgres, Redis** | Databases `agent`, `vm_manager`, `litellm`; Redis with append-only persistence |
@@ -235,13 +250,14 @@ Connecting a Claude plan: gRPC **StartClaudeLogin** runs the official `claude au
 | api → worker | BullMQ jobs in Redis | Same process group; job id = event id |
 | worker / api → vm-manager | **gRPC** | Metadata `x-internal-secret`, platform network only |
 | vm-manager → container | Docker API + HTTP to the Bridge | Per-container Bridge secret (`X-Bridge-Secret`) |
-| Container → api | MCP (streamable HTTP) at `/mcp`, through Squid | Per-container token (`Authorization: Bearer`) |
+| Container → api | MCP (streamable HTTP) at `/mcp` and git smart HTTP at `/git`, through Squid straight to the api, never through Caddy (which answers 404 for both) | Per-container token (`Authorization: Bearer`) |
 | Container → AI | Hermes → LiteLLM; Claude Code → Anthropic; through Squid | User's LiteLLM key / user's own Claude login |
 
 ## D.2 REST (web app ↔ api)
 
 - 56 operations in `openapi.yaml` (profile, channels, chat + attachments + SSE, approvals, apps, MCP servers, own keys, automations, agent status + settings + Claude sign-in, billing, credits, usage, coupons, activity, waitlist, admin, webhooks). List: `build-report.md` §8.1.
 - Errors always `{ "error": { "code", "message", "details?" } }`.
+- Added on 2026-10-03, with no new operation: `available` on `GET /v1/channels`, `403 channel_disabled` on link codes and web chat, `appActionCredits` in `GET /v1/usage`.
 - Lists use `cursor` + `limit` → `nextCursor`.
 - Live updates over `GET /v1/stream` (SSE): `message.created`, `message.status`, `approval.created`, `approval.resolved`, `agent.status`, `credits.updated`, `automation.updated`.
 
@@ -252,7 +268,7 @@ Connecting a Claude plan: gRPC **StartClaudeLogin** runs the official `claude au
 | inbound | process-message, web-message, process-approval, automation-turn, composio-trigger |
 | outbound | send-message, send-raw, message-status |
 | scheduled | run-automation |
-| system | clerk-event, onboard-user, delete-user, sync-allowlist, composio-event, polar-event, sync-usage (5 min), expire-credits (hourly), expire-approvals (hourly), cleanup (daily), backup (nightly), health-check (5 min) |
+| system | clerk-event, onboard-user, delete-user, sync-allowlist, composio-event, check-connection (delayed, after a connect link), polar-event, sync-usage (5 min), expire-credits (hourly), expire-approvals (hourly), cleanup (daily), backup (nightly), health-check (5 min) |
 
 Retries 5 s → 30 s → 2 min → 10 min (5 tries). Inbound jobs take the user's Redis lock (`lock:user:<id>`); a busy user's job is pushed back 2 s. Max-plan jobs get higher priority.
 
@@ -305,7 +321,7 @@ Every call except `/healthz` needs `X-Bridge-Secret`. The Bridge deduplicates by
 
 ## D.6 Container → Platform MCP
 
-The agent (Hermes or Claude Code) is configured with our MCP server URL `http://api:8080/mcp` and `Authorization: Bearer <container token>`. The api hashes the token, finds the user in `sandbox_tokens`, and every tool runs for that user only. Each call is audit-logged and Touches the container. Files for the agent are served at `/mcp/files/<id>?exp&sig` (signed, 1 hour) because `/mcp` is the only api path the proxy allows.
+The agent (Hermes or Claude Code) is configured with our MCP server URL `http://api:8080/mcp` and `Authorization: Bearer <container token>`. The api hashes the token, finds the user in `sandbox_tokens`, and every tool runs for that user only. Each call is audit-logged and Touches the container. Files for the agent are served at `/mcp/files/<id>?exp&sig` (signed, 1 hour) because `/mcp` was the only api path the proxy allowed (the git gateway's three paths under `/git/` were added later). Their URLs are built from the api's internal address, so `/mcp` and `/git` need not be public: Caddy answers 404 for both.
 
 ---
 
@@ -472,7 +488,7 @@ Stop and remove the container, remove the volume (all user data), remove the egr
 
 # Part F — What is left to test
 
-Nothing below has run yet because Docker isn't on the dev machine. Plan: one AWS `m7i-flex.large` (8 GB) for about a week (~$18 of credits running 24/7).
+This table was written before the AWS test deployment of 2026-09-30 and 2026-10-01, which ran several of these for real; `docs/aws-setup.md` records what was proven and what is still open. Docker isn't on the dev machine. The launch basics of 2026-10-03 add rows 13 to 15.
 
 | # | Test | How | Pass when |
 |---|---|---|---|
@@ -488,6 +504,9 @@ Nothing below has run yet because Docker isn't on the dev machine. Plan: one AWS
 | 10 | Automations | A 2-minute reminder, restart the worker | Fires once, on time |
 | 11 | Backup + restore | `scripts/restore-test.sh` | Restore works |
 | 12 | Load at the cap | `pnpm tsx scripts/load-test.ts` | Awake count never exceeds the cap |
+| 13 | `/mcp` and `/git` closed | After a deploy: `curl -i https://<domain>/mcp` and `/git/x/y/info/refs` | 404 from outside; `/healthz` 200; a turn still works |
+| 14 | Connection check | `scripts/dev-user.ts connect-app` with no web app and no webhook | The connection turns `active` within a minute of approving |
+| 15 | App-action charge with real Composio | Ask the agent to read, then to send | The read is free, the send costs 1 credit; check the `readOnlyHint` tag on real tools |
 
 **Open decisions and known gaps**
 - Confirm with Anthropic: Commercial Terms, our UI offering only the Claude-plan sign-in, relaying the pasted code, telemetry off.
@@ -497,6 +516,8 @@ Nothing below has run yet because Docker isn't on the dev machine. Plan: one AWS
 - Polar has no dispute webhook: a dispute Polar does not refund itself is handled by hand (admin credit adjustment + flag).
 - WhatsApp templates must be approved (one body variable; approval buttons in Approve, Reject order).
 - `composio_triggers` table exists but isn't used.
+- Browser use is planned for launch on the Max plan (2 credits per minute) and is not built yet. Open: a browser inside each user's container, or a hosted browser service driven by platform tools.
+- Textcrew AI needs a model provider key on the server, and the models to offer are not chosen yet.
 
 ---
 
@@ -524,7 +545,7 @@ Nothing below has run yet because Docker isn't on the dev machine. Plan: one AWS
 beckend/
 ├── openapi/openapi.yaml     THE REST CONTRACT. Change this first, then run `pnpm openapi:gen`.
 ├── proto-gen/vm/v1/vm_pb.ts gRPC client code, GENERATED from ../vm-manager/proto (`pnpm proto:gen`). Don't edit.
-├── migrations/              SQL migrations 0000…0007 (generated by `pnpm db:generate` from the schema files).
+├── migrations/              SQL migrations 0000…0008 (generated by `pnpm db:generate` from the schema files).
 ├── src/
 │   ├── api/                 the api process (HTTP)
 │   ├── worker/              the worker process (jobs)
@@ -532,7 +553,7 @@ beckend/
 │   ├── shared/              small helpers every module uses
 │   └── wiring.ts            connects modules to each other at startup
 ├── test/                    automated tests (one file per phase / feature) + fakes for outside services
-├── scripts/                 migrate, copy spec to frontend, restore test, load test
+├── scripts/                 migrate, copy spec to frontend, restore test, load test, dev-user (ops script)
 ├── infra/                   docker-compose and configs for Caddy, Postgres, LiteLLM, Squid
 └── docs/                    mvp-hld.md, build-report.md, system-design.md, security-checklist.md, deployment.md
 ```
@@ -574,11 +595,11 @@ Each module folder has a `schema.ts` (its tables, Drizzle) and plain files of fu
 |---|---|
 | **auth** | `session.ts` verify Clerk JWT · `users.ts` user rows · `provision.ts` create user on sign-up / first sign-in · `jobs.ts` Clerk webhook job · `webhooks.ts` svix check · `links.ts` link codes + chat links · `waitlist.ts` waitlist + discount offer |
 | **events** | `intake.ts` **ingestEvent** (save event + add job, deduplicated) · `queues.ts` the 4 queues + retry settings · `cleanup.ts` old events |
-| **channels** | `adapters/telegram.ts`, `whatsapp.ts`, `sendblue.ts`, `web.ts` parse incoming + send outgoing per provider · `adapters/index.ts` adapter registry · `inbound.ts` payload → one normalized message · `outbound.ts` **queueOutbound** + the send job · `messages.ts` message rows · `media.ts` download media, voice → text · `files.ts` attachments + signed URLs · `stream.ts` SSE via Redis pub/sub · `status.ts` delivery receipts · `text-buttons.ts` yes/no replies · `register.ts` registers WhatsApp/Sendblue · `types.ts` shared types |
+| **channels** | `adapters/telegram.ts`, `whatsapp.ts`, `sendblue.ts`, `web.ts` parse incoming + send outgoing per provider · `adapters/index.ts` adapter registry · `inbound.ts` payload → one normalized message · `outbound.ts` **queueOutbound** + the send job · `messages.ts` message rows · `media.ts` download media, voice → text · `files.ts` attachments + signed URLs · `purchase-links.ts` no purchase links on Telegram · `stream.ts` SSE via Redis pub/sub · `status.ts` delivery receipts · `text-buttons.ts` yes/no replies · `register.ts` registers WhatsApp/Sendblue · `types.ts` shared types |
 | **orchestrator** | `process-message.ts` **the inbound job** (link, approvals, coupons, media, then a turn) · `turn.ts` **runTurn** (credit check → routing → wake → deliver) · `routing.ts` Jev simple/task/spam · `vm.ts` **the gRPC client** · `sandbox.ts` ensureSandbox, token → user, agent status, Touch · `lifecycle.ts` onboard/delete jobs · `approvals.ts` approvals · `agent-settings.ts` Hermes vs Claude Code, AI access · `claude-login.ts` Claude sign-in calls · `lock.ts` per-user Redis lock |
 | **platform-mcp** | `server.ts` builds the MCP server per request, audits + Touches every call · `registry.ts` how tools are defined · `tools/core.ts` send_message, get_profile · `tools/apps.ts` list/run app actions, request_approval · `tools/automations.ts` reminder/automation tools |
-| **integrations** | `catalog.ts` the 25 apps + risky-action detection · `composio.ts` Composio SDK wrapper · `apps.ts` connections · `mcp-servers.ts` user MCP servers · `byok.ts` own API keys · `jobs.ts` allowlist sync + Composio connection events · `tables.ts`, `schema.ts` tables |
-| **billing** | `plans.ts` plans, prices, limits, credit maths, 90-day expiry · `credits.ts` **grants + ledger**, spending order, charges, expiry, reversals · `usage.ts` **sync-usage** (charging) · `litellm.ts` per-user keys + budgets · `enforce.ts` after credits change (budget, hooks) · `hooks.ts` "depleted"/"added" listeners · `polar.ts` checkout, cancel + webhook check · `polar-events.ts` order/subscription/refund events · `subscriptions.ts` subscription rows · `coupons.ts` coupons · `chat.ts` coupon codes sent in chat · `free-credits.ts` monthly free-credit cap + abuse stats · `onboard.ts` sign-up grant + key · `admin.ts` admin adjustments · `models.ts` model checks · `balance.ts` balance summary · `jobs.ts` billing jobs + schedules · `index.ts` what other modules may import |
+| **integrations** | `catalog.ts` the 25 apps + risky-action detection + whether an action changes something · `composio.ts` Composio SDK wrapper · `apps.ts` connections + scheduling the connection check · `mcp-servers.ts` user MCP servers · `byok.ts` own API keys · `jobs.ts` allowlist sync + Composio connection events + the check-connection job · `tables.ts`, `schema.ts` tables |
+| **billing** | `plans.ts` plans, prices, limits, credit maths, 90-day expiry · `credits.ts` **grants + ledger**, spending order, charges, expiry, reversals · `usage.ts` **sync-usage** (charging) · `app-actions.ts` the 1-credit app-action charge, its refund and its usage numbers · `litellm.ts` per-user keys + budgets · `enforce.ts` after credits change (budget, hooks) · `hooks.ts` "depleted"/"added" listeners · `polar.ts` checkout, cancel + webhook check · `polar-events.ts` order/subscription/refund events · `subscriptions.ts` subscription rows · `coupons.ts` coupons · `chat.ts` coupon codes sent in chat · `free-credits.ts` monthly free-credit cap + abuse stats · `onboard.ts` sign-up grant + key · `admin.ts` admin adjustments · `models.ts` model checks · `balance.ts` balance summary · `jobs.ts` billing jobs + schedules · `index.ts` what other modules may import |
 | **automations** | `automations.ts` create/list/pause/delete, timers, limits · `jobs.ts` fire an automation as a turn, app-event triggers, auto-pause |
 | **admin** | `audit.ts` audit log · `alerts.ts` alert logs + webhook · `metrics.ts` Prometheus text · `health.ts` health-check job · `backup.ts` nightly backup |
 
@@ -586,7 +607,7 @@ Each module folder has a `schema.ts` (its tables, Drizzle) and plain files of fu
 
 | File | What it does |
 |---|---|
-| `config.ts` | Reads + validates every env var with Zod (startup fails loudly if wrong) |
+| `config.ts` | Reads + validates every env var with Zod (startup fails loudly if wrong); `isChannelEnabled` for the channels switch |
 | `db/client.ts`, `db/schema.ts`, `db/migrate.ts` | Postgres connection, all tables re-exported for Drizzle, run migrations |
 | `redis.ts` | Redis connections |
 | `errors.ts` | `AppError` → the spec's `{ error: { code, message } }` shape |
@@ -597,7 +618,7 @@ Each module folder has a `schema.ts` (its tables, Drizzle) and plain files of fu
 
 ### `src/wiring.ts` — connecting the modules
 
-Runs once at startup in both processes. It plugs modules into each other's **hooks**, e.g.: billing's `hasCredits` into the turn · Jev routing into the turn · approval replies and coupon codes into the inbound path · billing "balance depleted" → pause automations · sandbox config (LiteLLM key, MCP servers) into container creation · onboarding/deletion steps. This is why modules don't import each other in circles.
+Runs once at startup in both processes. It plugs modules into each other's **hooks**, e.g.: billing's `hasCredits` into the turn · billing's app-action charge into `run_app_action` · Jev routing into the turn · approval replies and coupon codes into the inbound path · billing "balance depleted" → pause automations · sandbox config (LiteLLM key, MCP servers) into container creation · onboarding/deletion steps. This is why modules don't import each other in circles.
 
 ## G.4 Follow one Telegram message through the files
 
@@ -605,7 +626,7 @@ Runs once at startup in both processes. It plugs modules into each other's **hoo
 POST /webhooks/telegram
  └ api/middleware.ts            request id, log, IP, rate limit
  └ api/router.ts                operation webhookTelegram (public, raw body)
- └ api/routes/webhooks.ts       verifyTelegramSecret() → findLink() → ingestEvent() → 200
+ └ api/routes/webhooks.ts       Telegram switched on? → verifyTelegramSecret() → findLink() → ingestEvent() → 200
     └ modules/events/intake.ts  INSERT events (unique) → queue('inbound').add('process-message', {jobId: eventId})
 
 worker
@@ -626,7 +647,7 @@ worker
  … inside the container the agent calls /mcp:
  └ api/mcp.ts → platform-mcp/server.ts → tools/core.ts send_message
       channels/outbound.ts      queueOutbound() → message row + 'send-message' job
- └ worker: channels/outbound.ts handleSendMessage → adapters/telegram.ts send()
+ └ worker: channels/outbound.ts handleSendMessage → adapters/telegram.ts send()   (purchase links taken out)
  └ after turn_done: billing/usage.ts syncUsageForUser() → channels/stream.ts publish('credits.updated')
 ```
 
@@ -689,7 +710,7 @@ vm-manager/
 | File | What it does |
 |---|---|
 | `infra/docker-compose.yml` | The whole stack on one server: networks `edge`/`platform`/`sandbox`, Caddy, Postgres, Redis, LiteLLM, Squid, vm-manager, agent-image build, api + worker (`--profile app`), egress test (`--profile egress-test`) |
-| `infra/caddy/Caddyfile` | HTTPS reverse proxy to the api (SSE-friendly) |
+| `infra/caddy/Caddyfile` | HTTPS reverse proxy to the api (SSE-friendly); 404 for `/mcp*` and `/git/*` |
 | `infra/postgres/init.sql` | Creates the extra databases `litellm` and `vm_manager` |
 | `infra/litellm/config.yaml` | Model names (`cheap`, `claude`, `gpt`, `whisper`) and fallbacks |
 | `infra/egress-proxy/squid.conf` | Base proxy rules + `include allowlists/*.conf` (per-user files from the vm-manager) |
@@ -699,6 +720,7 @@ vm-manager/
 | `scripts/openapi-sync.mjs` | Copy the spec to the frontend (`pnpm openapi:sync`) |
 | `scripts/restore-test.sh` | Restore the latest backup into a scratch DB and check it |
 | `scripts/load-test.ts` | Many chats at once; checks the awake cap holds |
+| `scripts/dev-user.ts` | Ops script for a live test without the web app: create a user, link code, Claude sign-in, connect an app, status (which asks Composio about pending connections) |
 
 ## G.8 `beckend/test/`
 
@@ -713,7 +735,8 @@ vm-manager/
 | `phase6-*` | WhatsApp, Sendblue, media + voice, Jev routing, real HTTP clients vs a stand-in |
 | `phase7-*` | Automations across restart + Redis wipe |
 | `phase8-*` | Backups, metrics, rate limits, health check, schedules |
-| `integration-billing`, `waitlist`, `waitlist-offer`, `claude-plan` | Cross-module billing, waitlist, discount, Claude plan |
+| `integration-billing`, `waitlist`, `waitlist-offer`, `claude-plan`, `git-gateway`, `dev-user-script` | Cross-module billing, waitlist, discount, Claude plan, git gateway, the ops script |
+| `channels-switch`, `app-action-charge`, `app-connections`, `telegram-no-purchase-links`, `infra-caddy` | The launch basics of 2026-10-03: the channels switch, the app-action charge, the connection check job, the Telegram rule, the Caddy rule |
 
 Run everything: `pnpm lint && pnpm typecheck && pnpm test` (backend) · `go vet ./... && go test ./...` (vm-manager) · `python3 -m unittest discover -s tests -t .` (in `agent-image/`).
 
@@ -735,3 +758,6 @@ Run everything: `pnpm lint && pnpm typecheck && pnpm test` (backend) · `go vet 
 | **Job** | A BullMQ task in Redis; its id is the event id |
 | **Grant / ledger** | Credits come in grants with an expiry; every change is a ledger row |
 | **gRPC** | Typed remote calls over HTTP/2 between the backend and the vm-manager, defined in `vm.proto` |
+| **App action** | One call to a connected app through Composio. One that changes something costs 1 credit; one that only reads is free |
+| **Channels switch** | `ENABLED_CHANNELS`: which of Telegram, web, WhatsApp and iMessage are on |
+| **Textcrew AI** | The platform's own AI offer: a rented model behind LiteLLM, paid in credits |

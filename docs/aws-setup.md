@@ -336,7 +336,7 @@ aws ec2 authorize-security-group-ingress --group-id sg-0a41006d88aefe928 --proto
 **Security**
 
 - **The root user is used for everything.** Create an IAM user with MFA for daily work and turn on MFA for root.
-- **`/mcp` and `/git` are reachable from the internet.** Both require the container token, but only the user containers need them. They can be blocked at Caddy.
+- **`/mcp` and `/git` are reachable from the internet.** Both require the container token, but only the user containers need them. They can be blocked at Caddy. **Fixed in code on 2026-10-03** (Caddy answers 404 for both); it takes effect at the next deploy and has not been tried on the server.
 - **No off-server backups.** `BACKUP_UPLOAD_CMD` is empty, so backups stay on the same disk as the data. There is also no EBS snapshot.
 
 **Not proven yet**
@@ -347,7 +347,7 @@ aws ec2 authorize-security-group-ingress --group-id sg-0a41006d88aefe928 --proto
 
 **Known gaps**
 
-- **App connections stay "pending" without the web app** (problem 8). Two things would update them and neither is in place: the web app's app list, and Composio's webhook (`COMPOSIO_WEBHOOK_SECRET` is empty, so no webhook is set up). The server should also ask Composio itself.
+- **App connections stay "pending" without the web app** (problem 8). Two things would update them and neither is in place: the web app's app list, and Composio's webhook (`COMPOSIO_WEBHOOK_SECRET` is empty, so no webhook is set up). The server should also ask Composio itself. **Fixed in code on 2026-10-03** (the `check-connection` job); it takes effect at the next deploy.
 - **No platform model key, but the server is in `platform` mode.** `AI_ACCESS_MODE=platform` means a user who brings no AI of their own is served by Hermes on platform credits. There is no OpenRouter, Anthropic or OpenAI key on the server, so that turn fails (and one integration test fails for the same reason). Only a user who connects their Claude plan gets answers. Either add a provider key, or set `AI_ACCESS_MODE=own_only` so such users are told to connect their own AI instead of getting an error.
 - **No alert channel.** `ALERT_WEBHOOK_URL` is empty, so failures such as the nightly backup are only in the logs.
 - **No web app, no Polar,** and no WhatsApp or iMessage.

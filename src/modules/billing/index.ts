@@ -1,4 +1,5 @@
 // The billing module's public surface: other modules import from here only.
+export { chargeAppAction } from './app-actions.ts';
 export { getBalanceSummary, hasCredits, type BalanceSummary } from './balance.ts';
 export { onBalanceDepleted, onCreditsAdded, type BalanceListener } from './hooks.ts';
 export { getLiteLLMKey } from './litellm.ts';

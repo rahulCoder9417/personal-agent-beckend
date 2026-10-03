@@ -12,6 +12,7 @@ import { logger } from '../../shared/logger.ts';
 import { getUser } from '../auth/users.ts';
 import { hasByokKey } from '../integrations/byok.ts';
 import { vm } from '../orchestrator/vm.ts';
+import { restoreAppActionChargesInTx } from './app-actions.ts';
 import { chargeInTx, getBalance, lockUserCredits, restoreChargesInTx } from './credits.ts';
 import { afterCreditsAdded } from './enforce.ts';
 import { fireBalanceDepleted } from './hooks.ts';
@@ -209,7 +210,8 @@ export async function syncAllUsage(
 
 /**
  * HLD 7.2: a failed turn caused by us is not charged. Syncs first (so the turn is charged), works
- * out what the turn cost, and gives that back to the grants it came from. Idempotent per key.
+ * out what the turn cost, and gives that back to the grants it came from, together with the
+ * credits for app actions that ran in the turn. Idempotent per key.
  */
 export async function reverseTurn(
   userId: string,
@@ -248,14 +250,20 @@ export async function reverseTurn(
         lt(usagePeriods.periodStart, turn.endedAt),
       ),
     );
-  const { restored } = await db().transaction((tx) =>
-    restoreChargesInTx(tx, userId, {
+  const restored = await db().transaction(async (tx) => {
+    const usage = await restoreChargesInTx(tx, userId, {
       chargeKeys: periods.map((p) => usageKey(userId, p.start)),
       amount: ai + awake + browser,
       idempotencyKey: `reversal:${turn.idempotencyKey}`,
       description: 'Failed turn refunded',
-    }),
-  );
+    });
+    const appActions = await restoreAppActionChargesInTx(tx, userId, {
+      startedAt: turn.startedAt,
+      endedAt: turn.endedAt,
+      idempotencyKey: `reversal:${turn.idempotencyKey}:app-actions`,
+    });
+    return usage.restored + appActions;
+  });
   if (restored > 0) await afterCreditsAdded(userId);
   return { restored };
 }

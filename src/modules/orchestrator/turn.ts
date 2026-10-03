@@ -2,6 +2,7 @@
 import { Code, ConnectError } from '@connectrpc/connect';
 import { config } from '../../shared/config.ts';
 import { logger } from '../../shared/logger.ts';
+import { audit } from '../admin/audit.ts';
 import { getActiveUser } from '../auth/users.ts';
 import { signedFileUrl } from '../channels/files.ts';
 import { setMessageStatus } from '../channels/messages.ts';
@@ -11,6 +12,7 @@ import type { MediaRef } from '../channels/schema.ts';
 import { publish } from '../channels/stream.ts';
 import type { Channel } from '../channels/types.ts';
 import { fallBackIfClaudeSignedOut, syncRuntimeAfterWake } from './agent-settings.ts';
+import { crewOfProgress } from './crew.ts';
 import { ensureSandbox } from './sandbox.ts';
 import { DeliverEventType, DeliverKind, planPriority, vm } from './vm.ts';
 
@@ -88,6 +90,43 @@ const KIND: Record<TurnKind, DeliverKind> = {
 /** Retryable: the job waits (server full, vm-manager down). */
 export class RetryableTurnError extends Error {}
 
+/** A progress line is short; anything longer is cut. */
+export const PROGRESS_MAX_CHARS = 300;
+/** Crew lines saved to the activity log per turn (the rest are only streamed). */
+export const CREW_LINES_PER_TURN = 30;
+
+/**
+ * A progress line from the Bridge (HLD 0.7), e.g. `Scout: reading 4 pages` or `using web_search`.
+ * It goes to the web chat's live stream. Nothing is sent to Telegram or any other chat for it: a
+ * chat only gets what the agent itself sends. A line that names a crew member is also saved to
+ * the activity log. Never fails the turn.
+ */
+async function reportProgress(
+  input: TurnInput,
+  ev: { message: string; atUnixMs?: bigint },
+  turn: { crewLines: number },
+): Promise<void> {
+  const text = ev.message.trim().slice(0, PROGRESS_MAX_CHARS);
+  if (!text) return;
+  const crew = crewOfProgress(text);
+  const at = ev.atUnixMs ? new Date(Number(ev.atUnixMs)) : new Date();
+  try {
+    await publish(input.userId, 'agent.progress', { text, crew, at: at.toISOString() });
+    if (crew && turn.crewLines < CREW_LINES_PER_TURN) {
+      turn.crewLines++;
+      await audit({
+        userId: input.userId,
+        actor: 'agent',
+        action: 'crew_progress',
+        summary: text,
+        details: { crew, deliveryId: input.deliveryId },
+      });
+    }
+  } catch (err) {
+    logger().debug({ userId: input.userId, err: String(err) }, 'progress line dropped');
+  }
+}
+
 export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
   const { userId } = input;
   const log = logger().child({ userId, deliveryId: input.deliveryId });
@@ -135,6 +174,7 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
   await syncRuntimeAfterWake(userId, woke.sandbox);
 
   const startedAt = new Date();
+  const progress = { crewLines: 0 };
   let outcome: TurnOutcome | null = null;
   const stream = vm().deliver({
     userId,
@@ -162,6 +202,9 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
           state: 'busy',
           lastActiveAt: new Date().toISOString(),
         });
+        break;
+      case DeliverEventType.WORKING:
+        await reportProgress(input, ev, progress);
         break;
       case DeliverEventType.TURN_DONE:
         outcome = 'done';

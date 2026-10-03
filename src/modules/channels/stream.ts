@@ -9,6 +9,7 @@ export type StreamEventType =
   | 'approval.created'
   | 'approval.resolved'
   | 'agent.status'
+  | 'agent.progress'
   | 'credits.updated'
   | 'automation.updated';
 

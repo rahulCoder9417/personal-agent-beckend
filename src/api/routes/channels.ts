@@ -1,5 +1,6 @@
 import { createLinkCode, listLinks, maskDisplayId, unlink } from '../../modules/auth/links.ts';
-import { badRequest, notFound } from '../../shared/errors.ts';
+import { config, isChannelEnabled } from '../../shared/config.ts';
+import { badRequest, channelDisabled, notFound } from '../../shared/errors.ts';
 import { enforce } from '../../shared/rate-limit.ts';
 import { route } from '../router.ts';
 
@@ -23,6 +24,8 @@ export const channelRoutes = [
               }
             : {}),
         })),
+        // The channels that are switched on; the web app offers only these (HLD 0.3).
+        available: config().ENABLED_CHANNELS,
       },
       200,
     );
@@ -31,6 +34,8 @@ export const channelRoutes = [
   route('createLinkCode', async (c, { body }) => {
     const user = c.get('user');
     if (body.channel === 'web') throw badRequest('The web app needs no linking');
+    // Checked before the rate limit, so asking for a switched-off channel doesn't use it up.
+    if (!isChannelEnabled(body.channel)) throw channelDisabled(body.channel);
     await enforce({ key: `linkcode:user:${user.id}`, max: 10, windowSeconds: 3600 });
     const lc = await createLinkCode(user.id, body.channel);
     return c.json(

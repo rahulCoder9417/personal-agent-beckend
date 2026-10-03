@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isChannelEnabled } from '../../../shared/config.ts';
 import { getActiveUser } from '../../auth/users.ts';
 import { ownsChat } from '../../auth/links.ts';
 import { lastInboundSession } from '../../channels/messages.ts';
@@ -12,6 +13,8 @@ export async function resolveSession(userId: string, sessionKey?: string): Promi
   const parsed = parseSessionKey(key);
   if (!parsed) throw new ToolError(`Unknown session "${key}"`);
   if (parsed.channel === 'web') return 'web';
+  if (!isChannelEnabled(parsed.channel))
+    throw new ToolError(`${parsed.channel} is switched off; use the web session instead`);
   const link = await ownsChat(userId, parsed.channel, parsed.externalChatId ?? '');
   if (!link) throw new ToolError(`Unknown session "${key}"`);
   if (link.blocked) throw new ToolError('The user blocked this chat; use the web session instead');

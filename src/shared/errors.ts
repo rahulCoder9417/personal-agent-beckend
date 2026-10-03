@@ -32,6 +32,17 @@ export const notFound = (message = 'Not found') => new AppError(404, 'not_found'
 export const conflict = (message: string) => new AppError(409, 'conflict', message);
 export const planLimit = (message: string, details?: Record<string, unknown>) =>
   new AppError(403, 'plan_limit', message, details);
+const CHANNEL_LABELS: Record<string, string> = {
+  telegram: 'Telegram',
+  whatsapp: 'WhatsApp',
+  imessage: 'iMessage',
+  web: 'Web chat',
+};
+/** The channel is switched off for this deployment (ENABLED_CHANNELS, HLD 0.3). */
+export const channelDisabled = (channel: string) =>
+  new AppError(403, 'channel_disabled', `${CHANNEL_LABELS[channel] ?? channel} is switched off`, {
+    channel,
+  });
 export const outOfCredits = () =>
   new AppError(
     402,

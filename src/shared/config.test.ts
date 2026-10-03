@@ -47,4 +47,22 @@ describe('loadConfig', () => {
     expect(loadConfig({ ...base, AI_ACCESS_MODE: 'own_only' }).AI_ACCESS_MODE).toBe('own_only');
     expect(() => loadConfig({ ...base, AI_ACCESS_MODE: 'free' })).toThrow(/AI_ACCESS_MODE/);
   });
+
+  it('ENABLED_CHANNELS defaults to Telegram + web and accepts only known channel names', () => {
+    expect(loadConfig(base).ENABLED_CHANNELS).toEqual(['telegram', 'web']);
+    // Empty (as in a blank .env line) means unset: the default applies.
+    expect(loadConfig({ ...base, ENABLED_CHANNELS: '' }).ENABLED_CHANNELS).toEqual([
+      'telegram',
+      'web',
+    ]);
+    expect(
+      loadConfig({ ...base, ENABLED_CHANNELS: ' Telegram, web ,whatsapp,imessage,web' })
+        .ENABLED_CHANNELS,
+    ).toEqual(['telegram', 'web', 'whatsapp', 'imessage']);
+    expect(loadConfig({ ...base, ENABLED_CHANNELS: 'web' }).ENABLED_CHANNELS).toEqual(['web']);
+    expect(() => loadConfig({ ...base, ENABLED_CHANNELS: 'telegram,sms' })).toThrow(
+      /ENABLED_CHANNELS.*unknown channel sms/,
+    );
+    expect(() => loadConfig({ ...base, ENABLED_CHANNELS: ' , ' })).toThrow(/ENABLED_CHANNELS/);
+  });
 });

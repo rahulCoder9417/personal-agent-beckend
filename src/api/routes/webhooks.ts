@@ -7,9 +7,11 @@ import {
 } from '../../modules/channels/adapters/telegram.ts';
 import { ingestEvent, recordEventOnce } from '../../modules/events/intake.ts';
 import { composio } from '../../modules/integrations/composio.ts';
+import { isChannelEnabled } from '../../shared/config.ts';
 import { route } from '../router.ts';
 
 // Every webhook: verify the signature on the raw body → save the event → add a job → 200.
+// A chat webhook whose channel is switched off answers 200 and does nothing (HLD 0.3).
 export const webhookRoutes = [
   route('webhookClerk', async (c, { rawBody }) => {
     const payload = verifyClerkWebhook(rawBody, {
@@ -29,6 +31,7 @@ export const webhookRoutes = [
   }),
 
   route('webhookTelegram', async (c, { rawBody }) => {
+    if (!isChannelEnabled('telegram')) return c.body(null, 200);
     if (!verifyTelegramSecret(c.req.header('x-telegram-bot-api-secret-token')))
       throw webhookUnauthorized();
     const update = JSON.parse(rawBody) as TelegramUpdate;

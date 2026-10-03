@@ -1,4 +1,5 @@
 import type { Job } from 'bullmq';
+import { isChannelEnabled } from '../../shared/config.ts';
 import { db } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import { logger } from '../../shared/logger.ts';
@@ -103,6 +104,12 @@ export async function handleSendMessage(job: Job): Promise<unknown> {
     await setMessageStatus(msg.id, 'failed');
     return null;
   }
+  // Nothing is ever sent to a channel that is switched off (HLD 0.3).
+  if (!isChannelEnabled(target.channel)) {
+    logger().warn({ userId: msg.userId, channel: target.channel }, 'channel is switched off');
+    await setMessageStatus(msg.id, 'failed');
+    return null;
+  }
   try {
     const content = await transform(msg, {
       text: msg.text,
@@ -131,6 +138,7 @@ export async function handleSendRaw(job: Job): Promise<unknown> {
     externalChatId: string;
     text: string;
   };
+  if (!isChannelEnabled(d.channel)) return null;
   try {
     await adapterFor(d.channel).send(d.externalChatId, { text: d.text });
   } catch (err) {

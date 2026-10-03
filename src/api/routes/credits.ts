@@ -1,3 +1,4 @@
+import { appActionCreditsFor } from '../../modules/billing/app-actions.ts';
 import { getBalance, listBalanceGrants, listLedger } from '../../modules/billing/credits.ts';
 import { listUsagePeriods } from '../../modules/billing/usage.ts';
 import { badRequest } from '../../shared/errors.ts';
@@ -27,15 +28,20 @@ export const creditRoutes = [
     const from = new Date(query.from);
     const to = new Date(query.to);
     if (!(from < to)) throw badRequest('`from` must be before `to`');
-    const items = (await listUsagePeriods(c.get('user').id, from, to)).map(toUsagePeriod);
-    const sum = (k: 'aiCredits' | 'awakeCredits' | 'toolCredits' | 'totalCredits') =>
-      items.reduce((n, p) => n + p[k], 0);
+    const userId = c.get('user').id;
+    const periods = await listUsagePeriods(userId, from, to);
+    const appActions = await appActionCreditsFor(userId, periods);
+    const items = periods.map((p, i) => toUsagePeriod(p, appActions[i] ?? 0));
+    const sum = (
+      k: 'aiCredits' | 'awakeCredits' | 'appActionCredits' | 'toolCredits' | 'totalCredits',
+    ) => items.reduce((n, p) => n + p[k], 0);
     return c.json(
       {
         items,
         totals: {
           aiCredits: sum('aiCredits'),
           awakeCredits: sum('awakeCredits'),
+          appActionCredits: sum('appActionCredits'),
           toolCredits: sum('toolCredits'),
           totalCredits: sum('totalCredits'),
         },

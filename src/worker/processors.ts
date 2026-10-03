@@ -9,7 +9,11 @@ import {
 } from '../modules/automations/jobs.ts';
 import { handleSendMessage, handleSendRaw } from '../modules/channels/outbound.ts';
 import { handleMessageStatus } from '../modules/channels/status.ts';
-import { handleComposioEvent, handleSyncAllowlist } from '../modules/integrations/jobs.ts';
+import {
+  handleCheckConnection,
+  handleComposioEvent,
+  handleSyncAllowlist,
+} from '../modules/integrations/jobs.ts';
 import { expireApprovals, handleProcessApproval } from '../modules/orchestrator/approvals.ts';
 import { handleDeleteUser, handleOnboardUser } from '../modules/orchestrator/lifecycle.ts';
 import { handleProcessMessage, handleWebMessage } from '../modules/orchestrator/process-message.ts';
@@ -40,6 +44,7 @@ export function processors(): Processors {
       'delete-user': handleDeleteUser,
       'sync-allowlist': handleSyncAllowlist,
       'composio-event': handleComposioEvent,
+      'check-connection': handleCheckConnection,
       'expire-approvals': async () => expireApprovals(),
       cleanup: handleCleanup,
       backup: handleBackup,

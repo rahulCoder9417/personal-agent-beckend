@@ -17,7 +17,11 @@ import { adjustCredits } from '../src/modules/billing/admin.ts';
 import { getBalance } from '../src/modules/billing/index.ts';
 import { creditExpiry, PLAN_IDS, type PlanId } from '../src/modules/billing/plans.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
-import { listConnections, startConnect } from '../src/modules/integrations/apps.ts';
+import {
+  listConnections,
+  refreshPendingConnections,
+  startConnect,
+} from '../src/modules/integrations/apps.ts';
 import { getAgentSettings } from '../src/modules/orchestrator/agent-settings.ts';
 import { completeClaudeLogin, startClaudeLogin } from '../src/modules/orchestrator/claude-login.ts';
 import { handleOnboardUser } from '../src/modules/orchestrator/lifecycle.ts';
@@ -139,10 +143,15 @@ export async function devUser(argv: string[]): Promise<string[]> {
     case 'connect-app': {
       const user = await activeUser(flags);
       const url = await startConnect(user.id, user.plan, need(flags, 'app'));
-      return [`open ${url}`];
+      return [
+        `open ${url}`,
+        'the worker checks Composio over the next minutes; `status` also asks right away',
+      ];
     }
     case 'status': {
       const user = await activeUser(flags);
+      // Ask Composio about connections that are still pending, so this shows the current state.
+      await refreshPendingConnections(user.id);
       const [balance, agent, settings, links, conns] = await Promise.all([
         getBalance(user.id),
         getAgentStatus(user.id),

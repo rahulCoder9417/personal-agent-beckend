@@ -35,7 +35,7 @@ Keep the status table in section 3 current: update it in the same commit as the 
 
 | # | Package | Repos | Status |
 |---|---|---|---|
-| W1a | **Backend launch basics:** design doc and API contract first; channels setting (Telegram and web on, the rest off) exposed to the apps; 1 credit per changing app action; app connections no longer stuck on "pending"; no purchase links in Telegram; `/mcp` and `/git` blocked from the public internet; `system-design.md` and `build-report.md` updated | `beckend` | In progress (started 2026-10-03) |
+| W1a | **Backend launch basics:** design doc and API contract first; channels setting (Telegram and web on, the rest off) exposed to the apps; 1 credit per changing app action; app connections no longer stuck on "pending"; no purchase links in Telegram; `/mcp` and `/git` blocked from the public internet; `system-design.md` and `build-report.md` updated | `beckend` | **Done 2026-10-03.** Not deployed: the server is stopped, and the Caddy rule has not been tried against a live Caddy |
 | W1b | **Landing page copy:** Telegram and web only; Polar instead of Dodo; crew of four; three AI options; new credit wording; named apps; coding and PR-review use cases; roadmap | `landing-page` | In progress (started 2026-10-03) |
 | W2a | **Web app update:** pull the new contract; Telegram-only linking; three AI choices; credit wording; crew page; installable on phones | `user-frontend-web` | Not started. Needs W1a and a GitHub remote |
 | W2b | **Crew and PR review:** Byte, Patch and Scout defined once and passed to both engines; Scout's search, page reading and browser; activity shows who did what; the PR review flow with its endpoints | `beckend`, `vm-manager` | Not started. Needs W1a |

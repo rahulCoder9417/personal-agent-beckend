@@ -25,6 +25,7 @@ export function createPlatformMcpServer(ctx: ToolContext): McpServer {
             action: tool.name,
             summary: tool.summarize?.(args as never, result) ?? tool.name,
             details: { args: redactArgs(args) },
+            creditsCharged: tool.creditsCharged?.(args as never, result) ?? null,
           });
           return { content: [{ type: 'text' as const, text: JSON.stringify(result ?? null) }] };
         } catch (err) {

@@ -13,6 +13,8 @@ export interface PlatformTool<S extends z.ZodRawShape = z.ZodRawShape> {
   run(ctx: ToolContext, args: z.infer<z.ZodObject<S>>): Promise<unknown>;
   /** One-line summary for the audit log. */
   summarize?(args: z.infer<z.ZodObject<S>>, result: unknown): string;
+  /** Credits this call cost, for the activity log (`creditsCharged`). Omit when a tool never charges. */
+  creditsCharged?(args: z.infer<z.ZodObject<S>>, result: unknown): number | null;
 }
 
 export class ToolError extends Error {}

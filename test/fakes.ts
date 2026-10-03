@@ -4,6 +4,7 @@ import { Code, ConnectError } from '@connectrpc/connect';
 import { setLiteLLMClient } from '../src/modules/billing/litellm.ts';
 import { sha256Hex } from '../src/shared/crypto.ts';
 import { setTelegramApi } from '../src/modules/channels/adapters/telegram.ts';
+import type { ComposioAccount } from '../src/modules/integrations/composio.ts';
 import { setVmClient, type VmClient } from '../src/modules/orchestrator/vm.ts';
 import { AgentRuntime, DeliverEventType, SandboxState } from '../proto-gen/vm/v1/vm_pb.ts';
 import { testApp } from './helpers.ts';
@@ -77,6 +78,8 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
     claudeError: null as Error | null,
     /** The next delivered turn ends with this ERROR instead of TURN_DONE (used once). */
     turnError: null as { message: string; platformFault: boolean } | null,
+    /** Like turnError, but the agent runs first (it may have acted before the turn failed). */
+    turnErrorAfterAgent: null as { message: string; platformFault: boolean } | null,
     /** Awake/browser seconds GetUsage reports per user. */
     usage: new Map<string, { awakeSeconds: bigint; browserSeconds: bigint }>(),
   };
@@ -128,6 +131,12 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
         return;
       }
       await state.agent(req, (tool, args) => mcpCall(token, tool, args));
+      const late = state.turnErrorAfterAgent;
+      state.turnErrorAfterAgent = null;
+      if (late) {
+        yield { type: DeliverEventType.ERROR, ...late };
+        return;
+      }
       yield { type: DeliverEventType.TURN_DONE, message: '', platformFault: false };
     },
     async touch(req: { userId: string }) {
@@ -269,6 +278,22 @@ export async function installFakeComposio() {
   const { setComposioApi } = await import('../src/modules/integrations/composio.ts');
   const executed: ExecutedAction[] = [];
   const triggers: Array<{ userId: string; slug: string; triggerId: string }> = [];
+  const state = {
+    /** What Composio reports for a user's connected accounts (listAccounts). */
+    accounts: new Map<string, ComposioAccount[]>(),
+    /** listAccounts calls, by user id. */
+    accountLookups: [] as string[],
+    /** The next listAccounts call fails with this (used once). */
+    accountsError: null as Error | null,
+    /** Composio's tags per tool slug (e.g. `readOnlyHint`). */
+    tags: new Map<string, string[]>(),
+    /** toolTags calls, by slug. */
+    tagLookups: [] as string[],
+    /** The next toolTags call fails with this (used once). */
+    tagsError: null as Error | null,
+    /** The next execute returns this failure, or throws it (used once). */
+    executeFailure: null as string | Error | null,
+  };
   let n = 0;
   setComposioApi({
     async connectLink(userId, authConfigId) {
@@ -277,8 +302,12 @@ export async function installFakeComposio() {
         redirectUrl: `https://composio.test/connect/${authConfigId}`,
       };
     },
-    async listAccounts() {
-      return [];
+    async listAccounts(userId) {
+      state.accountLookups.push(userId);
+      const err = state.accountsError;
+      state.accountsError = null;
+      if (err) throw err;
+      return state.accounts.get(userId) ?? [];
     },
     async deleteAccount() {},
     async accessToken(accountId) {
@@ -292,6 +321,7 @@ export async function installFakeComposio() {
           name: 'Send',
           description: 'Send an email',
           inputParameters: {},
+          tags: [],
         },
         {
           slug: `${t.toUpperCase()}_LIST_EMAILS`,
@@ -299,10 +329,22 @@ export async function installFakeComposio() {
           name: 'List',
           description: 'List emails',
           inputParameters: {},
+          tags: ['readOnlyHint'],
         },
       ]);
     },
+    async toolTags(slug) {
+      state.tagLookups.push(slug);
+      const err = state.tagsError;
+      state.tagsError = null;
+      if (err) throw err;
+      return state.tags.get(slug) ?? [];
+    },
     async execute(slug, input) {
+      const failure = state.executeFailure;
+      state.executeFailure = null;
+      if (failure instanceof Error) throw failure;
+      if (failure) return { successful: false, data: null, error: failure };
       executed.push({ slug, ...input });
       return { successful: true, data: { ok: true }, error: null };
     },
@@ -320,7 +362,7 @@ export async function installFakeComposio() {
       return JSON.parse(input.rawBody);
     },
   });
-  return { executed, triggers };
+  return { executed, triggers, state };
 }
 
 /** No-network LiteLLM (keys, budgets, zero spend) so the real billing path runs in chat tests. */

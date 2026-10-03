@@ -10,9 +10,13 @@ export const WA_VERIFY = 'wa-verify-token';
 export const WA_PHONE_ID = 'PNID-1';
 export const SB_SECRET = 'sb-signing-secret';
 
-/** Channel env for this test file (call at the top level, before the app is used). */
+/**
+ * Channel env for this test file (call at the top level, before the app is used). WhatsApp and
+ * iMessage are switched off by default (ENABLED_CHANNELS); these tests switch them on.
+ */
 export function useChannelEnv(extra: Record<string, string> = {}): void {
   Object.assign(process.env, {
+    ENABLED_CHANNELS: 'telegram,web,whatsapp,imessage',
     WHATSAPP_APP_SECRET: WA_SECRET,
     WHATSAPP_VERIFY_TOKEN: WA_VERIFY,
     WHATSAPP_PHONE_NUMBER_ID: WA_PHONE_ID,

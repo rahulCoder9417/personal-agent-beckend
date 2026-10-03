@@ -1,5 +1,5 @@
 import type { Job } from 'bullmq';
-import { config } from '../../shared/config.ts';
+import { config, isChannelEnabled } from '../../shared/config.ts';
 import { hit } from '../../shared/rate-limit.ts';
 import { audit } from '../admin/audit.ts';
 import { findLink, linkWithCode, normalizeLinkCode, touchInbound } from '../auth/links.ts';
@@ -48,6 +48,8 @@ export async function handleProcessMessage(job: Job): Promise<unknown> {
   if (!event) return IGNORED;
   const msg = parseInbound(event.source, event.payload);
   if (!msg) return IGNORED;
+  // Queued before its channel was switched off: no work, no reply (HLD 0.3).
+  if (!isChannelEnabled(msg.channel)) return IGNORED;
 
   const link = await findLink(msg.channel, msg.externalChatId);
   if (!link) {

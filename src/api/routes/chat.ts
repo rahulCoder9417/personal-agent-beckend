@@ -12,9 +12,9 @@ import { attachments } from '../../modules/channels/schema.ts';
 import { subscribe } from '../../modules/channels/stream.ts';
 import { ingestEvent } from '../../modules/events/intake.ts';
 import { userHasCredits } from '../../modules/orchestrator/turn.ts';
-import { config } from '../../shared/config.ts';
+import { config, isChannelEnabled } from '../../shared/config.ts';
 import { db } from '../../shared/db/client.ts';
-import { AppError, badRequest, outOfCredits } from '../../shared/errors.ts';
+import { AppError, badRequest, channelDisabled, outOfCredits } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
 import { enforce } from '../../shared/rate-limit.ts';
 import { route } from '../router.ts';
@@ -33,6 +33,7 @@ export const chatRoutes = [
 
   route('sendMessage', async (c, { body }) => {
     const user = c.get('user');
+    if (!isChannelEnabled('web')) throw channelDisabled('web');
     await enforce({ key: `msg:user:${user.id}`, max: 30, windowSeconds: 60 });
     if (!(await userHasCredits(user.id))) throw outOfCredits();
     const files = await getUserAttachments(user.id, body.attachmentIds ?? []);

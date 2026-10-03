@@ -10,6 +10,33 @@ const bool = z
   .optional()
   .transform((v) => v === 'true' || v === '1');
 
+/** Every channel the code can serve. Which ones are on is the ENABLED_CHANNELS setting. */
+export const CHANNEL_NAMES = ['telegram', 'web', 'whatsapp', 'imessage'] as const;
+export type ChannelName = (typeof CHANNEL_NAMES)[number];
+
+/** `telegram,web` → ['telegram', 'web'] (trimmed, lower-cased, no duplicates, order kept). */
+const channelList = z.string().transform((value, ctx) => {
+  const names = [
+    ...new Set(
+      value
+        .split(',')
+        .map((n) => n.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+  const unknown = names.filter((n) => !(CHANNEL_NAMES as readonly string[]).includes(n));
+  if (unknown.length || names.length === 0) {
+    ctx.addIssue({
+      code: 'custom',
+      message: unknown.length
+        ? `unknown channel ${unknown.join(', ')} (use ${CHANNEL_NAMES.join(', ')})`
+        : 'name at least one channel',
+    });
+    return z.NEVER;
+  }
+  return names as ChannelName[];
+});
+
 export const configSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
@@ -51,6 +78,12 @@ export const configSchema = z.object({
   LITELLM_AGENT_MODEL: z.string().default('agent-default'),
   /** What the agent model means on paid plans (Free: LITELLM_CHEAP_MODEL). */
   LITELLM_PREMIUM_MODEL: z.string().default('claude'),
+
+  /**
+   * The channels that are switched on, comma-separated (HLD 0.3). Launch: Telegram and the web
+   * app. A channel that is off can't be linked, its webhook does no work, nothing is sent to it.
+   */
+  ENABLED_CHANNELS: z.string().default('telegram,web').pipe(channelList),
 
   TELEGRAM_BOT_TOKEN: optional,
   TELEGRAM_WEBHOOK_SECRET: optional,
@@ -158,4 +191,9 @@ export function config(): Config {
 /** Tests only. */
 export function resetConfig(): void {
   cached = undefined;
+}
+
+/** Is this channel switched on (ENABLED_CHANNELS)? */
+export function isChannelEnabled(channel: ChannelName): boolean {
+  return config().ENABLED_CHANNELS.includes(channel);
 }

@@ -1,7 +1,8 @@
 import { and, count, desc, eq, gt, isNull, lt, TransactionRollbackError } from 'drizzle-orm';
-import { config } from '../../shared/config.ts';
+import { config, isChannelEnabled } from '../../shared/config.ts';
 import { randomString, sha256Hex } from '../../shared/crypto.ts';
 import { db } from '../../shared/db/client.ts';
+import { channelDisabled } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
 import { channelLinks, linkCodes } from './schema.ts';
 
@@ -26,8 +27,12 @@ export async function countChannelLinks(userId: string): Promise<number> {
   return row?.n ?? 0;
 }
 
-/** One-time code (random, single use, 10 minutes). Only its hash is stored. */
+/**
+ * One-time code (random, single use, 10 minutes). Only its hash is stored.
+ * A channel that is switched off can't be linked (`channel_disabled`, HLD 0.3).
+ */
 export async function createLinkCode(userId: string, channel: LinkChannel) {
+  if (!isChannelEnabled(channel)) throw channelDisabled(channel);
   const code = `LINK-${randomString(4, ALPHABET)}-${randomString(4, ALPHABET)}`;
   const expiresAt = new Date(Date.now() + LINK_CODE_TTL_MS);
   await db()

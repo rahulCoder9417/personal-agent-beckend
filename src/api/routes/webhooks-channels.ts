@@ -1,5 +1,7 @@
 // WhatsApp + Sendblue (iMessage) webhooks. Same rule as every webhook: verify the signature on
 // the raw body → save the event (unique key) → add a job → 200.
+// While a channel is switched off (ENABLED_CHANNELS, HLD 0.3) its webhook answers 200 and does
+// nothing: no signature check, no event, no job. The WhatsApp handshake answers 403.
 import { findLink } from '../../modules/auth/links.ts';
 import { webhookUnauthorized } from '../../modules/auth/webhooks.ts';
 import {
@@ -15,6 +17,7 @@ import {
 } from '../../modules/channels/adapters/whatsapp.ts';
 import { ingestStatusEvent } from '../../modules/channels/status.ts';
 import { ingestEvent } from '../../modules/events/intake.ts';
+import { isChannelEnabled } from '../../shared/config.ts';
 import { route } from '../router.ts';
 
 function parseJson<T>(raw: string): T | null {
@@ -28,6 +31,7 @@ function parseJson<T>(raw: string): T | null {
 
 export const channelWebhookRoutes = [
   route('webhookWhatsappVerify', (c, { query }) => {
+    if (!isChannelEnabled('whatsapp')) return c.body(null, 403);
     const challenge = whatsappVerifyChallenge(
       query['hub.mode'],
       query['hub.verify_token'],
@@ -38,6 +42,7 @@ export const channelWebhookRoutes = [
   }),
 
   route('webhookWhatsapp', async (c, { rawBody }) => {
+    if (!isChannelEnabled('whatsapp')) return c.body(null, 200);
     if (!verifyWhatsappSignature(rawBody, c.req.header('x-hub-signature-256')))
       throw webhookUnauthorized();
     const body = parseJson<WhatsappWebhook>(rawBody);
@@ -70,6 +75,7 @@ export const channelWebhookRoutes = [
   }),
 
   route('webhookSendblue', async (c, { rawBody }) => {
+    if (!isChannelEnabled('imessage')) return c.body(null, 200);
     if (!verifySendblueSecret(c.req.header('sb-signing-secret'))) throw webhookUnauthorized();
     const p = parseJson<SendbluePayload>(rawBody);
     if (!p?.message_handle) return c.body(null, 200);

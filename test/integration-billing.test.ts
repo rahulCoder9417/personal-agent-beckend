@@ -81,7 +81,9 @@ describe('billing wired in', () => {
     const reply = await waitFor(async () =>
       tg.sent.find((m) => m.chatId === String(chatId) && m.text.includes('out of credits')),
     );
-    expect(reply.text).toContain('/billing');
+    // Telegram: the web app by name, no purchase link (HLD 7.6).
+    expect(reply.text).toContain('Open the Textcrew web app to top up, upgrade or redeem a coupon');
+    expect(reply.text).not.toMatch(/https?:\/\//);
     expect(vmFake.deliveries.filter((d) => d.userId === broke.id)).toHaveLength(0);
   });
 

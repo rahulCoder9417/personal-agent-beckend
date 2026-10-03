@@ -6,6 +6,7 @@ import { getActiveUser } from '../auth/users.ts';
 import { signedFileUrl } from '../channels/files.ts';
 import { setMessageStatus } from '../channels/messages.ts';
 import { queueOutbound } from '../channels/outbound.ts';
+import { purchaseLinksAllowed, WEB_APP_NAME } from '../channels/purchase-links.ts';
 import type { MediaRef } from '../channels/schema.ts';
 import { publish } from '../channels/stream.ts';
 import type { Channel } from '../channels/types.ts';
@@ -61,8 +62,15 @@ export function userHasCredits(userId: string): Promise<boolean> {
   return hooks.hasCredits(userId);
 }
 
-export function outOfCreditsText(): string {
-  return `You're out of credits, so I can't work on that right now. Top up, upgrade or redeem a coupon at ${config().WEB_APP_URL}/billing`;
+/**
+ * The reply at zero credits. Telegram gets no purchase link (HLD 7.6): it names the web app
+ * instead. Other channels link to the billing page.
+ */
+export function outOfCreditsText(channel: Channel): string {
+  const sorry = "You're out of credits, so I can't work on that right now.";
+  if (!purchaseLinksAllowed(channel))
+    return `${sorry} Open ${WEB_APP_NAME} to top up, upgrade or redeem a coupon.`;
+  return `${sorry} Top up, upgrade or redeem a coupon at ${config().WEB_APP_URL}/billing`;
 }
 
 /** `AI_ACCESS_MODE=own_only` and the user has neither an API key nor a connected Claude plan. */
@@ -85,7 +93,11 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
   const log = logger().child({ userId, deliveryId: input.deliveryId });
 
   if (!(await hooks.hasCredits(userId))) {
-    await queueOutbound({ userId, sessionKey: input.sessionKey, text: outOfCreditsText() });
+    await queueOutbound({
+      userId,
+      sessionKey: input.sessionKey,
+      text: outOfCreditsText(input.channel),
+    });
     if (input.inboundMessageId) await setMessageStatus(input.inboundMessageId, 'delivered');
     return 'out_of_credits';
   }

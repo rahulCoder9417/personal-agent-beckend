@@ -1,5 +1,6 @@
 import { config } from '../../../shared/config.ts';
 import { safeEqual } from '../../../shared/crypto.ts';
+import { withoutPurchaseLinks } from '../purchase-links.ts';
 import type { MediaRef } from '../schema.ts';
 import {
   RecipientBlockedError,
@@ -135,7 +136,9 @@ export function telegramApi(): TelegramApi {
 export const telegramAdapter: ChannelAdapter = {
   channel: 'telegram',
   async send(chatId: string, content: OutboundContent) {
-    const parts = splitText(content.text);
+    // Safety net for HLD 7.6: whoever wrote the text (us or the agent), no purchase link
+    // reaches Telegram.
+    const parts = splitText(withoutPurchaseLinks(content.text));
     let lastId: string | undefined;
     for (const [i, part] of parts.entries()) {
       const isLast = i === parts.length - 1;

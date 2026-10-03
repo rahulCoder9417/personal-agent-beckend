@@ -31,7 +31,8 @@ describe('sync-usage', () => {
       awakeSeconds: 1500,
       awakeCredits: 2,
       browserSeconds: 90,
-      toolCredits: 3,
+      browserCredits: 3,
+      toolCredits: 0,
       creditsCharged: 11,
     });
     // Budget follows the balance: $0.356 of real cost left on top of what was spent.

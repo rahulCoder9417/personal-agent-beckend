@@ -33,7 +33,13 @@ export const creditRoutes = [
     const appActions = await appActionCreditsFor(userId, periods);
     const items = periods.map((p, i) => toUsagePeriod(p, appActions[i] ?? 0));
     const sum = (
-      k: 'aiCredits' | 'awakeCredits' | 'appActionCredits' | 'toolCredits' | 'totalCredits',
+      k:
+        | 'aiCredits'
+        | 'awakeCredits'
+        | 'appActionCredits'
+        | 'browserCredits'
+        | 'toolCredits'
+        | 'totalCredits',
     ) => items.reduce((n, p) => n + p[k], 0);
     return c.json(
       {
@@ -42,6 +48,7 @@ export const creditRoutes = [
           aiCredits: sum('aiCredits'),
           awakeCredits: sum('awakeCredits'),
           appActionCredits: sum('appActionCredits'),
+          browserCredits: sum('browserCredits'),
           toolCredits: sum('toolCredits'),
           totalCredits: sum('totalCredits'),
         },

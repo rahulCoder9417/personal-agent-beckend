@@ -96,7 +96,9 @@ export const usagePeriods = pgTable(
     awakeSeconds: integer().notNull().default(0),
     awakeCredits: integer().notNull().default(0),
     browserSeconds: integer().notNull().default(0),
-    /** Browser minutes + paid tools. */
+    /** Browser time: 2 credits per minute (HLD 7.2). */
+    browserCredits: integer().notNull().default(0),
+    /** Paid tools charged by the sync. None today: a paid tool is charged when it runs. */
     toolCredits: integer().notNull().default(0),
     /** What was actually charged (AI is 0 for bring-your-own-key users). */
     creditsCharged: integer().notNull().default(0),

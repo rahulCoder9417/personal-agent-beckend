@@ -45,6 +45,13 @@ export const agentSettings = pgTable('agent_settings', {
   runtime: text({ enum: ['hermes', 'claude_code'] })
     .notNull()
     .default('hermes'),
+  /**
+   * `platform`: the user chose Textcrew AI (paid in credits) although they have a key or a Claude
+   * plan. `auto`: their own AI when they have one (HLD 7.1).
+   */
+  aiPreference: text({ enum: ['auto', 'platform'] })
+    .notNull()
+    .default('auto'),
   /** Set when the in-container Claude Code sign-in succeeded; null = not connected. */
   claudeConnectedAt: timestamp({ withTimezone: true }),
   updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),

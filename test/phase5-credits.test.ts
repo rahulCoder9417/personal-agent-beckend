@@ -192,6 +192,7 @@ describe('plans', () => {
       ownMcpServers: false,
       topUps: false,
       models: 'cheap',
+      browser: false,
     });
     expect(planLimits('pro')).toEqual({
       apps: 25,
@@ -199,6 +200,7 @@ describe('plans', () => {
       ownMcpServers: false,
       topUps: true,
       models: 'all',
+      browser: false,
     });
     expect(planLimits('max')).toEqual({
       apps: 25,
@@ -206,6 +208,7 @@ describe('plans', () => {
       ownMcpServers: true,
       topUps: true,
       models: 'all',
+      browser: true,
     });
   });
 

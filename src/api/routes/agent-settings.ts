@@ -1,7 +1,8 @@
 // Agent settings + connecting the user's own Claude plan (openapi tag `agent`).
+import { refreshBudgetQuietly } from '../../modules/billing/litellm.ts';
 import {
   getAgentSettings,
-  setRuntime,
+  updateAgentSettings,
   type AgentSettingsView,
 } from '../../modules/orchestrator/agent-settings.ts';
 import {
@@ -18,6 +19,8 @@ function toAgentSettings(s: AgentSettingsView): Schemas['AgentSettings'] {
     runtime: s.runtime,
     effectiveRuntime: s.effectiveRuntime,
     aiAccess: s.aiAccess,
+    aiPreference: s.aiPreference,
+    platformAvailable: s.platformAvailable,
     claude: { connected: s.claude.connected, connectedAt: iso(s.claude.connectedAt) },
     ownKeyProviders: s.ownKeyProviders,
   };
@@ -29,7 +32,11 @@ export const agentSettingsRoutes = [
   }),
 
   route('updateAgentSettings', async (c, { body }) => {
-    return c.json(toAgentSettings(await setRuntime(c.get('user').id, body.runtime)), 200);
+    const userId = c.get('user').id;
+    const settings = await updateAgentSettings(userId, body);
+    // What pays for the AI may have changed: the AI budget follows it (HLD 7.5).
+    if (body.aiPreference) await refreshBudgetQuietly(userId);
+    return c.json(toAgentSettings(settings), 200);
   }),
 
   route('startClaudeLogin', async (c) => {

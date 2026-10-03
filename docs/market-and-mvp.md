@@ -289,11 +289,12 @@ And under "Authentication and credential use":
 | **WhatsApp and iMessage channels** | Code built; not launchable (section 6) |
 | **Voice notes** | Code built; needs a speech-to-text key on the server |
 | **Simple-chat routing** (no container for small talk) | Code built; needs a router key on the server |
-| **Web app** (sign-up, link a chat, connect apps, billing) | Not built into a working product. Folders exist next to this repo; their state was not reviewed for this document |
+| **Web app** (`../user-frontend-web`: chat, approvals, automations, activity, apps, crew, settings, onboarding, sign-in) | Built, with its own tests and a demo mode. Never deployed or run against the live server. Its copy still offers WhatsApp and iMessage and six specialists |
+| **Desktop app** (`../user-frontend-desktop`, Electron) | Built from the same screens. Not part of the launch |
 | **The crew** (Scout, Patch) | Not built |
 | **Browser or computer use** | Not built |
 | **Our own Google OAuth app** | Not started |
-| **Privacy policy and terms** | Not written |
+| **Privacy policy and terms** | The landing page has a privacy page; it needs updating for Google data and the DPDP duties. No terms page |
 
 Known bugs and gaps that affect a launch: app connections stay "pending" without the web app, the server is in `platform` AI mode with no model key, the nightly backup is unproven and stays on the same disk, and there is no alerting.
 
@@ -339,7 +340,7 @@ The alternative, a mass-market assistant on WhatsApp for India, is blocked twice
 | # | Feature | Why it is in | Status |
 |---|---|---|---|
 | 1 | **Telegram bot** with text, files and buttons | The launch channel | Live-tested |
-| 2 | **Web app:** sign up, link Telegram, connect apps, add your AI, see activity, pay | Nothing else works without it | To build |
+| 2 | **Web app:** sign up, link Telegram, connect apps, add your AI, see activity, pay | Nothing else works without it | Built; to update, deploy and connect to the live server |
 | 3 | **Bring your own AI:** API key (main path), Claude plan (beta) | Section 6.5 | Claude plan live-tested; API key path needs a live test |
 | 4 | **Apps:** Gmail, Google Calendar, GitHub, Notion, Slack, Linear or Todoist | The top jobs in section 5 | Gmail and GitHub live-tested; the rest need a test each |
 | 5 | **Approvals** before sending, deleting or paying | Expected by every user | Built; needs a live test |
@@ -393,14 +394,14 @@ In order. Items 1 to 3 are decisions for the founder.
 1. **Decide the audience and channel:** Telegram-first for developers and founders (section 8), or something else.
 2. **Decide the AI path:** API key as the default with the Claude plan as beta, and switch the server to `own_only` so users without their own AI are told to connect one.
 3. **Decide the crew names:** the landing page lists Byte for coding and Patch for review; this document uses Patch for coding as the founder proposed.
-4. **Build the web app** (item 2 in 9.1).
+4. **Update and deploy the web app** (item 2 in 9.1): Telegram-only linking, the three AI options, the new credit wording, the smaller crew.
 5. **Set up Polar:** account, products, discount, webhook. Keep purchase links out of the bot.
 6. **Fix the known gaps:** pending app connections, a live git gateway test, off-server backups, alerts, block `/mcp` and `/git` from the public internet.
 7. **Live-test what is only unit-tested:** approvals, reminders, schedules, the API key path, each launch app.
 8. **Build Scout and Patch,** and the morning-brief preset.
 9. **Anthropic:** accept the Commercial Terms, ask sales for written confirmation of our setup, and let Claude Code accept the user's own API key if the answer requires it.
 10. **Google:** start our own OAuth app verification and security assessment; stay under 100 Gmail users on Composio's app until it passes.
-11. **Write the privacy policy and terms,** covering the DPDP consent, erasure and breach duties.
+11. **Update the privacy page and write the terms,** covering the DPDP consent, erasure and breach duties.
 12. **Update the landing page** (9.4).
 13. **Closed beta with 20 to 50 waitlist users.** Measure: how many link Telegram and finish a first job, jobs per user per week, failed jobs, approval response time, and our cost per user.
 14. **Later:** WhatsApp for EEA users, iMessage beta, browser use, more crew.

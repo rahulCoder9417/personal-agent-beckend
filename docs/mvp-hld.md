@@ -883,7 +883,7 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 ### 11.4 Cost against 2 credits per minute
 
 - **The price:** 2 credits a minute is $0.02 a minute, or **$1.20 an hour**.
-- **Hosted cost:** $0.10 to $0.12 an hour (Browserbase, Steel), $0.24 on Browserless. At cost × 2.5 the browser alone would be 0.4 to 1 credit per **ten** minutes, so 2 credits a minute covers it about ten times over. The monthly fee is covered early: Browserbase's $20 is 17 browser hours sold.
+- **Hosted cost:** $0.10 to $0.12 an hour (Steel, Browserbase), about $0.24 on Browserless. That is 0.2 cents a minute. At cost × 2.5 the browser alone would be about half a credit a minute, so 2 credits a minute is about ten times the browser's real cost. The monthly fee is covered early: Browserbase's $20 is 17 browser hours sold.
 - **What the margin is for:** the AI. A browser turn sends many page snapshots to the model. That cost is charged apart (Textcrew AI in credits, or on the user's own key), so it doesn't come out of the 2 credits.
 - **What could break it:** proxies. At $10 to $12 per GB, one heavy session through a proxy can cost more than the minutes earn. **Proposed: no proxies and no captcha solving at launch.**
 - **In-container cost:** only our own RAM. The test server costs about $2.50 a day for 7.6 GB, so 1.5 GB is about $0.02 an hour. It is cheaper per hour, but each browser turn uses the room of four users, and the price is paid in capacity, not dollars.

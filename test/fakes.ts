@@ -19,10 +19,14 @@ export interface Delivery {
   approved: boolean;
 }
 
-/** What the fake "agent" does with a delivered message. Default: echo it back via send_message. */
+/**
+ * What the fake "agent" does with a delivered message. Default: echo it back via send_message.
+ * `progress` reports a progress line, as the Bridge does (a WORKING event).
+ */
 export type AgentBehaviour = (
   d: Delivery,
   mcp: (tool: string, args: Record<string, unknown>) => Promise<McpResult>,
+  progress: (text: string) => void,
 ) => Promise<void>;
 
 export interface McpResult {
@@ -130,7 +134,14 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
         yield { type: DeliverEventType.ERROR, ...failure };
         return;
       }
-      await state.agent(req, (tool, args) => mcpCall(token, tool, args));
+      const lines: string[] = [];
+      await state.agent(
+        req,
+        (tool, args) => mcpCall(token, tool, args),
+        (text) => void lines.push(text),
+      );
+      for (const message of lines)
+        yield { type: DeliverEventType.WORKING, message, platformFault: false };
       const late = state.turnErrorAfterAgent;
       state.turnErrorAfterAgent = null;
       if (late) {

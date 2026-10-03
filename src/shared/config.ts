@@ -37,6 +37,34 @@ const channelList = z.string().transform((value, ctx) => {
   return names as ChannelName[];
 });
 
+/** The crew's specialists (HLD 0.7). The lead, Tex, is always there. */
+export const SPECIALIST_IDS = ['byte', 'patch', 'scout'] as const;
+export type SpecialistId = (typeof SPECIALIST_IDS)[number];
+
+/** `byte,patch` → ['byte', 'patch']; `none` → []. */
+const specialistList = z.string().transform((value, ctx) => {
+  const names = [
+    ...new Set(
+      value
+        .split(',')
+        .map((n) => n.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+  if (names.length === 1 && names[0] === 'none') return [] as SpecialistId[];
+  const unknown = names.filter((n) => !(SPECIALIST_IDS as readonly string[]).includes(n));
+  if (unknown.length || names.length === 0) {
+    ctx.addIssue({
+      code: 'custom',
+      message: unknown.length
+        ? `unknown crew member ${unknown.join(', ')} (use ${SPECIALIST_IDS.join(', ')} or none)`
+        : `name at least one of ${SPECIALIST_IDS.join(', ')}, or none`,
+    });
+    return z.NEVER;
+  }
+  return names as SpecialistId[];
+});
+
 export const configSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
@@ -140,6 +168,13 @@ export const configSchema = z.object({
    * `own_only` (MVP): the user must bring their own AI (an API key or their Claude plan).
    */
   AI_ACCESS_MODE: z.enum(['platform', 'own_only']).default('platform'),
+
+  /**
+   * The specialists that are switched on, comma-separated: byte, patch, scout (or `none`). They
+   * live in the agent image, which the backend can't see, so this says what the apps may show as
+   * available (HLD 0.7).
+   */
+  CREW_AVAILABLE: z.string().default('byte,patch,scout').pipe(specialistList),
 
   /** Optional monthly cap on free credits (sign-up + coupons). */
   FREE_CREDITS_MONTHLY_CAP: z.coerce.number().int().positive().optional(),

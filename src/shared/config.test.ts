@@ -48,6 +48,26 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...base, AI_ACCESS_MODE: 'free' })).toThrow(/AI_ACCESS_MODE/);
   });
 
+  it('CREW_AVAILABLE defaults to the three specialists and accepts only their ids, or none', () => {
+    expect(loadConfig(base).CREW_AVAILABLE).toEqual(['byte', 'patch', 'scout']);
+    expect(loadConfig({ ...base, CREW_AVAILABLE: '' }).CREW_AVAILABLE).toEqual([
+      'byte',
+      'patch',
+      'scout',
+    ]);
+    expect(loadConfig({ ...base, CREW_AVAILABLE: ' Patch, byte ,patch' }).CREW_AVAILABLE).toEqual([
+      'patch',
+      'byte',
+    ]);
+    expect(loadConfig({ ...base, CREW_AVAILABLE: 'none' }).CREW_AVAILABLE).toEqual([]);
+    // Tex is the lead: always there, never listed.
+    expect(() => loadConfig({ ...base, CREW_AVAILABLE: 'tex' })).toThrow(
+      /CREW_AVAILABLE.*unknown crew member tex/,
+    );
+    expect(() => loadConfig({ ...base, CREW_AVAILABLE: 'byte,none' })).toThrow(/CREW_AVAILABLE/);
+    expect(() => loadConfig({ ...base, CREW_AVAILABLE: ' , ' })).toThrow(/CREW_AVAILABLE/);
+  });
+
   it('ENABLED_CHANNELS defaults to Telegram + web and accepts only known channel names', () => {
     expect(loadConfig(base).ENABLED_CHANNELS).toEqual(['telegram', 'web']);
     // Empty (as in a blank .env line) means unset: the default applies.

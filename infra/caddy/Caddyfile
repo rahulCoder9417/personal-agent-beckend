@@ -4,7 +4,19 @@
 
 {$API_DOMAIN} {
 	encode gzip
-	reverse_proxy {$API_UPSTREAM} {
-		flush_interval -1
+
+	# /mcp (the Platform MCP, and attachment downloads under /mcp/files/) and /git (the git
+	# gateway) are for user containers only. Containers reach the api directly on the private
+	# network through the egress proxy, never through Caddy, so both are closed to the internet
+	# (docs/mvp-hld.md section 4).
+	@containers_only path /mcp* /git /git/*
+	handle @containers_only {
+		respond "Not found" 404
+	}
+
+	handle {
+		reverse_proxy {$API_UPSTREAM} {
+			flush_interval -1
+		}
 	}
 }

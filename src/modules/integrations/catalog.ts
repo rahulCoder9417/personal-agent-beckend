@@ -93,3 +93,40 @@ const RISKY =
 export function actionNeedsApproval(actionSlug: string): boolean {
   return RISKY.test(actionSlug.toUpperCase());
 }
+
+// --- Does an action change something? (HLD 7.2: 1 credit if it does, reading is free) ----------
+//
+// Decided from the action's name, word by word like the risky check above:
+//   1. it needs approval, or its name has a write word        → it changes something
+//   2. its name has a read word and no write word             → it only reads
+//   3. its name has neither: Composio's `readOnlyHint` tag    → it only reads
+//   4. anything else                                          → it changes something
+// So an action we can't place is charged, never the other way round.
+
+/** Write words that aren't already in RISKY. */
+const WRITES =
+  /(^|_)(CREATE|ADD|INSERT|UPSERT|SET|EDIT|MODIFY|PATCH|PUT|WRITE|APPEND|SAVE|UPLOAD|IMPORT|COPY|DUPLICATE|RENAME|REPLACE|CLEAR|RESET|MARK|ASSIGN|UNASSIGN|ENABLE|DISABLE|RESTORE|UNTRASH|UNARCHIVE|SUBMIT|APPROVE|REJECT|RESOLVE|COMPLETE|REOPEN|LOCK|UNLOCK|SUBSCRIBE|UNSUBSCRIBE|JOIN|LEAVE|REVOKE|GRANT)(_|$)/;
+
+/** Words that only ever read. Ambiguous ones (CHECK: "check off a task") are left out. */
+const READS =
+  /(^|_)(GET|LIST|SEARCH|FIND|FETCH|READ|RETRIEVE|QUERY|LOOKUP|COUNT|DESCRIBE|VIEW|SHOW|DOWNLOAD|EXPORT|PREVIEW)(_|$)/;
+
+/** The tag Composio puts on tools that only read (the MCP `readOnlyHint` annotation). */
+export const READ_ONLY_TAG = 'readOnlyHint';
+
+export type ActionKind = 'changes' | 'reads' | 'unknown';
+
+/** What the name alone says. `unknown`: no read word and no write word. */
+export function actionKindByName(actionSlug: string): ActionKind {
+  const slug = actionSlug.toUpperCase();
+  if (RISKY.test(slug) || WRITES.test(slug)) return 'changes';
+  if (READS.test(slug)) return 'reads';
+  return 'unknown';
+}
+
+/** `tags`: the tool's Composio tags, when known. They only matter for a name that says nothing. */
+export function actionChangesSomething(actionSlug: string, tags: readonly string[] = []): boolean {
+  const kind = actionKindByName(actionSlug);
+  if (kind !== 'unknown') return kind === 'changes';
+  return !tags.includes(READ_ONLY_TAG);
+}

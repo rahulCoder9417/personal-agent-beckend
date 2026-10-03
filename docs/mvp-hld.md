@@ -424,7 +424,7 @@ _Updated 2026-10-03 with the launch decisions (`docs/launch-plan.md`): AI three 
 | Container awake time | 1 credit per 10 minutes awake |
 | **App action that changes something** (send, create, update, delete) | **1 credit per successful action** |
 | App action that only reads (get, list, search) | Free |
-| Browser use | 2 credits per minute (Max plan, after launch) |
+| Browser use | 2 credits per minute (Max plan, at launch; design in the crew package) |
 | Paid tools (pay-per-use APIs) | Their cost × 2.5 |
 | Jev routing, simple replies | Included in the AI cost |
 | **Failed turns caused by us** (our bug or outage) | **Not charged**; the charge is reversed |

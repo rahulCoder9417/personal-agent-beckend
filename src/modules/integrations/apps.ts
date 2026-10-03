@@ -5,8 +5,16 @@ import { notFound, planLimit } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
 import { logger } from '../../shared/logger.ts';
 import type { PlanId } from '../auth/users.ts';
-import { appAllowedOnPlan, appForToolkit, CATALOG, findApp, type CatalogApp } from './catalog.ts';
-import { authConfigFor, composio } from './composio.ts';
+import {
+  actionChangesSomething,
+  actionKindByName,
+  appAllowedOnPlan,
+  appForToolkit,
+  CATALOG,
+  findApp,
+  type CatalogApp,
+} from './catalog.ts';
+import { authConfigFor, composio, toolTags } from './composio.ts';
 import { connections } from './tables.ts';
 
 export type Connection = typeof connections.$inferSelect;
@@ -142,6 +150,16 @@ export async function connectionForToolkit(
       ),
     );
   return row;
+}
+
+/**
+ * Does running this action change something (HLD 7.2: 1 credit if so, reading is free)?
+ * The name decides. Composio is only asked for its tags when the name says nothing; if it can't
+ * be asked, the action counts as changing something.
+ */
+export async function appActionChangesSomething(actionSlug: string): Promise<boolean> {
+  if (actionKindByName(actionSlug) !== 'unknown') return actionChangesSomething(actionSlug);
+  return actionChangesSomething(actionSlug, (await toolTags(actionSlug)) ?? []);
 }
 
 export async function deleteUserConnections(userId: string): Promise<void> {

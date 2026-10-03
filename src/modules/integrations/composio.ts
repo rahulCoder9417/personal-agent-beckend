@@ -7,6 +7,8 @@ export interface ComposioTool {
   name: string;
   description: string;
   inputParameters: Record<string, unknown>;
+  /** Composio's tags, e.g. `readOnlyHint` on a tool that only reads. */
+  tags: string[];
 }
 
 export interface ComposioAccount {
@@ -41,6 +43,8 @@ export interface ComposioApi {
    */
   accessToken(accountId: string): Promise<string | null>;
   listTools(toolkits: string[]): Promise<ComposioTool[]>;
+  /** One tool's Composio tags (see `toolTags` below, which caches them). */
+  toolTags(slug: string): Promise<string[]>;
   execute(
     slug: string,
     input: { userId: string; connectedAccountId?: string; arguments: Record<string, unknown> },
@@ -116,6 +120,7 @@ const realApi: ComposioApi = {
       description?: string;
       toolkit?: { slug?: string };
       inputParameters?: Record<string, unknown>;
+      tags?: string[];
     }>;
     return tools.map((t) => ({
       slug: t.slug,
@@ -123,7 +128,14 @@ const realApi: ComposioApi = {
       name: t.name,
       description: t.description ?? '',
       inputParameters: t.inputParameters ?? {},
+      tags: t.tags ?? [],
     }));
+  },
+  async toolTags(slug) {
+    const tool = (await sdk().tools.getRawComposioToolBySlug(slug)) as unknown as {
+      tags?: string[];
+    };
+    return tool.tags ?? [];
   },
   async execute(slug, input) {
     const res = await sdk().tools.execute(slug, {
@@ -180,6 +192,8 @@ const realApi: ComposioApi = {
 };
 
 let api: ComposioApi = realApi;
+/** A tool's tags don't change between calls: asked once per tool, kept for the process. */
+const tagCache = new Map<string, string[]>();
 
 export function composio(): ComposioApi {
   return api;
@@ -188,6 +202,21 @@ export function composio(): ComposioApi {
 /** Tests: swap in a fake Composio. */
 export function setComposioApi(fake: ComposioApi | undefined): void {
   api = fake ?? realApi;
+  tagCache.clear();
+}
+
+/** A tool's Composio tags, or null when Composio can't be asked right now (nothing is cached). */
+export async function toolTags(slug: string): Promise<string[] | null> {
+  const key = slug.toUpperCase();
+  const cached = tagCache.get(key);
+  if (cached) return cached;
+  try {
+    const tags = await api.toolTags(key);
+    tagCache.set(key, tags);
+    return tags;
+  } catch {
+    return null;
+  }
 }
 
 /** Composio auth config id per app slug (COMPOSIO_AUTH_CONFIGS = {"gmail":"ac_…", …}). */

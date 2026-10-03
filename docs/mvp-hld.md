@@ -5,7 +5,7 @@
 **Diagram:** godraw canvas **"Backend + Sandbox Manager — HLD"**. It was drawn before the rename, so its "sandbox-manager" boxes are the **vm-manager** in this doc.
 (page 1 components & connections · page 2 one message through the system · page 3 inside the vm-manager · page 4 queues & automations)
 
-**What the product is:** a personal AI assistant users message on **Telegram or the web app**. WhatsApp and iMessage are built but **switched off at launch** (section 0.3). It does real work in about **25 apps + the user's own MCP servers**, asks before risky actions, remembers the user, runs reminders and automations, and bills in **credits**. **Every user gets their own sandboxed container** running the Hermes agent.
+**What the product is:** a personal AI assistant users message on **Telegram or the web app**. WhatsApp and iMessage are built but **switched off at launch** (section 0.3). It does real work in about **25 apps + the user's own MCP servers**, asks before risky actions, remembers the user, runs reminders and automations, and bills in **credits**. **Every user gets their own sandboxed container** running the Hermes agent. The agent the user texts is the lead of a small **crew** (section 0.7): Byte codes, Patch reviews code, Scout researches.
 
 ---
 
@@ -22,6 +22,7 @@
 8. Data model
 9. **Build phases** (hand these to the AI one at a time)
 10. Failures and security
+11. Proposal: Scout's browser (not built; the founder decides)
 
 ---
 
@@ -112,6 +113,7 @@
 - **Fire:** a *run-automation* job goes through **the same path as a normal message**, with the saved instruction.
 - **Safety:** each run costs credits. An automation auto-pauses at 0 credits or after 3 failures in a row.
 - **Recovery:** on worker start, re-register all enabled automations from Postgres.
+- **Pull-request review** is an app-event automation with a preset, turned on per repo by the user (section 0.8).
 
 ### 0.5 Hermes inside a container
 
@@ -150,6 +152,78 @@
 - **New image:** stopped containers are re-created on their next wake (/data kept).
 - **Deleted:** only on account deletion.
 
+### 0.7 The crew
+
+Decided 2026-10-03 (`docs/launch-plan.md` D7 and section 4). One lead and three specialists. Echo, Pitch and Tock are dropped.
+
+| Id | Name | Job | Tools |
+|---|---|---|---|
+| `tex` | **Tex** | The lead: the agent the user texts. It plans the job, hands parts to specialists and answers the user | Everything the agent has today |
+| `byte` | **Byte** | Coding: writes and changes code, opens pull requests | Files, shell, git (through the git gateway), the platform tools |
+| `patch` | **Patch** | Code review: runs several reviewers (bugs, security, tests) | Read access to the code, shell for running tests and diffs, the platform tools for commenting |
+| `scout` | **Scout** | Research: searches the web and reads pages. On Max it will also drive a real browser (section 11) | Only `web_search` and `read_page` (and the browser later). **No shell and no app actions** |
+
+These ids are fixed. Both repos use them.
+
+**In the agent image** (`vm-manager`, not this repo):
+
+- **Defined once,** in the Bridge: a description, a role prompt and a tool list for each specialist. The same definitions serve both engines. No change to the gRPC proto.
+- **Claude Code:** the definitions are passed as sub-agents. Only the lead may start them; a specialist can't start its own helpers.
+- **Hermes:** the lead gets the same role prompts to use with its built-in delegation, one level deep.
+- **How many at once:** at most 3 specialists per job to start with.
+- **Why Scout has so few tools:** text from a web page is not trusted. Scout can't run commands or use the user's apps, so a page can't make it send or delete anything.
+
+**On the platform** (this repo):
+
+- **Crew list:** `GET /v1/crew` returns the four members (id, name, lead or specialist, role, description, whether it is available yet), so the apps don't hard-code them. Scout also carries `browser`: the plan it needs (Max) and whether it is built yet (not yet).
+  - **Available yet?** The specialists live in the agent image, and the backend can't see which image is deployed. The setting `CREW_AVAILABLE` lists the specialists that are switched on (default `byte,patch,scout`). Tex is always available.
+- **Progress lines:** when a specialist starts or finishes, the Bridge sends a progress event whose text starts with the member's name and a colon, for example `Scout: reading 4 pages`.
+  - **Web chat:** the worker passes every progress line of a turn to the live stream as `agent.progress` (the text, the crew member if the line names one, the time). Lines without a name, such as `using web_search`, go the same way with no member.
+  - **Telegram and other chats:** nothing is sent for a progress line. A chat only gets what the agent itself sends with `send_message`, as before, so the user isn't spammed.
+  - **Activity log:** a line that names a crew member is also saved (`crew_progress`, with the member), so the activity page shows who did what. At most 30 per turn; the text is cut at 300 characters.
+- **Scout's tools run on the platform,** not in the container: `web_search` and `read_page` on the Platform MCP (section 5.1). The container's network stays locked.
+- **Pull-request review** uses Patch (section 0.8).
+
+### 0.8 Pull-request review
+
+Decided 2026-10-03 (`docs/launch-plan.md` D8). The user turns on "review pull requests" for chosen GitHub repos. When a pull request is opened or gets new commits, Patch reviews it, posts the review on the pull request, and the user gets a short verdict in chat.
+
+**The flow:**
+
+1. **Turn it on:** the web app calls `PUT /v1/pr-reviews/{owner}/{repo}`. GitHub must be connected.
+2. **What is saved:** an **automation** of kind `event` with the preset `pr_review`: a Composio trigger (`GITHUB_PULL_REQUEST_EVENT`) on that repo. It shows in the automations list and can be paused or deleted there too.
+3. **A pull request changes:** Composio's webhook → event (unique) → `composio-trigger` job, like any app event (section 0.4).
+4. **The worker checks the event:**
+   - Only *opened*, *reopened* and *new commits* count. Anything else (closed, labelled, edited…) is ignored.
+   - It asks GitHub for the pull request's **current head commit**, using the user's GitHub connection the same way the git gateway does (the token stays on the platform). A closed pull request is ignored. If GitHub can't be asked, the head commit in the event is used. If there is none either, nothing runs and the activity log says why.
+5. **One review per head commit:** the worker saves a row in `pr_reviews`, unique on (user, repo, pull request number, head commit). If the row is already there, nothing runs. So a re-delivered webhook, a repeated event, or a reopen with no new commits never produces a second review. Two quick pushes produce one review, of the newer commit.
+6. **The turn:** the agent gets an instruction that names the **repo, the pull request number and the head commit**, and tells the lead to **use Patch**.
+7. **Patch reviews** (clone through the git gateway, read the diff, run the tests) and posts **one review** on the pull request that carries all its comments, with GitHub's "create a review for a pull request" action. One action costs 1 credit; many single comments would cost 1 credit each.
+8. **The verdict:** the lead sends a short message to the user's chat.
+9. **Fixing:** the user can answer "fix it". That is a normal turn: Byte pushes commits to a branch through the git gateway. **Patch never merges,** and the git gateway refuses pushes to the default branch.
+
+**Where the verdict goes:** to the user's linked Telegram chat if there is one, otherwise to web chat. It is chosen when review is turned on.
+
+**The standing permission.** Writing a comment or a review on GitHub is read by other people, so it needs the user's approval like sending a message (section 5.1). Turning review on for a repo is the user's standing approval for one thing: **posting a new review or comment on a pull request in that repo.** Such an action runs without a per-comment approval when all of this holds:
+
+- the user has an **enabled** `pr_review` automation for exactly that owner and repo (paused or deleted: no permission);
+- it is a GitHub action that **posts a new** review or comment. Editing, deleting, dismissing, replying, merging and closing are not covered;
+- its arguments name that repo (`owner`, `repo`) and a pull request number;
+- a review's `event` is `COMMENT` or not given. **Approving or requesting changes is not covered:** an approval can set off an auto-merge;
+- a comment action that takes an issue number (GitHub treats a pull request as an issue) is covered only for a pull request the platform asked a review for.
+
+Everything else risky still needs approval, in the same turn too: merging, a comment on another repo, an email.
+
+- **Only the user can turn it on,** from the web app with their own session. The agent can't give itself this permission: `create_automation` can't set the preset.
+- The action still costs 1 credit and is still written to the activity log, marked as covered by pull-request review.
+
+**How it counts:**
+
+- **Plan limit:** each repo with review on is one automation of the plan's limit (Free 1, Pro 5, Max 50).
+- **Credits:** each review is a turn. It costs what any turn costs (Textcrew AI if that is the user's AI, awake time) plus 1 credit for the posted review.
+- **Pausing:** at zero credits, and after 3 failed reviews in a row, like any automation.
+- **Teams** should use an API key for this, not one person's Claude plan (`docs/market-and-mvp.md` section 6.5).
+
 ---
 
 ## 1. Architecture decisions: services, microservices, gRPC
@@ -170,11 +244,11 @@
 | **auth** | Users, Clerk integration, link codes, channel links |
 | **channels** | WhatsApp / Telegram / Sendblue / web adapters (receive + send) |
 | **events** | Webhook intake, `events` table, queue producers |
-| **orchestrator** | Per-user lock, Jev routing, the wake → deliver flow |
-| **platform-mcp** | The MCP server the agents call |
+| **orchestrator** | Per-user lock, Jev routing, the wake → deliver flow, agent settings, the crew list |
+| **platform-mcp** | The MCP server the agents call, including Scout's web search and page reader |
 | **integrations** | Composio (connect, run actions, triggers), user MCP servers |
 | **billing** | Plans, subscriptions, credit grants, ledger, coupons, Polar, LiteLLM keys and budgets |
-| **automations** | Automation rows and timers |
+| **automations** | Automation rows and timers, pull-request review |
 | **admin** | Admin APIs, Bull Board, coupon creation |
 
 **Later split candidates**, only if load demands it: *channels* (as a gateway) and *billing*.
@@ -265,7 +339,7 @@ The web app lives in `user-frontend/` and is built from `openapi.yaml` + `ignore
 | Egress proxy | infra | Squid (or Smokescreen) | The only way out of containers |
 | Caddy | infra | – | HTTPS |
 
-**External services:** Clerk, Meta WhatsApp Cloud API, Telegram Bot API, Sendblue (iMessage, enabled last), Composio, OpenRouter (cheap models), Anthropic/OpenAI (paid plans), TypeSafe **Jev** (routing decisions), **Polar** (payments, merchant of record), off-server backup storage.
+**External services:** Clerk, Meta WhatsApp Cloud API, Telegram Bot API, Sendblue (iMessage, enabled last), Composio, OpenRouter (cheap models), Anthropic/OpenAI (paid plans), TypeSafe **Jev** (routing decisions), **Polar** (payments, merchant of record), **Brave Search API** (Scout's web search), off-server backup storage.
 
 ---
 
@@ -282,6 +356,7 @@ The web app lives in `user-frontend/` and is built from `openapi.yaml` + `ignore
 - **`/mcp` and `/git` are not reachable from the internet.** Caddy answers 404 for `/mcp*` and `/git/*`. Only user containers need those two paths, and they reach the api directly on the platform network through the egress proxy, never through Caddy. Attachment URLs under `/mcp/files/` are built from the api's internal address (`INTERNAL_API_URL`), so nothing public depends on either path.
 - Containers reach **only the egress proxy**, which allows: LiteLLM, the api's `/mcp` and `/git/`, and that user's allowlisted MCP domains. `github.com` itself is **not** allowed.
 - The worker **never** talks to containers directly; it goes through the vm-manager's *Deliver*.
+- **Web research doesn't open the container's network.** Scout's `web_search` and `read_page` run in the api, which fetches for the agent and refuses private and internal addresses (section 5.1).
 - The vm-manager's gRPC port is on the platform network only.
 
 ---
@@ -291,19 +366,40 @@ The web app lives in `user-frontend/` and is built from `openapi.yaml` + `ignore
 ### 5.1 api
 
 - **Webhooks:** WhatsApp, Telegram, Sendblue, Clerk, Polar, Composio. Each one: verify → save the event (unique key) → add a job → 200. A chat webhook whose channel is switched off answers 200 and does nothing (section 0.3).
-- **REST + SSE for the web app** (every endpoint, schema and error is in `openapi/openapi.yaml`): profile, link codes, channels (with the list of channels that are switched on), apps (Composio connect links), user MCP servers, approvals, chat history, **plans / checkout / credits balance / usage history / coupon redeem**, bring-your-own key, automations list.
+- **REST + SSE for the web app** (every endpoint, schema and error is in `openapi/openapi.yaml`): profile, link codes, channels (with the list of channels that are switched on), apps (Composio connect links), user MCP servers, approvals, chat history, **plans / checkout / credits balance / usage history / coupon redeem**, bring-your-own key, automations list, **pull-request review per repo**, agent settings (which AI pays), the **crew list**.
 - **Platform MCP (`/mcp`)**, called with the container token:
 
 | Tool | Effect |
 |---|---|
 | send_message | Save → outbound job |
 | request_approval | Save the approval → outbound job with buttons → returns "pending" |
-| run_app_action | Call Composio with **the caller's user id** (forced from the token); plan limits on apps apply. A successful action that changes something costs **1 credit** (section 7.2); it is refused at zero credits |
+| run_app_action | Call Composio with **the caller's user id** (forced from the token); plan limits on apps apply. A risky action needs an approved approval, except a pull-request comment covered by review being on for that repo (section 0.8). A successful action that changes something costs **1 credit** (section 7.2); it is refused at zero credits |
 | list_app_actions | This user's allowed actions (connected apps × plan), each marked with whether it needs approval and whether it costs a credit |
 | schedule_reminder / create_automation / list / cancel | Save + register the timer (plan limits apply) |
 | get_profile | Name, timezone, plan, connected apps |
+| web_search | Scout's search. Asks the search provider from the server and returns titles, links and snippets. A **paid tool**: its cost × 2.5 in credits (section 7.2) |
+| read_page | Scout's page reader. Fetches one public web page from the server and returns its text. Free |
 
 Every call is audit-logged and triggers a vm-manager *Touch*. `/mcp` is closed to the internet (section 4).
+
+- **What needs approval** (`integrations/catalog.ts`): an action whose name has a risky word (send, reply, delete, pay, share, post, merge, close, update…), and, since 2026-10-03, a **GitHub action that writes a comment or a review** (its name has COMMENT or REVIEW and it isn't a read). Other people read those, so they count as sending to others. Comment actions of other apps are unchanged.
+
+- **Scout's tools** (decided 2026-10-03). They run in the api, never in the container, so the container's network stays locked.
+  - **`read_page(url)`:**
+    - **Only `http` and `https`,** on ports 80 and 443, with no user name or password in the URL.
+    - **Only public addresses.** The host is looked up, and the page is refused if **any** of its addresses is private, loopback, link-local (this covers the cloud metadata address `169.254.169.254`), carrier NAT, multicast, reserved, or the IPv6 forms of those. Host names with no dot, `localhost`, `.local`, `.internal`, and the platform's own hosts (the api, LiteLLM, the vm-manager) are refused by name.
+    - **Checked again when connecting.** The connection is made only to an address that passed the check, so a host can't answer "public" to the check and "private" to the connection (DNS rebinding).
+    - **Redirects** are followed by hand, at most 5, and every hop is checked the same way.
+    - **Limits:** 15 seconds in total, 2 MB of page, text types only (HTML, plain text, JSON, XML). The answer is the page's readable text (scripts, styles and markup removed), cut at 20,000 characters.
+    - **Rate limit:** 30 pages a minute per user.
+    - **The text is not trusted.** The tool's description tells the agent to treat it as information, never as instructions. Scout has no shell and no app actions (section 0.7).
+    - The activity log saves the page's address without its query string.
+  - **`web_search(query)`:**
+    - **A small provider interface,** chosen by `WEB_SEARCH_PROVIDER`. One provider is built: **Brave Search API** (`GET /res/v1/web/search`, key in `X-Subscription-Token`; $5 per 1,000 searches when checked on 2026-10-03).
+    - **No key set (`BRAVE_SEARCH_API_KEY`):** the tool answers that search isn't set up. It is a normal answer, not an error, so the turn goes on.
+    - **Rate limit:** 20 searches a minute per user. At most 10 results per search.
+    - **Refused at zero credits,** like an app action that changes something.
+    - **Charged only on success** (section 7.2).
 
 - **App connections:** a connect link saves the connection as `pending`. Three things move it to `active` (or `expired` / `error`), whichever comes first:
   - Composio's webhook (`/webhooks/composio`),
@@ -324,10 +420,10 @@ Every call is audit-logged and triggers a vm-manager *Touch*. `/mcp` is closed t
 
 | Job (queue) | What happens |
 |---|---|
-| process-message (inbound) | Take the lock → channel still on? (section 0.3) → **credit check** (section 7.5) → Jev: simple or task, apps, spam → simple: cheap model via LiteLLM → outbound; task: *WakeSandbox* → *Deliver* (stream until turn done) |
+| process-message (inbound) | Take the lock → channel still on? (section 0.3) → **credit check** (section 7.5) → Jev: simple or task, apps, spam → simple: cheap model via LiteLLM → outbound; task: *WakeSandbox* → *Deliver* (stream until turn done). Progress lines from the stream go to the web chat's live stream (section 0.7) |
 | process-approval (inbound) | Mark the approval → Wake + Deliver the answer |
 | run-automation (scheduled → inbound) | Same as process-message with the saved instruction |
-| composio-trigger (inbound) | Same as process-message with the event summary |
+| composio-trigger (inbound) | Same as process-message with the event summary. For a pull-request review automation: check the event, find the head commit, one review per head commit, then the review instruction (section 0.8) |
 | send-outbound (outbound) | Send via the channel (24-hour rule → template). Nothing is sent to a channel that is switched off. On Telegram, purchase links are taken out (section 7.6) |
 | create-sandbox / delete-sandbox (system) | LiteLLM key create/revoke + vm-manager Create/Delete |
 | check-connection (system) | Added when a connect link is created. Asks Composio for the account's status 15 s later, then after 30 s, 1 min, 2 min, 4 min and 8 min (six checks in about 16 minutes). It stops as soon as the connection is no longer `pending`. Safe to re-run: it only copies Composio's status. After the last check a connection that is still pending is left as it is; the webhook or the app list can still finish it |
@@ -386,6 +482,7 @@ A timeout (15 min) ends in a force-stop and an error event.
 
 _Updated 2026-09-29 to match the pricing page: Max $30, automations 1 / 5 / 50, 90-day credits, waitlist offer; model tiers no longer advertised._
 _Updated 2026-10-03 with the launch decisions (`docs/launch-plan.md`): AI three ways, 1 credit per app action that changes something, no purchase links on Telegram. Prices and credits are unchanged._
+_Updated 2026-10-03 (crew package): browser use is a Max feature, a user can choose Textcrew AI over their own AI, web search is the first paid tool._
 
 | | **Free** | **Pro** | **Max** |
 |---|---|---|---|
@@ -395,7 +492,8 @@ _Updated 2026-10-03 with the launch decisions (`docs/launch-plan.md`): AI three 
 | Textcrew AI models (in code, not advertised) | Cheap model only | All models | All models |
 | Priority | – | – | **Priority when things get busy** (queue + awake cap) |
 | Apps (Composio) | 10 | All 25 | All 25 + **own MCP servers** |
-| Automations | 1 | 5 | 50 |
+| Automations (a repo with pull-request review on counts as one) | 1 | 5 | 50 |
+| Browser use (Scout's real browser, 2 credits per minute; not built yet, section 11) | – | – | ✓ |
 | Bring your own key | ✓ | ✓ | ✓ |
 | Awake cap priority | Lowest (stopped first when the server is full) | Normal | Highest |
 
@@ -410,6 +508,11 @@ _Updated 2026-10-03 with the launch decisions (`docs/launch-plan.md`): AI three 
 - **Only the AI part is free with the user's own AI.** Awake time, app actions and paid tools are charged in credits whichever way is chosen.
 - **First match wins:** a connected Claude plan with Claude Code chosen, then an own API key, then Textcrew AI.
 - **`AI_ACCESS_MODE`:** `platform` offers Textcrew AI to a user who brought nothing. `own_only` switches Textcrew AI off; such a user is asked to connect their own AI first.
+- **Choosing Textcrew AI anyway** (decided 2026-10-03). A user who has saved a key or connected a Claude plan can still pick Textcrew AI, and switch back:
+  - The user's **AI preference** is `auto` (the first-match rule above) or `platform` (use Textcrew AI). It is saved with the agent settings; the default is `auto`.
+  - With `platform` chosen, Hermes runs on Textcrew AI and **the AI is charged in credits**, although a key is saved or a Claude plan is connected. The key and the Claude connection are kept, so switching back to `auto` needs no new sign-in.
+  - **Only when Textcrew AI is on offer** (`AI_ACCESS_MODE=platform`). The agent settings say so (`platformAvailable`). In `own_only` the choice is refused (`409`), and a preference saved earlier is ignored: the `own_only` rules are unchanged.
+  - **Connecting a Claude plan** sets the preference back to `auto`: the user has just chosen Claude Code.
 - Codex comes later.
 
 **Waitlist offer:** waitlist members get **50% off their first month** of Pro ($6) or Max ($15), applied automatically at checkout (a Polar discount applied by id at checkout, once per waitlist entry, verified email only).
@@ -424,8 +527,9 @@ _Updated 2026-10-03 with the launch decisions (`docs/launch-plan.md`): AI three 
 | Container awake time | 1 credit per 10 minutes awake |
 | **App action that changes something** (send, create, update, delete) | **1 credit per successful action** |
 | App action that only reads (get, list, search) | Free |
-| Browser use | 2 credits per minute (Max plan, at launch; design in the crew package) |
-| Paid tools (pay-per-use APIs) | Their cost × 2.5 |
+| Browser use | 2 credits per minute (Max plan; not built yet, proposal in section 11) |
+| Paid tools (pay-per-use APIs) | Their cost × 2.5. The first one is Scout's web search |
+| Reading a web page (`read_page`) | Free |
 | Jev routing, simple replies | Included in the AI cost |
 | **Failed turns caused by us** (our bug or outage) | **Not charged**; the charge is reversed |
 
@@ -441,6 +545,16 @@ _Updated 2026-10-03 with the launch decisions (`docs/launch-plan.md`): AI three 
 - **At zero credits** an action that changes something is refused before it runs. Reading still works.
 - **A turn reversed as our fault** gives back the app-action credits charged during that turn, with the rest of the turn.
 - **Everyone pays it,** including users on their own API key or Claude plan.
+
+**Paid tools** (decided 2026-10-03):
+
+- **The price is the tool's real cost × 2.5,** as for the AI. One search costs us $0.005 (Brave, `WEB_SEARCH_COST_USD`), so it is 1.25 credits.
+- **Credits are whole numbers, so fractions carry over,** the way awake time does: the platform keeps the user's running total of paid-tool cost and charges each whole credit as it is reached. With search that is 1 credit for three searches and 2 for the fourth: 5 credits for 4 searches, exactly × 2.5. A call never costs less than 1 credit.
+- **Only success is charged.** A search the provider refuses, or one that isn't set up, costs nothing.
+- **At zero credits** a paid tool is refused before it runs.
+- **A turn reversed as our fault** gives back the paid-tool credits charged during that turn.
+- **Everyone pays it,** including users on their own API key or Claude plan.
+- **Which grants pay:** normal grants only. A coupon grant with the cheap-model flag doesn't pay for paid tools (section 7.7).
 
 ### 7.3 Grants: where credits come from, and expiry
 
@@ -467,13 +581,16 @@ Credits are held as **grants**. Each grant has an amount, **what's left of it**,
 4. **After each turn** (on *turn done*), the worker also does a quick sync for that user, so the balance stays fresh.
 5. **App actions are charged when they run,** not by the sync: one charge of 1 credit per successful action that changes something, through the same grants and ledger. Each charge has its own unique key, so it can be written only once: the approval id when the action was approved (an approval is single use), otherwise an id made for that one run. The charge shows in the credit history (`App action: <name>`), in the activity log (`creditsCharged`) and in usage (`appActionCredits`).
 
+6. **Paid tools are charged when they run** too, the same way: one charge per successful call, with its own unique key, through the same grants and ledger (`Web search`). It shows in the credit history, in the activity log (`creditsCharged`) and in usage (`toolCredits`).
+7. **Usage is reported in five parts:** AI, awake time, app actions, browser time and paid tools (`aiCredits`, `awakeCredits`, `appActionCredits`, `browserCredits`, `toolCredits`). Browser time has its own number so screens can label it; the total is the sum of the five.
+
 ### 7.5 Enforcing the balance
 
 | Where | Check |
 |---|---|
 | **Before a turn** (process-message) | Balance > 0? If not → reply "out of credits" and where to top up, upgrade or redeem a coupon; no container wake. On Telegram the reply names the web app and carries **no link** (section 7.6); other channels get the billing link |
 | **During a turn** | The user's **LiteLLM key budget = their current balance in dollars of real cost**. If they run out mid-turn, LiteLLM refuses → Hermes stops → "out of credits" |
-| **Before an app action that changes something** | Balance > 0? If not → the tool tells the agent the user is out of credits and the action does not run |
+| **Before an app action that changes something, or a paid tool** | Balance > 0? If not → the tool tells the agent the user is out of credits and the action or search does not run |
 | **At zero after a sync** | Set the LiteLLM budget to 0; pause automations |
 | **When credits are added** (payment, coupon, monthly grant) | Raise the LiteLLM budget; un-pause automations |
 
@@ -554,11 +671,13 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 | integrations | connections | user_id, app, composio_account_id, status |
 | integrations | user_mcp_servers | user_id, url, domain, auth_secret (encrypted), enabled |
 | integrations | byok_keys | user_id, provider, key (encrypted) |
-| automations | automations | id, user_id, kind (once/repeat/event), schedule/cron, timezone, trigger_ref, instruction, enabled, fail_count, next_run_at |
+| orchestrator | agent_settings | user_id, runtime (hermes/claude_code), ai_preference (auto/platform), claude_connected_at |
+| automations | automations | id, user_id, kind (once/repeat/event), schedule/cron, timezone, trigger_ref, instruction, preset (null/pr_review), enabled, fail_count, next_run_at |
+| automations | pr_reviews | user_id, owner, repo, pr_number, head_sha (**unique together**), automation_id, event_id, status (requested/done/failed) |
 | billing | subscriptions | user_id, plan, polar_subscription_id, status, period_start, period_end |
 | billing | credit_grants | id, user_id, source, amount, remaining, expires_at, cheap_model_only, ref (payment/coupon id) |
 | billing | credit_ledger | id, user_id, grant_id, delta, reason (grant/charge/expire/refund/adjust), idempotency_key (unique), meta, created_at |
-| billing | usage_periods | user_id, period_start, period_end, ai_cost, awake_seconds, credits_charged |
+| billing | usage_periods | user_id, period_start, period_end, ai_cost, awake_seconds, browser_seconds, browser_credits, credits_charged |
 | billing | coupons | id, campaign, code_hash (unique), code_prefix, credits, max_redemptions, redeemed_count, expires_at, credit_expiry_days, cheap_model_only, new_users_only, active, created_by |
 | billing | coupon_redemptions | coupon_id, user_id (**unique together**), ip, grant_id, created_at |
 | admin | audit_log | id, user_id, actor (user/agent/admin/system), action, details, created_at |
@@ -701,6 +820,8 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 | Server full | Stop the longest-idle container; else the job waits |
 | LiteLLM / model down | Backup model → retry later → "delayed" message |
 | Composio down | The tool returns an error to the agent; the user is told |
+| Search provider down or not set up | `web_search` tells the agent; nothing is charged; the turn goes on |
+| GitHub can't be asked for a pull request's head commit | The head commit in the event is used; with none, no review runs and the activity log says why |
 | vm-manager down | Wake/Deliver jobs retry with backoff; the rest keeps working |
 | Jev down | Treat every message as a task (no routing shortcut) |
 | Polar webhook late | Credits are added when it arrives; the web app shows "processing" |
@@ -715,7 +836,75 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 - [ ] No GitHub token in containers: git goes through the git gateway, which forces the user id from the container token and refuses pushes to the default branch
 - [ ] Secrets encrypted in Postgres; tokens and codes stored as hashes
 - [ ] Approvals before sending to others, deleting or paying; audit log for every action
+- [ ] Pull-request review: comments run without approval only on repos the user turned review on for, only new reviews and comments, never approve, merge or another repo; the agent can't turn it on
+- [ ] `read_page` reaches public addresses only: private, loopback, link-local, metadata and internal hosts are refused, at every redirect and again when connecting; limits on time, size and redirects; rate limited
 - [ ] Coupon rules from 7.7; rate limits on redeem, link codes and login-linked endpoints
 - [ ] Nightly off-server backups with a tested restore
+
+---
+
+## 11. Proposal: Scout's browser (not built; the founder decides)
+
+**Status:** a proposal written 2026-10-03 for `docs/launch-plan.md` D10. No browser code exists. Prices were read on the providers' own pages on 2026-10-03 (links at the end).
+
+**What is wanted:** on the Max plan, Scout can drive a real browser (open a page, click, type, read what a script-heavy page shows) at **2 credits per minute**. `read_page` covers plain pages already; the browser is for pages that need JavaScript, clicks or forms.
+
+### 11.1 The two options
+
+- **(a) A browser inside each user's container.** Chromium is added to the agent image. Scout drives it there.
+- **(b) A hosted browser service driven by platform tools.** The browser runs at a provider. The api opens a session and Scout drives it through new Platform MCP tools (`browser_open`, `browser_click`, `browser_type`, `browser_read`, `browser_close`), the same way `web_search` and `read_page` work.
+
+### 11.2 Comparison
+
+| | (a) Browser in the container | (b) Hosted browser + platform tools |
+|---|---|---|
+| **Memory** | Chromium needs several hundred MB by itself; hosting guides say to give a Chromium container at least 1 GB. Our container limit is 600 MB and an idle container already uses 325 MB. The limit would have to go to about 1.5 GB for Max users | None on our server. The api holds one WebSocket per open session |
+| **Server impact** | The test server has about 5.5 GB for containers: about 15 idle ones today. A browser turn takes the room of 4 of them, so the awake cap must fall or the server must grow. The image grows by several hundred MB, and Chromium under gVisor is slower and needs its own flags | No change to the awake cap or the image |
+| **The locked network** | **Lost for that container.** A browser must reach any site, so the egress proxy would have to allow every domain. Then anything in the container (the user's files, memory, cloned code, a Claude Code sign-in) can be sent anywhere by one injected instruction | **Kept.** The container still reaches only the api, LiteLLM and git. The browser is outside it |
+| **Logged-in sessions** | Cookies would live in the user's `/data` volume on our server, and in the nightly backup | Cookies would live at the provider (Browserbase calls it a context, encrypted at rest). A third party holds them. **Proposed for launch: no saved logins at all** (public pages only) |
+| **Prompt injection** | The browser sits next to the user's data with an open network. This is the dangerous mix | The page can only reach what Scout can: `web_search`, `read_page` and the browser tools. Scout has no shell and no app actions. The worst case is Scout typing something into a page |
+| **Metering browser minutes** | The Bridge reports browser seconds; the vm-manager already stores them per awake period and the usage sync already reads them | The api opens and closes every session, so it knows the seconds. They are added to the same usage sync and the same `browserCredits` |
+| **Plan check** | In the vm-manager and the image | In the tool: not on Max → the tool says so |
+| **Work to build** | Image, vm-manager (memory by plan, egress rules, metering), Bridge tools | Platform tools, one provider client, a session table, the sync. One repo |
+| **Risk of the provider** | None | A new supplier and a monthly bill. The provider sees the pages Scout opens |
+
+### 11.3 Hosted services: prices and limits
+
+| Service | Plan | Price | Browser time | Sessions at once | Longest session | Extras |
+|---|---|---|---|---|---|---|
+| **Browserbase** | Free | $0 | 1 hour a month | 3 | 15 minutes | No captcha solving |
+| | Developer | $20 a month | 100 hours included, then $0.12 an hour | 25 | not stated on the page | Proxy: 1 GB included, then $12 per GB |
+| | Startup | $99 a month | 500 hours included, then $0.10 an hour | 100 | not stated on the page | Proxy: 5 GB included, then $10 per GB |
+| **Steel** | Launch | $0 + usage ($30 of credit once) | $0.10 an hour | 10 | 15 minutes | Proxy $10 per GB, captcha $3 per 1,000 |
+| | Scale | $250 a month + usage ($100 of credit a month) | $0.08 an hour | 100 | 1 hour | Proxy $6 per GB, captcha $1 per 1,000 |
+| **Browserless** | Prototyping | $25 a month (billed yearly) | 20,000 units (a unit is up to 30 seconds), then $0.0020 a unit: about $0.24 an hour | 10 | 15 minutes | Proxy: 6 units per MB (residential) |
+| | Starter | $140 a month (billed yearly) | 180,000 units, then $0.0017 a unit | 40 | 30 minutes | |
+
+### 11.4 Cost against 2 credits per minute
+
+- **The price:** 2 credits a minute is $0.02 a minute, or **$1.20 an hour**.
+- **Hosted cost:** $0.10 to $0.12 an hour (Browserbase, Steel), $0.24 on Browserless. At cost × 2.5 the browser alone would be 0.4 to 1 credit per **ten** minutes, so 2 credits a minute covers it about ten times over. The monthly fee is covered early: Browserbase's $20 is 17 browser hours sold.
+- **What the margin is for:** the AI. A browser turn sends many page snapshots to the model. That cost is charged apart (Textcrew AI in credits, or on the user's own key), so it doesn't come out of the 2 credits.
+- **What could break it:** proxies. At $10 to $12 per GB, one heavy session through a proxy can cost more than the minutes earn. **Proposed: no proxies and no captcha solving at launch.**
+- **In-container cost:** only our own RAM. The test server costs about $2.50 a day for 7.6 GB, so 1.5 GB is about $0.02 an hour. It is cheaper per hour, but each browser turn uses the room of four users, and the price is paid in capacity, not dollars.
+
+### 11.5 Recommendation
+
+**Option (b): a hosted browser driven by platform tools, starting on Browserbase's Developer plan ($20 a month, 100 hours, then $0.12 an hour).** Steel's Launch plan ($0.10 an hour, no monthly fee, 15-minute sessions) is the fallback; the provider sits behind a small interface like the search provider, so it can be swapped.
+
+Why:
+
+1. **It keeps the locked network.** This is the trust promise on the landing page, and option (a) gives it up for exactly the users who pay most.
+2. **It doesn't touch the server's memory.** Option (a) needs a bigger container and a lower awake cap before launch.
+3. **It fits how Scout already works:** Scout has only platform tools, and the platform checks the plan, meters the minutes and writes the activity log in one place.
+4. **It is the smaller build,** in one repo.
+
+Proposed limits for the first version: Max plan only; one browser session per user; closed after 2 idle minutes and after 15 minutes at most; public pages only (no saved logins, no proxies, no captcha solving); the same address rules as `read_page` for every page the browser is sent to; refused at zero credits; metered per second and charged at 2 credits per minute through the usage sync.
+
+**What the founder decides:** option (a) or (b); if (b), which provider and who opens the account; whether Scout may ever stay logged in to a site, and where those cookies may live.
+
+**Not checked:** how Browserbase and Steel bill a session that is opened and left idle, the longest session on Browserbase's paid plans, and whether Chromium runs acceptably under gVisor in our image (only needed for option (a)).
+
+**Sources** (read 2026-10-03): [Browserbase pricing](https://www.browserbase.com/pricing) · [Browserbase contexts](https://docs.browserbase.com/features/contexts) · [Steel pricing and limits](https://docs.steel.dev/overview/pricinglimits) · [Browserless pricing](https://www.browserless.io/pricing) · [Railway's Playwright guide](https://docs.railway.com/guides/playwright) (1 GB for a Chromium container) · our measured container memory: `vm-manager/README.md`.
 
 > Hosting, server setup and sizing live in a separate doc, `docs/deployment.md`. They are not needed to write the code.

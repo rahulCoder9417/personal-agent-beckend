@@ -41,7 +41,20 @@ async function waitForPort(port: number): Promise<void> {
   throw new Error(`port ${port} never opened`);
 }
 
+/**
+ * embedded-postgres registers async-exit-hook, which ends the process with `process.exit(0)`
+ * when Node is about to exit on its own. That turned a failed run (vitest sets
+ * `process.exitCode = 1`) into exit code 0, so `pnpm test` could never fail in CI.
+ * Keep the failure code.
+ */
+function keepFailureExitCode(): void {
+  const exit = process.exit.bind(process);
+  process.exit = ((code?: number | string | null) =>
+    exit(code || process.exitCode || 0)) as typeof process.exit;
+}
+
 export default async function setup(project: TestProject) {
+  keepFailureExitCode();
   const dir = mkdtempSync(join(tmpdir(), 'pa-test-'));
   const pgPort = await freePort();
   const pg = new EmbeddedPostgres({

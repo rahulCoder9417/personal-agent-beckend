@@ -53,9 +53,11 @@ describe('worker', () => {
     try {
       const id = `flaky-${randomUUID()}`;
       await addJob('system', 'flaky', {}, { jobId: id });
+      // Read the job again once it is completed: a copy fetched while it was still running has
+      // no return value yet.
       const job = await waitFor(async () => {
         const j = await queue('system').getJob(id);
-        return (await j?.isCompleted()) ? j : undefined;
+        return (await j?.isCompleted()) ? queue('system').getJob(id) : undefined;
       });
       expect(calls).toBe(3);
       expect(job!.attemptsMade).toBeGreaterThanOrEqual(2);

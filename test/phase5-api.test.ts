@@ -175,7 +175,13 @@ describe('contract: credits', () => {
       200,
     );
     expect(body.items).toHaveLength(1);
-    expect(body.totals).toEqual({ aiCredits: 2, awakeCredits: 2, toolCredits: 2, totalCredits: 6 });
+    expect(body.totals).toEqual({
+      aiCredits: 2,
+      awakeCredits: 2,
+      appActionCredits: 0,
+      toolCredits: 2,
+      totalCredits: 6,
+    });
     await expectContract(
       'getUsage',
       await call(`/v1/usage?from=${to}&to=${from}`, { token: u.token }),

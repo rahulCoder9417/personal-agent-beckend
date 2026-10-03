@@ -60,15 +60,17 @@ export function toLedgerEntry(r: LedgerRow): Schemas['LedgerEntry'] {
   };
 }
 
-export function toUsagePeriod(p: UsagePeriod): Schemas['UsagePeriod'] {
+/** `appActionCredits`: what app actions cost in this period (charged apart from the sync). */
+export function toUsagePeriod(p: UsagePeriod, appActionCredits: number): Schemas['UsagePeriod'] {
   return {
     periodStart: p.periodStart.toISOString(),
     periodEnd: p.periodEnd.toISOString(),
     aiCredits: p.aiCredits,
     awakeSeconds: p.awakeSeconds,
     awakeCredits: p.awakeCredits,
+    appActionCredits,
     toolCredits: p.toolCredits,
-    totalCredits: p.aiCredits + p.awakeCredits + p.toolCredits,
+    totalCredits: p.aiCredits + p.awakeCredits + appActionCredits + p.toolCredits,
   };
 }
 

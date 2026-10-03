@@ -57,7 +57,13 @@ describe('contract: routes', () => {
 describe('contract: billing', () => {
   it('GET /v1/billing/plans (public)', async () => {
     const body = await expectContract<{
-      plans: Array<{ id: string; priceCents: number; monthlyCredits: number }>;
+      plans: Array<{
+        id: string;
+        priceCents: number;
+        monthlyCredits: number;
+        features: string[];
+        limits: { browser: boolean };
+      }>;
       topUps: Array<{ id: string; credits: number }>;
     }>('listPlans', await call('/v1/billing/plans'), 200);
     expect(body.plans.map((p) => [p.id, p.priceCents, p.monthlyCredits])).toEqual([
@@ -65,6 +71,15 @@ describe('contract: billing', () => {
       ['pro', 1200, 1500],
       ['max', 3000, 4500],
     ]);
+    // Browser use is a Max feature (launch-plan D10): in the feature list and in the limits.
+    expect(body.plans.map((p) => [p.id, p.limits.browser])).toEqual([
+      ['free', false],
+      ['pro', false],
+      ['max', true],
+    ]);
+    const withBrowser = body.plans.filter((p) => p.features.some((f) => /browser/i.test(f)));
+    expect(withBrowser.map((p) => p.id)).toEqual(['max']);
+    expect(body.plans[2]!.features).toContain('Browser use: 2 credits per minute');
     expect(body.topUps).toEqual([
       { id: 'topup_10', priceCents: 1000, credits: 800, expiresInDays: 90 },
     ]);
@@ -179,7 +194,8 @@ describe('contract: credits', () => {
       aiCredits: 2,
       awakeCredits: 2,
       appActionCredits: 0,
-      toolCredits: 2,
+      browserCredits: 2,
+      toolCredits: 0,
       totalCredits: 6,
     });
     await expectContract(

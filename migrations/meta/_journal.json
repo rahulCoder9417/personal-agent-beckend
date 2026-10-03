@@ -64,6 +64,13 @@
       "when": 1790778629104,
       "tag": "0008_polar_payments",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791045403432,
+      "tag": "0009_crew_ai_preference_browser_credits",
+      "breakpoints": true
     }
   ]
 }

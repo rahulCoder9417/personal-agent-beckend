@@ -134,12 +134,18 @@ describe('who runs and who pays (effectiveRuntime / aiAccess)', () => {
       runtime: 'hermes',
       effectiveRuntime: 'hermes',
       aiAccess: 'platform',
+      aiPreference: 'auto',
+      platformAvailable: true,
       claude: { connected: false, connectedAt: null },
       ownKeyProviders: [],
     });
 
     setAiAccessMode('own_only');
-    expect(await settingsOf(u.token)).toMatchObject({ effectiveRuntime: null, aiAccess: 'none' });
+    expect(await settingsOf(u.token)).toMatchObject({
+      effectiveRuntime: null,
+      aiAccess: 'none',
+      platformAvailable: false,
+    });
 
     await setByokKey(u.id, 'anthropic', 'sk-ant-test-1234', null);
     expect(await settingsOf(u.token)).toMatchObject({

@@ -10,7 +10,7 @@ import { decryptSecret, encryptSecret } from '../../shared/crypto.ts';
 import { db } from '../../shared/db/client.ts';
 import { logger } from '../../shared/logger.ts';
 import { getUser } from '../auth/users.ts';
-import { hasByokKey } from '../integrations/byok.ts';
+import { ownKeyPaysForAi } from '../orchestrator/agent-settings.ts';
 import { getBalance } from './credits.ts';
 import {
   aliasesForPlan,
@@ -149,7 +149,8 @@ async function remainingBudgetUsd(userId: string): Promise<number | null> {
   const balance = await getBalance(userId);
   if (balance <= 0) return 0;
   // BYOK: AI isn't paid in credits, so it isn't capped by the balance (awake time still is).
-  if (await hasByokKey(userId)) return null;
+  // A user who chose Textcrew AI pays in credits again, key or no key.
+  if (await ownKeyPaysForAi(userId)) return null;
   return creditsToRealUsd(balance);
 }
 

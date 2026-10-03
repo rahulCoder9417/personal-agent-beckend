@@ -317,6 +317,7 @@ describe('app-action charge', () => {
       aiCredits: 0,
       awakeCredits: 1,
       appActionCredits: 2,
+      browserCredits: 0,
       toolCredits: 0,
       totalCredits: 3,
     });

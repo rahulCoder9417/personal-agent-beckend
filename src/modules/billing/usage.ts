@@ -10,7 +10,7 @@ import { db } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import { logger } from '../../shared/logger.ts';
 import { getUser } from '../auth/users.ts';
-import { hasByokKey } from '../integrations/byok.ts';
+import { ownKeyPaysForAi } from '../orchestrator/agent-settings.ts';
 import { vm } from '../orchestrator/vm.ts';
 import { restoreAppActionChargesInTx } from './app-actions.ts';
 import { chargeInTx, getBalance, lockUserCredits, restoreChargesInTx } from './credits.ts';
@@ -98,7 +98,8 @@ export async function syncUsageForUser(userId: string, now = new Date()): Promis
     if (aiMicro === 0 && awakeSeconds === 0 && browserSeconds === 0) return null;
 
     // Bring-your-own-key: AI isn't charged in credits (HLD 7.1); awake time still is.
-    const byok = await hasByokKey(userId, tx);
+    // Not so for a user who chose Textcrew AI over their key.
+    const byok = await ownKeyPaysForAi(userId, tx);
     const aiCredits = byok ? 0 : aiCostToCredits(aiMicro);
     const otherAi = byok ? 0 : Math.min(aiCredits, aiCostToCredits(otherMicro));
     const [prev] = await tx
@@ -129,7 +130,7 @@ export async function syncUsageForUser(userId: string, now = new Date()): Promis
         awakeSeconds,
         awakeCredits,
         browserSeconds,
-        toolCredits: browserCredits,
+        browserCredits,
         creditsCharged: total,
       })
       .onConflictDoNothing({ target: [usagePeriods.userId, usagePeriods.periodStart] })
@@ -223,7 +224,7 @@ export async function reverseTurn(
     .from(litellmKeys)
     .where(and(eq(litellmKeys.userId, userId), isNull(litellmKeys.revokedAt)));
   let ai = 0;
-  if (keyRow && !(await hasByokKey(userId))) {
+  if (keyRow && !(await ownKeyPaysForAi(userId))) {
     const spend = await litellm().getSpendBetween(
       decryptSecret(keyRow.keyEncrypted),
       turn.startedAt,

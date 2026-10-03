@@ -11,6 +11,8 @@ export interface PlanLimits {
   ownMcpServers: boolean;
   topUps: boolean;
   models: 'cheap' | 'all';
+  /** Browser use (Scout's real browser, 2 credits per minute): Max only (launch-plan D10). */
+  browser: boolean;
 }
 
 export interface PlanDef {
@@ -48,7 +50,14 @@ export const PLANS: Record<PlanId, PlanDef> = {
     monthlyCredits: 0,
     signupCredits: SIGNUP_CREDITS,
     // Model limits stay in code (models: 'cheap') even though the pricing page no longer shows them.
-    limits: { apps: 10, automations: 1, ownMcpServers: false, topUps: false, models: 'cheap' },
+    limits: {
+      apps: 10,
+      automations: 1,
+      ownMcpServers: false,
+      topUps: false,
+      models: 'cheap',
+      browser: false,
+    },
     features: [
       '100 credits at sign-up',
       'Coupon codes',
@@ -65,7 +74,14 @@ export const PLANS: Record<PlanId, PlanDef> = {
     interval: 'month',
     monthlyCredits: 1500,
     signupCredits: 0,
-    limits: { apps: ALL_APPS, automations: 5, ownMcpServers: false, topUps: true, models: 'all' },
+    limits: {
+      apps: ALL_APPS,
+      automations: 5,
+      ownMcpServers: false,
+      topUps: true,
+      models: 'all',
+      browser: false,
+    },
     features: [
       '1,500 credits every month',
       `All ${ALL_APPS} apps`,
@@ -82,12 +98,20 @@ export const PLANS: Record<PlanId, PlanDef> = {
     interval: 'month',
     monthlyCredits: 4500,
     signupCredits: 0,
-    limits: { apps: ALL_APPS, automations: 50, ownMcpServers: true, topUps: true, models: 'all' },
+    limits: {
+      apps: ALL_APPS,
+      automations: 50,
+      ownMcpServers: true,
+      topUps: true,
+      models: 'all',
+      browser: true,
+    },
     features: [
       '4,500 credits every month',
       'Priority when things get busy',
       `All ${ALL_APPS} apps + your own MCP servers`,
       '50 automations',
+      'Browser use: 2 credits per minute',
       'Top-ups: $10 = 800 credits',
       'Bring your own key',
       'Unused credits carry over for 90 days',

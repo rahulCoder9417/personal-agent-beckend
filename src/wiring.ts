@@ -10,6 +10,7 @@ import {
 } from './modules/automations/automations.ts';
 import {
   chargeAppAction,
+  chargePaidTool,
   getBalance,
   getLiteLLMKey,
   hasCredits,
@@ -43,6 +44,7 @@ import {
 import { setSandboxConfigProvider } from './modules/orchestrator/sandbox.ts';
 import { connectAiText, setTurnHooks } from './modules/orchestrator/turn.ts';
 import { setAppActionCharger } from './modules/platform-mcp/tools/apps.ts';
+import { setPaidToolCharger } from './modules/platform-mcp/tools/web.ts';
 import { logger } from './shared/logger.ts';
 
 let wired = false;
@@ -96,6 +98,12 @@ export function wireModules(): void {
 
   // 1 credit for each successful app action that changes something (HLD 7.2).
   setAppActionCharger(async (userId, input) => (await chargeAppAction(userId, input)).charged);
+  // A paid tool (Scout's web search) costs its real cost × 2.5 (HLD 7.2).
+  setPaidToolCharger(
+    async (userId, { costUsd, ...input }) =>
+      (await chargePaidTool(userId, { ...input, costMicroUsd: Math.round(costUsd * 1_000_000) }))
+        .charged,
+  );
 
   // At zero: pause automations. Credits added: un-pause the ones paused for credits.
   onBalanceDepleted(async (userId) => {

@@ -7,6 +7,7 @@ import { platformTools, ToolError, type ToolContext } from './registry.ts';
 import './tools/core.ts';
 import './tools/apps.ts';
 import './tools/automations.ts';
+import './tools/web.ts';
 
 /** A per-request MCP server bound to ONE user (stateless streamable HTTP). */
 export function createPlatformMcpServer(ctx: ToolContext): McpServer {
@@ -24,7 +25,7 @@ export function createPlatformMcpServer(ctx: ToolContext): McpServer {
             actor: 'agent',
             action: tool.name,
             summary: tool.summarize?.(args as never, result) ?? tool.name,
-            details: { args: redactArgs(args) },
+            details: { args: redactArgs(tool.auditArgs?.(args as never) ?? args) },
             creditsCharged: tool.creditsCharged?.(args as never, result) ?? null,
           });
           return { content: [{ type: 'text' as const, text: JSON.stringify(result ?? null) }] };

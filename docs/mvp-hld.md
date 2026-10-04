@@ -267,10 +267,10 @@ No vector database and no embeddings (`docs/launch-plan.md` D13 rules out docume
 |---|---|
 | `remember(content, kind?)` | Saves one memory. The same text again (ignoring case and spacing) doesn't make a second one: the first is marked as confirmed again |
 | `recall(query?, limit?)` | Finds memories for a question. With no query it lists the latest. Returns each memory's id, kind, text and date |
-| `forget(memory_id, correction?)` | Removes a memory. With `correction`, the memory keeps its id and gets the new text |
+| `forget(memory_id, correction?)` | Removes a memory. With `correction`, the memory keeps its id and gets the new text. If another memory already says the corrected text, that other one is removed, so one is left |
 
 - **When the agent should use them** is in the tool descriptions: save lasting facts the user states or confirms themself; never save something only read in a web page, an email, a file or a tool result; never save secrets or one-off details; look in memory before asking the user something again.
-- **Finding:** the question's words are matched against each memory with Postgres text search (`english`), any word counting, best match first (`ts_rank`), then the most recently confirmed. A memory that only contains one of the words as part of a longer word is found too. A user has at most 200 short memories, so the search reads that user's rows and needs no text index.
+- **Finding:** the question's words are matched against each memory with Postgres text search (`english`, so "replying" finds "replies"), any word counting, best match first (`ts_rank`), then the most recently confirmed. A word of four letters or more that is found inside a longer word counts too (`beckend` finds `acme/beckend`), except very common words. A user has at most 200 short memories, so the search reads that user's rows and needs no text index.
 - **Marked as used:** every memory a search returns gets its use count raised and its last-used time set. Listing with no query doesn't count.
 - **Every call is audit-logged** like any tool (section 5.1). The activity log says that a memory was saved, corrected or removed, with its id and kind. **It does not hold the memory's text**: the audit log is kept after the memory, and after the account, are deleted, so the text stays in one place only, the `memories` table. The web app shows the text from the memory list.
 
@@ -299,9 +299,12 @@ No vector database and no embeddings (`docs/launch-plan.md` D13 rules out docume
 
 - **What is kept:** the table `chat_engines`: user, chat, engine, and when that engine last finished a turn there. A row is written when a turn ends well (`turn_done`), for every kind of turn.
 - **When a recap is added:** the engine of this turn is not the one that handled the previous turn in this chat, or no engine has finished a turn in this chat yet.
+  - **A chat no engine has run in needs an earlier message from the user.** A new chat holds only the platform's own "linked" greeting: there is nothing to carry on, so the first turn gets no recap. If the user did write before (the simple-chat path answered, or the first turn failed), those messages are recapped.
 - **What the recap holds:** the chat's stored messages (`messages`, both directions) that this engine hasn't had: those after its own last turn in this chat, or the latest ones if it never had one. This turn's own message is left out. The newest are kept, within **12 messages and 3,000 characters**; each message is cut at 500 characters and put on one line as `User: …` or `You: …`.
 - **When the engine hasn't changed:** nothing is added. The engine has the chat in its own session.
 - **A failed turn is not recorded,** so a switch whose first turn fails gets the recap again on the next turn.
+- **The time of a turn's end** is taken from the database's clock, the same clock that stamps the messages, and moved up to the next whole millisecond, so a message the engine sent in that turn is never counted as "after" it.
+- **The recap holds the chat as stored.** A message the routing step dropped as spam is in the stored chat, so it can be in a recap. It is the user's own chat, and without routing that message would have gone to the engine anyway.
 - **It goes after the memory block,** before the turn's own text, with its own start and end lines. It is framed as a record of what was said, not as new requests.
 - **Chats from before this was built** have no row, so their next turn gets one recap of messages the engine already has. That happens once per chat.
 - **Not covered:** replies the simple-chat path gave between two turns of the same engine. The engine never saw those and still doesn't. The same recap could carry them; it isn't built.
@@ -324,7 +327,7 @@ No vector database and no embeddings (`docs/launch-plan.md` D13 rules out docume
 |---|---|---|
 | Length of one memory | 300 characters | The tool answers with an error that says the length and the limit |
 | Memories per user | 200 | The tool says memory is full, and to remove some with `forget` or in the web app. Nothing is saved |
-| Saves and corrections | 60 an hour per user | The tool says to try later |
+| Saves, corrections and removals by the agent | 60 an hour per user, together | The tool says nothing was changed and when to try again. Removals count so an injected instruction can't empty the memory quickly. The user's own deletes in the web app are not limited |
 | `recall` | 8 results by default, 20 at most | |
 | Block on each turn | 2,000 characters, 30 memories | The rest are reached with `recall` |
 | Recap on an engine change | 12 messages, 3,000 characters | Older messages are left out |
@@ -359,7 +362,8 @@ The limits are the same on every plan.
   - The refusal names the kind of secret, never the text, and is written to the activity log (`memory_refused`) without the text.
   - **It is a safety net, not a guarantee.** A short password in a plain sentence ("the door code 4821"), a secret in another language, or one split in two passes. It also refuses some harmless text ("the wifi password is on the fridge"); the agent is told to say it without the secret.
 - **Per user, never across users.** Every query filters by the user id, and the tools take the user id only from the container token (section 0.1). A memory id of another user answers "not found", for `forget` and for the web app's delete alike. Tested.
-- **No secrets leave the platform through memory** by design: memories go only to the user's own container and the user's own web app.
+- **Nothing leaves the platform through memory:** memories go only to the user's own container and the user's own web app.
+- **A web address inside a memory is not a "seen" address for `read_page`** (section 5.1). Only the user's own messages, search results and links on read pages count. Otherwise an injected agent could save an address with the user's data in it and then read it. Tested.
 
 **The engines' own memory is left as it is.** Hermes still learns into `/data/hermes` and Claude Code keeps its own files (section 0.5). Those stay per engine and are not copied, read or cleared by the platform. **Platform memory is the shared one:** it is what survives an engine switch, and the only one the user can see and delete from the web app.
 

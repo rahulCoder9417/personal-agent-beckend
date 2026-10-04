@@ -166,7 +166,11 @@ describe('Phase 6: Jev routing', () => {
 
     jevAnswer = { route: 'spam', confidence: 0.6, apps: [] };
     await postWhatsapp(waWebhook([waText(number, 'hmm is this spam')]));
-    await waitFor(async () => wa.sent.find((m) => m.text === 'echo: hmm is this spam'));
+    // No engine has run in this chat yet, so the turn starts with a recap of the chat as stored
+    // (HLD 0.9), which holds the ignored message too. The turn's own text comes last.
+    await waitFor(async () => wa.sent.find((m) => m.text?.endsWith('\nhmm is this spam')));
+    expect(vmFake.deliveries).toHaveLength(1);
+    expect(vmFake.deliveries[0]!.text.split('\n').at(-1)).toBe('hmm is this spam');
   });
 
   it('an unsure "simple", an ESCALATE answer or a cheap-model error all fall back to the agent', async () => {

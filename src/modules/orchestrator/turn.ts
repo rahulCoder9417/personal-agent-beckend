@@ -14,6 +14,7 @@ import type { Channel } from '../channels/types.ts';
 import { fallBackIfClaudeSignedOut, syncRuntimeAfterWake } from './agent-settings.ts';
 import { crewOfProgress } from './crew.ts';
 import { ensureSandbox } from './sandbox.ts';
+import { recordEngineTurn, turnText } from './turn-context.ts';
 import { DeliverEventType, DeliverKind, planPriority, vm } from './vm.ts';
 
 export type TurnKind = 'message' | 'approval_answer' | 'automation' | 'app_event';
@@ -171,7 +172,9 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
     throw err;
   }
   // The container runs the agent the user's settings say (Hermes or Claude Code).
-  await syncRuntimeAfterWake(userId, woke.sandbox);
+  const engine = await syncRuntimeAfterWake(userId, woke.sandbox);
+  // What is known about the user, and a recap of the chat if the engine changed (HLD 0.9).
+  const text = await turnText(input, engine);
 
   const startedAt = new Date();
   const progress = { crewLines: 0 };
@@ -182,7 +185,7 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
     kind: KIND[input.kind],
     sessionKey: input.sessionKey,
     channel: input.channel,
-    text: input.text,
+    text,
     attachments: (input.attachments ?? [])
       .filter((a) => a.path)
       .map((a) => ({ id: a.id, name: a.name, mimeType: a.mimeType, url: signedFileUrl(a.id) })),
@@ -246,6 +249,11 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
   }
 
   if (!outcome) throw new RetryableTurnError('deliver stream ended without turn_done');
+  // This engine now has the chat up to here. A failed turn is not recorded: it gets the recap again.
+  if (outcome === 'done')
+    await recordEngineTurn(userId, input.sessionKey, engine).catch((err: unknown) =>
+      log.warn({ err: String(err) }, 'engine of the turn not recorded'),
+    );
   if (input.inboundMessageId)
     await setMessageStatus(input.inboundMessageId, outcome === 'done' ? 'delivered' : 'failed');
   await publish(userId, 'agent.status', { state: 'awake', lastActiveAt: new Date().toISOString() });

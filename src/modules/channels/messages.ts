@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lt } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, inArray, lt } from 'drizzle-orm';
 import { db } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import { messages, type MediaRef } from './schema.ts';
@@ -163,16 +163,26 @@ export async function getInboundByEvent(eventId: string): Promise<MessageRow | u
   return row;
 }
 
-/** The last messages of one chat, oldest first (context for routing and quick replies). */
+/**
+ * The last messages of one chat, oldest first (context for routing, quick replies and the recap
+ * a new engine gets). `after`: only messages saved after that time.
+ */
 export async function recentSessionMessages(
   userId: string,
   sessionKey: string,
   limit: number,
+  after?: Date | null,
 ): Promise<MessageRow[]> {
   const rows = await db()
     .select()
     .from(messages)
-    .where(and(eq(messages.userId, userId), eq(messages.sessionKey, sessionKey)))
+    .where(
+      and(
+        eq(messages.userId, userId),
+        eq(messages.sessionKey, sessionKey),
+        ...(after ? [gt(messages.createdAt, after)] : []),
+      ),
+    )
     .orderBy(desc(messages.id))
     .limit(limit);
   return rows.reverse();

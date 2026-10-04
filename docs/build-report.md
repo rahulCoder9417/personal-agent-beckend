@@ -2,7 +2,7 @@
 
 What the MVP had to do, how it was designed, what we built, the tech used, and how every part works.
 
-- **Date:** 2026-09-28. **Updated:** 2026-10-03 with the launch basics (`docs/launch-plan.md`, package W1a), and 2026-10-04 with the crew package (W2b-1): the crew list and progress lines, pull-request review, Scout's `web_search` and `read_page`, choosing Textcrew AI, and browser time split from paid tools in usage. Then, the same day, shared memory (W3a): one memory on the platform for every engine, the `remember`, `recall` and `forget` tools, what is known about the user at the top of every delivered turn, a recap of the chat when the engine changes, and the memory endpoints
+- **Date:** 2026-09-28. **Updated:** 2026-10-03 with the launch basics (`docs/launch-plan.md`, package W1a), and 2026-10-04 with the crew package (W2b-1): the crew list and progress lines, pull-request review, Scout's `web_search` and `read_page`, choosing Textcrew AI, and browser time split from paid tools in usage. Then, the same day, shared memory (W3a): one memory on the platform for every engine, the `remember`, `recall` and `forget` tools, what is known about the user at the top of every delivered turn, a recap of the chat when the engine changes, and the memory endpoints. Then the search and browser decisions of 2026-10-04: `web_search` is part of the Max plan and costs 1 credit a search, an engine's own web search is used first and is free, and the browser will allow logins (design only)
 - **Code:** branch `mvp-build` in `beckend/` (TypeScript api + worker) and `vm-manager/` (Go + the agent image)
 - **Design source:** `docs/mvp-hld.md`
 - **Contracts:** `openapi/openapi.yaml` (REST + webhooks), `../vm-manager/proto/vm/v1/vm.proto` (gRPC)
@@ -30,7 +30,7 @@ What the MVP had to do, how it was designed, what we built, the tech used, and h
 | | |
 |---|---|
 | **Build phases (HLD §9)** | All 8 coded and committed (0 foundations → 8 hardening), plus later changes: a waitlist API, the 2026-09-29 pricing update (Max $30, automations 1/5/50, 90-day credits, waitlist discount), bring your own Claude plan (Claude Code runtime, 2026-09-30), and the **launch basics of 2026-10-03**: the channels switch (Telegram and web on, WhatsApp and iMessage off), 1 credit per app action that changes something, the connection check job, no purchase links on Telegram, and `/mcp` and `/git` closed at Caddy (§11). Then the **crew package of 2026-10-04**: the crew list, crew progress lines in web chat, pull-request review per repo, Scout's `web_search` and `read_page`, choosing Textcrew AI over an own key or Claude plan, browser time as its own usage number, browser use in Max's features (§6.19 to §6.21). Then **shared memory of 2026-10-04**: a memory on the platform that every engine shares, three tools to save, find and correct it, the memory block on every delivered turn, a recap of the chat when the engine changes, and endpoints for the user to see and delete it (§6.22) |
-| **Backend tests** | 38 files, 388 tests, all passing (run on 2026-10-04): real Postgres + real Redis, fakes for outside services |
+| **Backend tests** | 38 files, 396 tests, all passing (run on 2026-10-04): real Postgres + real Redis, fakes for outside services |
 | **vm-manager tests** | Go unit tests (fake Docker daemon, store on embedded Postgres, `-race` clean) + 87 Bridge (Python) tests with a fake Hermes and a fake `claude` CLI. The numbers are from the agent-image package (W2b-2, 2026-10-04); they were not re-run for this guide |
 | **Contract coverage** | Every operation in `openapi.yaml` is implemented (a test enforces it) |
 | **Run for real?** | **Partly.** Docker isn't installed on the dev machine. A test deployment ran on AWS on 2026-09-30 and 2026-10-01 (`docs/aws-setup.md`): Telegram, Claude Code on a Claude plan, Composio, Caddy and Squid ran for real. That server is stopped now. The launch basics of 2026-10-03, the crew package and shared memory of 2026-10-04 have not run there, and WhatsApp, Sendblue, Polar, Jev and a platform model key have never run for real |
@@ -52,7 +52,7 @@ This is what HLD sections 0, 5 and 7 ask the product to do.
 | F4 | **Real work in apps** | About 25 apps through Composio, plus the user's own MCP servers (Max plan) |
 | F5 | **Ask before risky actions** | Approvals for sending to others, deleting, paying; they never block the agent (✅/❌ comes back later as a new message) |
 | F6 | **Reminders and automations** | Once ("Friday 10am"), repeating ("every Monday 9am", in the user's timezone), app events ("when my boss emails me"); at most every 15 minutes |
-| F7 | **Credits billing** | 1 credit = $0.01 of price at ~2.5× real cost; AI, awake time, app actions that change something (1 credit each, since 2026-10-03), browser use and paid tools (the first one is web search, since 2026-10-04) cost credits; reading and searching in apps are free; failed turns caused by us are free. Browser use is planned for launch on the Max plan and is not built yet |
+| F7 | **Credits billing** | 1 credit = $0.01 of price at ~2.5× real cost; AI, awake time, app actions that change something (1 credit each, since 2026-10-03), browser use and web search through Textcrew (1 credit per search, on the Max plan, since 2026-10-04) cost credits; reading and searching in apps are free, reading a web page is free, and the web search built into the user's own engine costs nothing; failed turns caused by us are free. Browser use is planned for launch on the Max plan and is not built yet |
 | F8 | **Plans** (updated 2026-09-29 to match the pricing page) | Free $0 (100 sign-up credits, 10 apps, 1 automation), Pro $12 (1,500/month, 25 apps, 5 automations, top-ups), Max $30 (4,500/month, 25 apps + own MCP servers, 50 automations, priority when things get busy). **Every credit lasts 90 days from its grant**, whatever the source; unused monthly credits carry over. Model tiers are no longer advertised; the model limits stay in code and apply to Textcrew AI (F11) |
 | F9 | **Payments** | Polar checkout for plans and top-ups ($10 = 800 credits); webhooks decide plan changes; refunds and chargebacks; waitlist members get 50% off their first month of Pro or Max |
 | F10 | **Coupon codes** | Admin-created free credits with strict anti-abuse rules (HLD 7.7) |
@@ -63,7 +63,7 @@ This is what HLD sections 0, 5 and 7 ask the product to do.
 | F15 | **Admin** | Coupons, credit adjustments, free-credit spend, abuse flags, failed jobs (Bull Board) |
 | F16 | **The crew** (2026-10-03) | Tex leads; Byte codes, Patch reviews code, Scout researches. The specialists are defined in the agent image. The platform gives the apps the crew list and passes the crew's progress lines to web chat |
 | F17 | **Pull-request review** (2026-10-03) | Turned on per GitHub repo. A pull request is opened or gets new commits → Patch reviews it → one review on the pull request → a short verdict in chat. Once per head commit. Turning it on is the standing permission to comment on that repo's pull requests, and nothing else |
-| F18 | **Web research** (2026-10-03) | `web_search` (a paid tool) and `read_page` (free), run on the platform, never in the container. `read_page` reaches public addresses only, and only an address already seen for the user |
+| F18 | **Web research** (2026-10-03, plan and price decided 2026-10-04) | Only Scout searches. An engine with its own web search (Claude Code on the user's Claude plan) uses that, free on every plan. Otherwise `web_search` through Textcrew (Brave): Max plan only, 1 credit per search. `read_page` is free on every plan. Both platform tools run on the platform, never in the container. `read_page` reaches public addresses only, and only an address already seen for the user |
 | F19 | **Shared memory** (2026-10-04) | One memory on the platform, the same whichever engine runs: short facts the agent saves about the user. It reaches every turn; a new engine also gets a recap of the chat; the user can see and delete it. The engines' own memory in `/data` is left as it is |
 
 ### 2.2 Non-functional requirements
@@ -258,7 +258,7 @@ Status: ✅ built + tested (fakes for outside services) · ⚠️ built, needs a
 | F4 Apps + own MCP | 25-app catalog (10 on Free) through the Composio SDK; own MCP servers on Max with egress allowlist updates | ✅ / ⚠️ real Composio |
 | F5 Approvals | `request_approval` → buttons / yes-no / web; single use; must match the exact action and arguments | ✅ |
 | F6 Automations | once / repeat (cron + timezone) / app event; 15-min minimum; plan limits; auto-pause; survive restart + Redis wipe | ✅ |
-| F7 Credits | Grants + append-only ledger; spending order; charging every 5 min and after each turn; 1 credit per successful app action that changes something; paid tools at cost × 2.5 with fractions carried over; reversal of our failures | ✅ |
+| F7 Credits | Grants + append-only ledger; spending order; charging every 5 min and after each turn; 1 credit per successful app action that changes something; 1 credit per web search, through the paid-tool path (a configured cost × 2.5, fractions carried over for other costs); reversal of our failures | ✅ |
 | F8 Plans | Free $0 / Pro $12 / Max $30 with limits on apps (10/25/25), automations (1/5/50), own MCP (Max), top-ups (paid), queue priority; 90-day credits; model limits kept in code | ✅ |
 | F9 Payments | Polar checkout + 9 webhook event types, exactly once; waitlist discount applied automatically | ✅ / ⚠️ real Polar |
 | F10 Coupons | Every 7.7 rule, incl. 50 parallel redemptions on real Postgres | ✅ 🔁 |
@@ -269,7 +269,7 @@ Status: ✅ built + tested (fakes for outside services) · ⚠️ built, needs a
 | F15 Admin | Coupons, credit adjustments, free-credit stats + abuse flags, Bull Board, waitlist admin | ✅ |
 | F16 The crew | `GET /v1/crew` (Tex, Byte, Patch, Scout; `CREW_AVAILABLE` says which specialists are on; Scout's browser needs Max and is not built). Progress lines → SSE `agent.progress`, crew lines also in the activity log, nothing to Telegram | ✅ / ⚠️ never run against the real Bridge |
 | F17 Pull-request review | `PUT` / `DELETE /v1/pr-reviews/{owner}/{repo}`, `GET /v1/pr-reviews`; an event automation with the preset `pr_review`; one review per head commit (`pr_reviews`); a standing approval for four named GitHub actions on that repo | ✅ / ⚠️ real Composio trigger and action names |
-| F18 Web research | `web_search` behind a provider interface (Brave built), charged through the ledger; `read_page` with address checks at every hop, a pinned connection, limits, and the seen-address rule | ✅ / ⚠️ no search key yet, never run against the real internet |
+| F18 Web research | `web_search` behind a provider interface (Brave built), Max plan only (a tool error on Free and Pro), 1 credit a search through the ledger; `read_page` with address checks at every hop, a pinned connection, limits, and the seen-address rule | ✅ / ⚠️ no search key yet, never run against the real internet |
 | F19 Shared memory | `remember`, `recall` and `forget` on the Platform MCP; `memories` in Postgres, found with its text search; a memory block at the top of every delivered turn; `chat_engines` and a recap when the engine changes; `GET` and `DELETE /v1/memories`; obvious secrets refused; no memory text in the audit log | ✅ / ⚠️ never run against a real engine |
 | N1 Isolation | gVisor spec, limits, read-only, sandbox network, Squid allowlist | ⚠️ (no disk quota by default 🔁) |
 | N2 No impersonation | `/mcp` maps sha256(token) → user; tools never read a user id | ✅ |
@@ -537,12 +537,16 @@ The 14 tools are listed in §8.3.
 - If the last credit goes, the LiteLLM budget is closed and automations pause, as after a sync.
 
 **Paid tools** (`billing/paid-tools.ts`, 2026-10-04) are charged when they run too. The first one is Scout's `web_search`:
-- **The price is the tool's real cost × 2.5.** One search costs us $0.005 (`WEB_SEARCH_COST_USD`), so it is 1.25 credits.
-- **Fractions carry over.** Each charge is one ledger row (`Web search`, `meta.kind = paid_tool`) that also saves what the call cost (`meta.costMicroUsd`). The next charge adds up the user's earlier rows under the credit lock, and charges what the total has reached in whole credits minus what was charged before, never less than 1. Four searches cost 1, 1, 1 and 2 credits: 5 in all. There is no separate counter.
+- **A search costs exactly 1 credit** (decided 2026-10-04; before, 1.25 credits: 1, 1, 1 and 2 for four searches).
+  - **How:** the code path did not change. It charges a configured cost × 2.5, and the configured cost of a search (`WEB_SEARCH_COST_USD`) went from 0.005 to **0.004**. That is 4,000 micro-dollars, which is exactly one credit (`MICRO_USD_PER_CREDIT`), so there is no fraction to carry.
+  - **Why it is always exactly 1:** the total reached goes up by exactly one credit, and what was charged so far is never less than what was reached so far (every charge is at least "reached minus charged"). So "reached minus charged" is at most 1, and the floor of 1 does the rest. A test runs searches after every kind of earlier charge.
+  - **The setting is what the price is worked out from, not Brave's bill** ($0.005 a search). `meta.costMicroUsd` on a search row is 4,000. A search is sold at 2× its cost.
+  - **On the server:** a line `WEB_SEARCH_COST_USD=0.005` left in the settings brings back 1.25 credits. Remove it or set 0.004.
+- **The general rule: the configured cost × 2.5, and fractions carry over.** Each charge is one ledger row (`Web search`, `meta.kind = paid_tool`) that also saves the cost it was charged for (`meta.costMicroUsd`). The next charge adds up the user's earlier rows under the credit lock, and charges what the total has reached in whole credits minus what was charged before, never less than 1. A tool at $0.005 a call would cost 1, 1, 1 and 2 credits. There is no separate counter.
 - **Idempotency key:** `paid-tool:<an id made for that call>`.
 - **Which grants pay:** normal grants only. A cheap-model-only coupon grant doesn't pay a paid tool (HLD §7.7).
-- **Only success is charged.** A search the provider fails, and a search with no provider set up, cost nothing. A cost of 0 is not charged.
-- **Where the user sees it:** the credit history, the activity log (`creditsCharged` on the `web_search` entry) and usage (`toolCredits`).
+- **Only success is charged.** A search the provider fails, a search with no provider set up, and a search refused because the user is not on Max cost nothing. A cost of 0 is not charged.
+- **Where the user sees it:** the credit history, the activity log (`creditsCharged` on the `web_search` entry; 0 on a `web_search_refused` entry) and usage (`toolCredits`).
 - `billing/item-charges.ts` holds what app actions and paid tools share: reading such charges back from the ledger, per usage period, and giving them back after a failed turn.
 
 **Usage in five parts:** `GET /v1/usage` reports `aiCredits`, `awakeCredits`, `appActionCredits`, `browserCredits` and `toolCredits` per period and in the totals; `totalCredits` is their sum.
@@ -552,6 +556,7 @@ The 14 tools are listed in §8.3.
 |---|---|
 | Before a turn | balance ≤ 0 → "out of credits" reply, no wake (web: `402`) |
 | During a turn | the LiteLLM key's `max_budget` = spend so far + balance ÷ 250 dollars, so LiteLLM refuses once the credits run out (BYOK users: no AI cap while the balance is above 0) |
+| Before a web search through Textcrew | not on the Max plan → the tool tells the agent that web search is part of Max and to use the engine's own search if it has one; nothing is searched or charged (§6.21) |
 | Before an app action that changes something, or a paid tool | balance ≤ 0 → the tool tells the agent the user is out of credits (and to point them to the web app, without a link); the action or search doesn't run. Reading still works |
 | Balance hits ≤ 0 | budget set to spend so far; `onBalanceDepleted` → all enabled automations paused (`out_of_credits`) |
 | Credits added | budget raised; `onCreditsAdded` → automations paused for credits resume; SSE `credits.updated` |
@@ -814,6 +819,7 @@ The per-item checklist (HLD 10.2) is in `docs/security-checklist.md`.
 - **The crew list** (`GET /v1/crew`, `orchestrator/crew.ts`): the four members with id, name, `kind` (`lead` or `specialist`), role, a short description and `available`.
   - `available`: Tex always. A specialist when it is named in `CREW_AVAILABLE` (default `byte,patch,scout`; `none` switches all three off). The backend can't see which image is deployed, so this setting says what the apps may show.
   - Scout also carries `browser: { requiresPlan, available }`. `requiresPlan` comes from the plans (the plan whose limits have `browser: true`, which is Max). `available` is false: the browser is not built.
+  - Scout's description says what needs Max and what doesn't: web search through Textcrew and the real browser need it; the search built into the user's own Claude plan works on any plan and costs no credits.
 - **Progress lines** (`orchestrator/turn.ts`): the Bridge reports progress during a turn as stream events with a text, for example `Scout: reading 4 pages` or `using web_search`.
   - Every line goes to the web app's live stream as `agent.progress` (`text`, `crew`, `at`). `crew` is `byte`, `patch` or `scout` when the text starts with that name and a colon, otherwise null.
   - **Nothing is sent to Telegram** or any other chat for a progress line. A chat only gets what the agent sends with `send_message`.
@@ -851,13 +857,20 @@ Everything else still needs approval, in the same turn too: merging, a comment o
 
 Both run in the api. The container's network stays locked and no provider key enters it.
 
+**Who searches, and with what** (decided 2026-10-04, HLD §0.7). Only Scout searches the web. When the user's engine has its own web search (Claude Code on the user's Claude plan today; Codex later), Scout uses that: the platform is not involved, it costs no credits and it works on every plan. Otherwise Scout uses the platform's `web_search`. The agent image decides which one Scout is given, and who may call it; the platform can't tell the crew members apart (one container token) and doesn't check the engine.
+
 **`web_search(query, count?)`** (`platform-mcp/tools/web.ts`, `integrations/web-search.ts`):
+- **Max plan only** (decided 2026-10-04). The plan is read from the user's row at every call (`planHasWebSearch` in `billing/plans.ts`, plugged in through `wiring.ts`; until it is plugged in, no plan has it). On Free and Pro the tool throws a tool error, so the agent reads it and the turn goes on:
+  > Web search through Textcrew is part of the Max plan, and your user is not on Max: nothing was searched and nothing was charged. If your engine has its own web search, use that instead. Otherwise tell your user that web search needs the Max plan; they can upgrade in the Textcrew web app. Do not send a link. read_page still opens an address they give you.
+  - Nothing is searched, nothing is charged, and no address becomes "seen".
+  - The refusal goes to the activity log as `web_search_refused` (`Web search needs the Max plan (asked: …)`, `creditsCharged` 0).
+- **The order of the checks:** rate limit → plan → is a provider set up → credits → the search → the charge. The rate limit is first, so refused calls count and can't fill the activity log.
 - A provider interface chosen by `WEB_SEARCH_PROVIDER`. One provider is built: the **Brave Search API** (`GET /res/v1/web/search`, key in `X-Subscription-Token`).
 - **No key set:** the tool answers that search isn't set up. It is a normal answer, not an error, so the turn goes on. Nothing is charged.
-- 20 searches a minute per user; at most 10 results (default 5), each a title, a link and a snippet.
-- Refused at zero credits. Charged only on success, as a paid tool (§6.10).
+- 20 calls a minute per user; at most 10 results (default 5), each a title, a link and a snippet.
+- Refused at zero credits. Charged only on success, **1 credit a search**, as a paid tool (§6.10).
 
-**`read_page(url)`** (`integrations/web-page.ts`): reads one public web page and returns its text and its first 50 links. Free. 30 pages a minute per user.
+**`read_page(url)`** (`integrations/web-page.ts`): reads one public web page and returns its text and its first 50 links. Free, on every plan. 30 pages a minute per user.
 - **The URL:** `http` or `https` only, ports 80 and 443, no user name or password. A host written as an address must be a public one. Names with no dot, `localhost`, `.local`, `.internal` and the platform's own hosts are refused.
 - **What the host resolves to:** refused if **any** of its addresses is private, loopback, link-local (the cloud metadata address), carrier NAT, multicast or reserved. For IPv6 only global addresses pass.
 - **Pinned connection:** the request connects to the address that passed the check, whatever the name resolves to a moment later (no DNS rebinding). The name is still what the certificate is checked against. Each request has its own connection.
@@ -952,7 +965,7 @@ Both run in the api. The container's network stays locked and no provider key en
 | billing | `coupons` | campaign, credits, max_redemptions, redeemed_count, expires_at, credit_expiry_days, cheap_model_only, new_users_only, plans, active |
 | billing | `coupon_codes` | coupon_id, code_hash (unique), code_prefix, max_redemptions, redeemed_count (per code) |
 | billing | `coupon_redemptions` | coupon_id + user_id (**unique**), ip, grant_id |
-| admin | `audit_log` | user_id, actor (user/agent/admin/system), action, summary, details (`crew` on progress lines, `memoryId` on memory entries, never a memory's text), credits_charged (set on `run_app_action` and `web_search` entries) |
+| admin | `audit_log` | user_id, actor (user/agent/admin/system), action, summary, details (`crew` on progress lines, `memoryId` on memory entries, never a memory's text), credits_charged (set on `run_app_action`, `web_search` and `web_search_refused` entries) |
 
 Migrations: `0000_phase1_core`, `0001_phase3_chat`, `0002_phase4_apps_approvals`, `0003_phase7_automations`, `0004_phase5_billing`, `0005_waitlist`, `0006_pricing_90day_credits_waitlist_offer` (coupon expiry default 90, `waitlist_entries.offer_used_at`), `0007_agent_runtime` (`agent_settings`), `0008_polar_payments` (payment ids renamed for Polar), `0009_crew_ai_preference_browser_credits` (`usage_periods.browser_credits`, with the old browser credits moved out of `tool_credits`; `agent_settings.ai_preference`), `0010_pr_review` (`pr_reviews`, `automations.preset`). The launch basics of 2026-10-03 needed no migration. Scout's tools needed none either: paid-tool charges are ledger rows and seen addresses are in Redis. `0011_shared_memory` adds `memories` and `chat_engines`.
 
@@ -1011,7 +1024,7 @@ Auth: **public** = no token · **user** = Clerk session · **admin** = Clerk ses
 | memory | `GET /v1/memories` | user | What the agent has saved about the user: every memory, newest first, and `max` (200) |
 | memory | `DELETE /v1/memories` | user | Delete all of them; answers `{ deleted }` |
 | memory | `DELETE /v1/memories/{memoryId}` | user | Delete one (`404` if it isn't this user's) |
-| billing | `GET /v1/billing/plans` | public | Plans and top-up packs (`limits.browser` is true on Max, and Max's features name browser use) |
+| billing | `GET /v1/billing/plans` | public | Plans and top-up packs (`limits.browser` is true on Max, and Max's features name Scout's web search and browser use; Free and Pro name neither) |
 | billing | `GET /v1/billing/subscription` | user | Current subscription |
 | billing | `POST /v1/billing/checkout` | user | Polar checkout for a plan or top-up |
 | billing | `POST /v1/billing/subscription/cancel` | user | Cancel at period end |
@@ -1055,8 +1068,8 @@ The Telegram, WhatsApp and Sendblue webhooks answer 200 and save nothing while t
 | `send_message` | text, session_key? | Message to the user in that chat (default: the last chat they wrote from); only the user's own chats |
 | `get_profile` | – | Name, timezone, plan, connected apps |
 | `list_app_actions` | app?, search? | Actions of connected apps allowed on the plan, with `requires_approval` and `costs_credits` |
-| `web_search` | query, count? | Titles, links and snippets from the search provider. A paid tool (cost × 2.5; `credits_charged` in the result). Says so when search isn't set up |
-| `read_page` | url | The text and links of one public web page. Only an address already seen for the user. Free |
+| `web_search` | query, count? | Titles, links and snippets from the search provider. Max plan only: a tool error on Free and Pro. 1 credit per search (`credits_charged` in the result). Says so when search isn't set up |
+| `read_page` | url | The text and links of one public web page. Only an address already seen for the user. Free, on every plan |
 | `remember` | content, kind? | Saves one short fact about the user to the shared memory. Refused: a secret, more than 300 characters, more than 200 memories. Free |
 | `recall` | query?, limit? | The memories that fit a question, best match first; with no query, the latest. Free |
 | `forget` | memory_id, correction? | Removes a memory, or corrects its text and keeps its id. Free |
@@ -1111,7 +1124,7 @@ All settings come from env vars, validated with Zod at startup (`src/shared/conf
 | Apps / routing | `COMPOSIO_API_KEY`, `COMPOSIO_WEBHOOK_SECRET`, `COMPOSIO_AUTH_CONFIGS` (JSON slug → auth config id), `JEV_URL`, `JEV_API_KEY`, `JEV_MODEL`, `JEV_TIMEOUT_MS` |
 | AI access | `AI_ACCESS_MODE` (`platform` default: Textcrew AI, Hermes on credits, when the user brings nothing · `own_only`: the user must add a key or connect their Claude plan) |
 | Crew | `CREW_AVAILABLE` (the specialists that are switched on: `byte,patch,scout` by default, or `none`) |
-| Web search | `WEB_SEARCH_PROVIDER` (`brave`), `BRAVE_SEARCH_API_KEY` (unset: `web_search` says it isn't set up), `BRAVE_SEARCH_API_URL`, `WEB_SEARCH_COST_USD` (what one search costs us, default 0.005) |
+| Web search | `WEB_SEARCH_PROVIDER` (`brave`), `BRAVE_SEARCH_API_KEY` (unset: `web_search` says it isn't set up), `BRAVE_SEARCH_API_URL`, `WEB_SEARCH_COST_USD` (the cost a search is charged for, × 2.5; default 0.004, which is exactly 1 credit) |
 | Payments | `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET`, `POLAR_SERVER` (`sandbox` / `production`), `POLAR_PRODUCT_PRO/MAX/TOPUP_10`, `POLAR_WAITLIST_DISCOUNT_ID`, `FREE_CREDITS_MONTHLY_CAP` |
 | Ops | `BACKUP_DIR`, `BACKUP_VOLUMES_DIR`, `BACKUP_UPLOAD_CMD`, `BACKUP_KEEP_DAYS`, `METRICS_TOKEN`, `ALERT_WEBHOOK_URL`, `RATE_LIMIT_PER_IP_PER_MIN` |
 
@@ -1183,11 +1196,13 @@ Commands: `pnpm lint && pnpm typecheck && pnpm test` · `pnpm openapi:lint` · i
 - **The review instruction carries no text from the pull request.** The first version put the title in it. Anyone who can open a pull request writes the title.
 - **A review that failed is not tried again for that commit,** because a failed turn may already have posted. One the agent never started (out of credits) can be.
 - **Paid tools keep their running total in the ledger** (each charge row saves the call's cost), so there is no counter to drift and no migration.
+- **A search is 1 credit by a setting, not by new code** (2026-10-04): the paid-tool path already charges a configured cost × 2.5, and 0.004 × 2.5 is exactly one credit. The ledger rows, the idempotency keys, the refund of a failed turn and `toolCredits` in usage are untouched. The cost of this choice: the setting no longer says what Brave bills us, and a server that sets the old value charges the old price.
+- **Web search is Max only, checked in the tool** (2026-10-04). No field was added to the API: `limits` is unchanged, Max's feature list names the search, and Scout's description in the crew list says what needs Max. The engine is not checked: a Max user's call is answered whichever engine made it.
 - **One search provider is built: Brave.** $5 per 1,000 searches when checked on 2026-10-04, with $5 of free credit a month. Another provider is one more case behind the same interface.
 - **`read_page` opens only an address already seen for the user,** and redirects follow the same rule. This is stricter than the leak needs for redirects (a redirect's target is chosen by the site, not by the agent) and it costs some pages; it can be loosened to "same site" later.
 - **A refused `read_page` is written to the activity log,** so the user can see an injected instruction at work.
 - **Choosing Textcrew AI** is a preference next to the runtime, not a third runtime: the key and the Claude connection stay, so switching back needs no new sign-in.
-- **The browser is a proposal only** (HLD §11): a hosted browser driven by platform tools. Nothing is built.
+- **The browser is a proposal only** (HLD §11): a hosted browser driven by platform tools. Nothing is built. Decided 2026-10-04: it will allow logins, with the user signing in themselves and the agent never seeing the password (HLD §11.6 says what that needs: a view of the session to sign in through, and where the cookies live for each option).
 
 **Shared memory (2026-10-04, `docs/launch-plan.md` W3a)**
 - **The orchestrator owns memory,** not a new module: it builds what is delivered each turn, and the Platform MCP owns no tables.
@@ -1206,7 +1221,7 @@ Commands: `pnpm lint && pnpm typecheck && pnpm test` · `pnpm openapi:lint` · i
 - **The egress file is removed on every stop**, not only on delete.
 - **SetEgressAllowlist replaces both lists**; the backend sends the MCP domains itself.
 - **No `/data` disk quota** with Docker's default volume driver (set `SANDBOX_VOLUME_DRIVER/OPTS`).
-- **`browser_seconds` is always 0** (nothing records browser time yet). Browser use is planned for launch on the Max plan at 2 credits per minute (Scout drives a real browser). The crew package wrote a proposal (HLD §11); building it is package W2c and has not started.
+- **`browser_seconds` is always 0** (nothing records browser time yet). Browser use is planned for launch on the Max plan at 2 credits per minute (Scout drives a real browser). The crew package wrote a proposal (HLD §11); building it is package W2c and has not started. Logins will be allowed (HLD §11.6).
 - **Hermes's own approval prompts are denied**; the platform's `request_approval` is used instead.
 
 ---
@@ -1231,7 +1246,7 @@ Commands: `pnpm lint && pnpm typecheck && pnpm test` · `pnpm openapi:lint` · i
 | 13 | Composio's `readOnlyHint` tag on real tools (2026-10-03) | List a toolkit's tools and check the `tags` field; it only matters for action names with no read or write word |
 | 14 | Pull-request review against the real Composio and GitHub (2026-10-04) | Turn review on for a test repo from the API. Check that `GITHUB_PULL_REQUEST_EVENT` takes `owner` and `repo` and creates the webhook, what its payload looks like (the worker reads `action`, `number` and `pull_request.head.sha`, and asks GitHub for the head commit anyway), and that the four action names in `integrations/catalog.ts` are Composio's real names. If one is wrong, the review asks for approval instead of posting |
 | 15 | A whole review turn (2026-10-04) | Open a pull request in the test repo: Patch clones through the git gateway, posts one review, and the verdict arrives on Telegram. Push again: one more review. Reopen: none |
-| 16 | `web_search` with a real Brave key (2026-10-04) | Set `BRAVE_SEARCH_API_KEY`, ask the agent to search, and check the results, the 1-credit charge and the `Web search` line in the credit history |
+| 16 | `web_search` with a real Brave key (2026-10-04) | Set `BRAVE_SEARCH_API_KEY`. As a Max user on Hermes, ask the agent to search, and check the results, the 1-credit charge and the `Web search` line in the credit history. As a Free or Pro user, check the agent says web search needs Max and the activity log shows the refusal. Check the server's settings don't still say `WEB_SEARCH_COST_USD=0.005` |
 | 17 | `read_page` against the real internet (2026-10-04) | Read an https page named in a message; check the pinned connection works with real certificates, a compressed page, and a page that redirects from `http` to `https`. From outside nothing changes: the tool is only reachable through `/mcp` |
 | 18 | Crew progress lines from the real Bridge (2026-10-04) | With the W2b-2 agent image: start a job that uses a specialist and watch `agent.progress` on `/v1/stream`; nothing extra arrives on Telegram |
 | 19 | Scout's tool limit on Hermes (2026-10-04) | On Hermes the limit is an instruction, not a tool list. Check what a delegated Scout can call, and that `read_page` refuses a made-up address whoever calls it |

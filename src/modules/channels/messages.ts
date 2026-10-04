@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, lt } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lt } from 'drizzle-orm';
 import { db } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import { messages, type MediaRef } from './schema.ts';
@@ -176,6 +176,31 @@ export async function recentSessionMessages(
     .orderBy(desc(messages.id))
     .limit(limit);
   return rows.reverse();
+}
+
+/**
+ * What the user themself wrote lately, newest first: the text of their own inbound messages on
+ * any chat. Nothing the agent sent, and nothing from automations or app events (those are not
+ * saved as inbound messages).
+ */
+export async function recentInboundTexts(
+  userId: string,
+  since: Date,
+  limit: number,
+): Promise<string[]> {
+  const rows = await db()
+    .select({ text: messages.text })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.userId, userId),
+        eq(messages.direction, 'in'),
+        gte(messages.createdAt, since),
+      ),
+    )
+    .orderBy(desc(messages.id))
+    .limit(limit);
+  return rows.map((r) => r.text).filter(Boolean);
 }
 
 export async function listMessages(

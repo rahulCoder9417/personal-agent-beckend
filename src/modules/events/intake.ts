@@ -101,6 +101,15 @@ export async function getEvent(eventId: string): Promise<EventRow | undefined> {
   return row;
 }
 
+/** The event saved for a source's own id (e.g. source `approval`, the approval's id). */
+export async function findEvent(source: string, externalId: string): Promise<EventRow | undefined> {
+  const [row] = await db()
+    .select()
+    .from(events)
+    .where(and(eq(events.source, source), eq(events.externalId, externalId)));
+  return row;
+}
+
 export async function markEvent(
   eventId: string,
   status: 'done' | 'failed' | 'ignored',

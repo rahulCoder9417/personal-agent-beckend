@@ -46,14 +46,46 @@ Keep the status table in section 3 current: update it in the same commit as the 
 | W2b-1 | **Crew on the platform side, and PR review:** the PR review flow (D8); Scout's `web_search` and `read_page` platform tools; the crew list for the apps; crew progress in chat; the API gaps found by W2a (choosing Textcrew AI, browser credits split from paid tools, browser use in Max's features); a browser proposal with prices (no browser code) | `beckend` | **Done 2026-10-04,** on `main`. Lint, type check and all tests pass. Added while finishing: `read_page` opens only an address already seen for the user (their own messages, a search result, a link on a page already read), so it can't be used to send data out. Not deployed, and never run against the real Composio, GitHub, Brave or the open internet: the Composio trigger and the four GitHub action names of the review permission are unchecked, and there is no search key yet |
 | W2b-2 | **Crew in the agent image:** Byte, Patch and Scout defined once in the Bridge and given to both engines; the lead's instructions; progress lines | `vm-manager` | **Done 2026-10-04.** `vm-manager` `main` is at `a880060`. On Claude Code, Scout has exactly `web_search` and `read_page` and no file access. 88 Bridge tests and the Go tests pass. Untested on a real CLI, Hermes or Docker. On Hermes, Scout's tool limits are instructions only (the pinned Hermes has no tool list per delegated task) |
 | W2c | **Scout's browser** (D10), after the founder picks the option proposed in W2b-1. Navigation needs the same seen-address rule as `read_page`, and typing into pages needs its own limit (`docs/mvp-hld.md` section 11.5) | `beckend`, `vm-manager` | Not started |
-| W3a | **Shared memory** (D11) | `beckend`, `vm-manager` | In progress (started 2026-10-04). Backend only: memory on the platform with remember and recall tools, given to whichever engine runs |
+| W3a | **Shared memory** (D11) | `beckend` | **Done 2026-10-04,** on `main`. Backend only: `vm-manager` and the proto did not change. One memory on the platform (table `memories`, owned by the orchestrator); the tools `remember`, `recall` and `forget` for both engines; what is known about the user at the top of every delivered turn; a recap of the chat when the engine changes; endpoints to list and delete. Lint, type check and all tests pass (38 files, 388 tests). Not deployed, and never run on a real Hermes or Claude Code: how an engine reads the block, and whether it saves with `remember` rather than its own memory, is unchecked. Design: `docs/mvp-hld.md` section 0.9. What the web app needs and what the founder decides: under this table |
 | W3b | **App jobs without a container** (D12) | `beckend` | Not started. Proposed to wait until there is load: it only saves container time, and the simple-chat path that is already built needs just a key |
-| W3c | **Web app screens** for PR review, crew and memory, and the new fields from W2b-1 | `user-frontend-web` | In progress (started 2026-10-04) for the W2b-1 fields: crew from the API, the PR review screen, choosing Textcrew AI, usage split, crew progress. The memory screen follows W3a |
-| Ops | **On the server** (it is stopped; start it first): reconnect Gmail with the founder's Gmail account; first live run of the git gateway; add a model provider key; add a Brave Search key; first live run of pull-request review (the Composio trigger, the four GitHub action names, one review per pull request) and of `web_search` and `read_page`; off-server backups and alerts; set up Polar; deploy the web app | server | Not started |
+| W3c | **Web app screens** for PR review, crew and memory, and the new fields from W2b-1 | `user-frontend-web` | In progress (started 2026-10-04) for the W2b-1 fields: crew from the API, the PR review screen, choosing Textcrew AI, usage split, crew progress. The memory screen can start: W3a is done, and what it needs is under this table |
+| Ops | **On the server** (it is stopped; start it first): reconnect Gmail with the founder's Gmail account; first live run of the git gateway; add a model provider key; add a Brave Search key; first live run of pull-request review (the Composio trigger, the four GitHub action names, one review per pull request) and of `web_search` and `read_page`; first live run of shared memory (a fact saved on one engine and used on the other, and the recap after a switch); off-server backups and alerts; set up Polar; deploy the web app | server | Not started |
+
+### Memory screen: what the web app needs (from W3a)
+
+All three need the Clerk session, like every `/v1` route. The contract is `openapi/openapi.yaml` (tag `memory`).
+
+| Call | Answer |
+|---|---|
+| `GET /v1/memories` | `200 { items: Memory[], max: number }`. Every memory, newest first, in one answer (no cursor). `max` is 200 |
+| `DELETE /v1/memories/{memoryId}` | `204`. `404` if it isn't this user's |
+| `DELETE /v1/memories` | `200 { deleted: number }`. Removes all; can't be undone |
+
+- **`Memory`:** `{ id, kind, content, createdAt, updatedAt, lastUsedAt, useCount }`.
+  - `kind`: `preference`, `person`, `project`, `instruction` (a standing instruction) or `fact`.
+  - `content`: one line of plain text, at most 300 characters.
+  - `updatedAt`: when the agent last corrected the text; equal to `createdAt` if never.
+  - `lastUsedAt` (a time or null) and `useCount`: when and how often the agent found it with a search.
+- **There is no call to add or edit a memory.** The user tells the agent ("remember that…", "that's wrong, it is…").
+- **No live event for memory.** Fetch the list when the screen opens, and again when a turn ends (`agent.status` goes back to `awake`).
+- **Full:** when `items.length` reaches `max`, the agent can't save more until some are deleted. Say so on the screen.
+- **Activity log** (`GET /v1/activity`): entries can carry `memoryId` (a string or null). New actions: `remember`, `recall`, `forget`, `memory_refused` (by the agent), `memory_deleted`, `memories_cleared` (by the user). **An entry never holds the memory's text.** To show it, look `memoryId` up in the list; the memory may be gone.
+
+### Shared memory: for the founder to decide
+
+- **Saves in turns the user didn't start.** An app event (an email, a pull request) or a scheduled automation can run with nobody watching, and the agent can save a memory in it. Refusing saves in those turns would close the most likely way a planted "fact" gets in. It would also stop "remember what this email says". Not built.
+- **Adding and editing from the web app.** Today the user can only list and delete; every memory is made by the agent.
+- **No memory text in the activity log.** The log says a memory was saved, corrected or removed, and which one; the text is only in the memory list, so a delete really removes it. The cost: after a delete the log can't show what was there.
+- **The activity log after an account is deleted.** It is kept (this is not new). It holds no memory text, but it holds other summaries, such as approval texts and search queries. Delete it with the account?
+- **The limits:** 200 memories of 300 characters on every plan; 2,000 characters of memory on each turn (about 500 tokens of the user's AI per turn at most).
+- **The agent image** (`vm-manager`, not changed): the lead's instructions don't mention memory, and Hermes still has its own memory tool, so facts can end up in two places. One line in the Bridge's instructions, and perhaps switching Hermes's own memory off, would settle it.
+- **Simple chat.** A reply from the cheap model (no container) is not shown to the engine afterwards, as before. The recap could carry those messages too.
 
 ### Deploy order
 
 Deploy `beckend` and `vm-manager` together (`/opt/textcrew/deploy.sh` does). The agent image now gives Scout the tools `web_search` and `read_page`; with an older backend those tools don't exist and Claude Code won't start Scout.
+
+Shared memory (W3a) adds the migration `0011_shared_memory` (`deploy.sh` applies it) and needs no new setting and no new agent image.
 
 ## 4. The crew: shared design for W2b
 

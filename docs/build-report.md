@@ -2,7 +2,7 @@
 
 What the MVP had to do, how it was designed, what we built, the tech used, and how every part works.
 
-- **Date:** 2026-09-28. **Updated:** 2026-10-03 with the launch basics (`docs/launch-plan.md`, package W1a), and 2026-10-04 with the crew package (W2b-1): the crew list and progress lines, pull-request review, Scout's `web_search` and `read_page`, choosing Textcrew AI, and browser time split from paid tools in usage
+- **Date:** 2026-09-28. **Updated:** 2026-10-03 with the launch basics (`docs/launch-plan.md`, package W1a), and 2026-10-04 with the crew package (W2b-1): the crew list and progress lines, pull-request review, Scout's `web_search` and `read_page`, choosing Textcrew AI, and browser time split from paid tools in usage. Then, the same day, shared memory (W3a): one memory on the platform for every engine, the `remember`, `recall` and `forget` tools, what is known about the user at the top of every delivered turn, a recap of the chat when the engine changes, and the memory endpoints
 - **Code:** branch `mvp-build` in `beckend/` (TypeScript api + worker) and `vm-manager/` (Go + the agent image)
 - **Design source:** `docs/mvp-hld.md`
 - **Contracts:** `openapi/openapi.yaml` (REST + webhooks), `../vm-manager/proto/vm/v1/vm.proto` (gRPC)
@@ -29,11 +29,11 @@ What the MVP had to do, how it was designed, what we built, the tech used, and h
 
 | | |
 |---|---|
-| **Build phases (HLD §9)** | All 8 coded and committed (0 foundations → 8 hardening), plus later changes: a waitlist API, the 2026-09-29 pricing update (Max $30, automations 1/5/50, 90-day credits, waitlist discount), bring your own Claude plan (Claude Code runtime, 2026-09-30), and the **launch basics of 2026-10-03**: the channels switch (Telegram and web on, WhatsApp and iMessage off), 1 credit per app action that changes something, the connection check job, no purchase links on Telegram, and `/mcp` and `/git` closed at Caddy (§11). Then the **crew package of 2026-10-04**: the crew list, crew progress lines in web chat, pull-request review per repo, Scout's `web_search` and `read_page`, choosing Textcrew AI over an own key or Claude plan, browser time as its own usage number, browser use in Max's features (§6.19 to §6.21) |
-| **Backend tests** | 36 files, 347 tests, all passing (run on 2026-10-04): real Postgres + real Redis, fakes for outside services |
+| **Build phases (HLD §9)** | All 8 coded and committed (0 foundations → 8 hardening), plus later changes: a waitlist API, the 2026-09-29 pricing update (Max $30, automations 1/5/50, 90-day credits, waitlist discount), bring your own Claude plan (Claude Code runtime, 2026-09-30), and the **launch basics of 2026-10-03**: the channels switch (Telegram and web on, WhatsApp and iMessage off), 1 credit per app action that changes something, the connection check job, no purchase links on Telegram, and `/mcp` and `/git` closed at Caddy (§11). Then the **crew package of 2026-10-04**: the crew list, crew progress lines in web chat, pull-request review per repo, Scout's `web_search` and `read_page`, choosing Textcrew AI over an own key or Claude plan, browser time as its own usage number, browser use in Max's features (§6.19 to §6.21). Then **shared memory of 2026-10-04**: a memory on the platform that every engine shares, three tools to save, find and correct it, the memory block on every delivered turn, a recap of the chat when the engine changes, and endpoints for the user to see and delete it (§6.22) |
+| **Backend tests** | 38 files, 388 tests, all passing (run on 2026-10-04): real Postgres + real Redis, fakes for outside services |
 | **vm-manager tests** | Go unit tests (fake Docker daemon, store on embedded Postgres, `-race` clean) + 87 Bridge (Python) tests with a fake Hermes and a fake `claude` CLI. The numbers are from the agent-image package (W2b-2, 2026-10-04); they were not re-run for this guide |
 | **Contract coverage** | Every operation in `openapi.yaml` is implemented (a test enforces it) |
-| **Run for real?** | **Partly.** Docker isn't installed on the dev machine. A test deployment ran on AWS on 2026-09-30 and 2026-10-01 (`docs/aws-setup.md`): Telegram, Claude Code on a Claude plan, Composio, Caddy and Squid ran for real. That server is stopped now. The launch basics of 2026-10-03 and the crew package of 2026-10-04 have not run there, and WhatsApp, Sendblue, Polar, Jev and a platform model key have never run for real |
+| **Run for real?** | **Partly.** Docker isn't installed on the dev machine. A test deployment ran on AWS on 2026-09-30 and 2026-10-01 (`docs/aws-setup.md`): Telegram, Claude Code on a Claude plan, Composio, Caddy and Squid ran for real. That server is stopped now. The launch basics of 2026-10-03, the crew package and shared memory of 2026-10-04 have not run there, and WhatsApp, Sendblue, Polar, Jev and a platform model key have never run for real |
 | **Verdict** | **Code-complete, not end-to-end verified.** Section 12 lists the steps to verify it on a Docker machine |
 
 ---
@@ -47,7 +47,7 @@ This is what HLD sections 0, 5 and 7 ask the product to do.
 | # | Requirement | Details from the HLD |
 |---|---|---|
 | F1 | **Chat with your own AI agent** | On Telegram and the web app at launch. WhatsApp and iMessage are built and switched off by a setting (2026-10-03) |
-| F2 | **One sandboxed container per user** | Runs the Hermes agent; memory, skills and files persist in `/data`; the agent learns for its own user only |
+| F2 | **One sandboxed container per user** | Runs the Hermes agent; memory, skills and files persist in `/data`; the agent learns for its own user only. That memory belongs to one engine; the one every engine shares is on the platform (F19) |
 | F3 | **Linking chat apps** | The web app shows a one-time code (10 min, single use); the user sends it to our bot or number; unknown senders only get "please link" |
 | F4 | **Real work in apps** | About 25 apps through Composio, plus the user's own MCP servers (Max plan) |
 | F5 | **Ask before risky actions** | Approvals for sending to others, deleting, paying; they never block the agent (✅/❌ comes back later as a new message) |
@@ -64,6 +64,7 @@ This is what HLD sections 0, 5 and 7 ask the product to do.
 | F16 | **The crew** (2026-10-03) | Tex leads; Byte codes, Patch reviews code, Scout researches. The specialists are defined in the agent image. The platform gives the apps the crew list and passes the crew's progress lines to web chat |
 | F17 | **Pull-request review** (2026-10-03) | Turned on per GitHub repo. A pull request is opened or gets new commits → Patch reviews it → one review on the pull request → a short verdict in chat. Once per head commit. Turning it on is the standing permission to comment on that repo's pull requests, and nothing else |
 | F18 | **Web research** (2026-10-03) | `web_search` (a paid tool) and `read_page` (free), run on the platform, never in the container. `read_page` reaches public addresses only, and only an address already seen for the user |
+| F19 | **Shared memory** (2026-10-04) | One memory on the platform, the same whichever engine runs: short facts the agent saves about the user. It reaches every turn; a new engine also gets a recap of the chat; the user can see and delete it. The engines' own memory in `/data` is left as it is |
 
 ### 2.2 Non-functional requirements
 
@@ -147,7 +148,7 @@ flowchart LR
 | auth | users, Clerk, link codes, channel links (+ waitlist, added later) |
 | channels | WhatsApp / Telegram / Sendblue / web adapters, messages, media |
 | events | webhook intake, `events` table, queue producers |
-| orchestrator | per-user lock, Jev routing, wake → deliver flow, approvals, sandbox tokens, agent settings (which AI pays), the crew list and progress lines |
+| orchestrator | per-user lock, Jev routing, wake → deliver flow, approvals, sandbox tokens, agent settings (which AI pays), the crew list and progress lines, shared memory (`memories`) and the engine each chat last ran on (`chat_engines`) |
 | platform-mcp | the MCP server agents call, its tools, and the record of web addresses seen for each user |
 | integrations | Composio, user MCP servers, bring-your-own keys, the git gateway, the web page reader, the web search provider |
 | billing | plans, subscriptions, grants, ledger, coupons, Polar, LiteLLM keys |
@@ -264,11 +265,12 @@ Status: ✅ built + tested (fakes for outside services) · ⚠️ built, needs a
 | F11 AI, three ways | Own key: encrypted, test-called before saving; AI not charged. Claude plan: sign-in in the container, runtime switch. Textcrew AI: Hermes on credits (`AI_ACCESS_MODE=platform`; `own_only` switches it off). `aiPreference: platform` chooses Textcrew AI over an own key or Claude plan | ✅ 🔁 / ⚠️ real Claude Code, no platform model key yet |
 | F12 Jev routing | Real SDK; fallback to "task" on any doubt or failure | ✅ / ⚠️ real Jev |
 | F13 Media | Download per channel, voice → text via LiteLLM | ✅ / ⚠️ |
-| F14 Web API | All 60 operations in the spec | ✅ |
+| F14 Web API | All 63 operations in the spec | ✅ |
 | F15 Admin | Coupons, credit adjustments, free-credit stats + abuse flags, Bull Board, waitlist admin | ✅ |
 | F16 The crew | `GET /v1/crew` (Tex, Byte, Patch, Scout; `CREW_AVAILABLE` says which specialists are on; Scout's browser needs Max and is not built). Progress lines → SSE `agent.progress`, crew lines also in the activity log, nothing to Telegram | ✅ / ⚠️ never run against the real Bridge |
 | F17 Pull-request review | `PUT` / `DELETE /v1/pr-reviews/{owner}/{repo}`, `GET /v1/pr-reviews`; an event automation with the preset `pr_review`; one review per head commit (`pr_reviews`); a standing approval for four named GitHub actions on that repo | ✅ / ⚠️ real Composio trigger and action names |
 | F18 Web research | `web_search` behind a provider interface (Brave built), charged through the ledger; `read_page` with address checks at every hop, a pinned connection, limits, and the seen-address rule | ✅ / ⚠️ no search key yet, never run against the real internet |
+| F19 Shared memory | `remember`, `recall` and `forget` on the Platform MCP; `memories` in Postgres, found with its text search; a memory block at the top of every delivered turn; `chat_engines` and a recap when the engine changes; `GET` and `DELETE /v1/memories`; obvious secrets refused; no memory text in the audit log | ✅ / ⚠️ never run against a real engine |
 | N1 Isolation | gVisor spec, limits, read-only, sandbox network, Squid allowlist | ⚠️ (no disk quota by default 🔁) |
 | N2 No impersonation | `/mcp` maps sha256(token) → user; tools never read a user id | ✅ |
 | N3 No platform keys in containers | Only the user's LiteLLM key, MCP token, Bridge secret | ✅ |
@@ -413,9 +415,9 @@ Step by step (`orchestrator/process-message.ts` → `turn.ts`):
    - anything else, an error, or Jev not configured → `task`.
    - Jev can also pick the likely apps, which go to the agent as a hint (`metadata.apps`).
 8. **Wake.** `ensureSandbox` (create it once if missing), then `WakeSandbox`. If the server is full (`RESOURCE_EXHAUSTED`) or the vm-manager is unreachable, the job is retried with backoff.
-9. **Deliver.** A gRPC stream with `delivery_id = event id`, the session key (`telegram:<chat>`, `whatsapp:<phone>`, `imessage:<phone>`, `web`), the text, signed attachment URLs and metadata.
+9. **Deliver.** A gRPC stream with `delivery_id = event id`, the session key (`telegram:<chat>`, `whatsapp:<phone>`, `imessage:<phone>`, `web`), the text, signed attachment URLs and metadata. The text starts with what is known about the user (the memory block) and, when the engine changed, a recap of the chat; with neither it is the message as it was (§6.22).
    - `accepted` → the message status becomes `processing`, SSE `agent.status: busy`
-   - `turn_done` → `delivered`
+   - `turn_done` → `delivered`, and the engine is recorded as the one that last ran this chat
    - `error` with `platform_fault` → the turn's charge is reversed and the user gets "something went wrong on our side, you weren't charged"
    - any other `error` → "I couldn't finish that: …"
    - a stream that ends without `turn_done` → retried (the Bridge dedupes on `delivery_id`)
@@ -442,12 +444,12 @@ Step by step (`orchestrator/process-message.ts` → `turn.ts`):
 
 - **Transport:** MCP streamable HTTP, **stateless**: each request gets a new server bound to one user.
 - **Auth:** `Authorization: Bearer <container token>` → sha256 → `sandbox_tokens` → user id. Unknown token → `401`. The limit is 240 calls per minute per user.
-- **Every tool call** refreshes the container's last-active time (`Touch`) and writes an audit entry (actor `agent`, with secrets redacted from the arguments). A tool can say what the audit entry keeps of its arguments: `read_page` keeps the address without its query string.
+- **Every tool call** refreshes the container's last-active time (`Touch`) and writes an audit entry (actor `agent`, with secrets redacted from the arguments). A tool can say what the audit entry keeps of its arguments: `read_page` keeps the address without its query string, and the memory tools keep the memory's id and never its text.
 - **Tool errors** go back to the agent as `isError` text. Internal errors show only "Internal error".
 - **`/mcp/files/<id>?exp&sig`** serves attachments with an HMAC-signed, 1-hour URL. It lives under `/mcp` because that's the only api path the egress proxy lets containers reach.
 - **Closed to the internet.** Caddy answers 404 for `/mcp*`. Containers call `http://api:8080/mcp` directly through the egress proxy, and the attachment URLs are built from `INTERNAL_API_URL`, so nothing public uses this path.
 
-The 11 tools are listed in §8.3.
+The 14 tools are listed in §8.3.
 
 **Git gateway (`/git/<owner>/<repo>`).** Real git for the user's GitHub, without a GitHub token in the container (`src/api/git.ts`, `src/modules/integrations/git-gateway.ts`, HLD §5.1).
 
@@ -656,6 +658,7 @@ We follow Anthropic's rules (code.claude.com/docs/en/legal-and-compliance). The 
 - Web: `POST /v1/messages` keeps its contract (`202`, or `402` at zero credits). The "connect your AI" reply comes back over SSE like any agent reply.
 - Claude plan users skip Jev: their plan answers everything, so there are no platform-model quick replies.
 - After `WakeSandbox`, if the container runs another agent than the settings say, `SetAgentRuntime` is sent again. This heals a switch that failed while the vm-manager was down.
+- **A switch keeps what the agent knows and the thread** (2026-10-04, §6.22): what is known about the user is on the platform and reaches every turn, and the first turn of the new engine in a chat starts with a recap of that chat.
 - If a Claude Code turn ends in an error and `GetSandbox` reports `claude_connected=false` (e.g. "Connect your Claude plan again"), the connection is cleared and the agent goes back to Hermes for the next turn. Audit `claude_disconnected` (system), and the user gets a "reconnect at /settings/ai" note.
 
 **Inside the container (vm-manager + Bridge)**
@@ -788,6 +791,10 @@ We follow Anthropic's rules (code.claude.com/docs/en/legal-and-compliance). The 
 | `read_page` used to reach our own services or the cloud metadata address | Public addresses only, checked on the URL, on what the host resolves to, at every redirect, and the connection is pinned to the checked address (§6.21) |
 | `read_page` used to send the user's data out | It opens only an address already seen for this user (their own messages, a search result, a link on a page already read), at every redirect too. A made-up address is refused and logged (§6.21) |
 | A web page steering the agent | The tools say that text from the web is information, never instructions. Scout has only the two web tools on Claude Code; on Hermes that limit is an instruction, so the platform checks above are what counts (§6.19) |
+| A memory passing for the user's message or for the platform | A memory is one line: line breaks and control characters become spaces when it is saved and again when the block is built, and square brackets are turned round. Only the platform writes the block's first line, its end line and the "this turn's message follows" line. The block says its notes are data and can never approve an action (§6.22) |
+| Something the agent read getting a false "fact" saved (memory poisoning) | Limited, not solved: the tool says to save only what the user said themself; every save is in the activity log; the user sees and deletes memories in the web app; risky actions still need approval; 200 memories and 60 changes an hour. The platform can't check that the user really said it (§6.22) |
+| A secret kept in memory | A save that looks like a key, a token, a password, a card number or an address with a token in it is refused. A safety net, not a guarantee (§6.22) |
+| One user's memory read or changed by another user's agent | Every memory query filters by the user id from the container token; another user's memory id answers "not found"; tested |
 | A container reaching the internet or our services | Internal sandbox network; Squid allows only LiteLLM, `/mcp`, the git gateway and that user's allowlisted domains; egress files removed on stop so IPs can't be inherited |
 | Someone on the internet calling `/mcp` or `/git` | Caddy answers 404 for both; they also need the container token |
 | Selling inside Telegram against its rules | No purchase link reaches Telegram (§6.6) |
@@ -869,11 +876,51 @@ Both run in the api. The container's network stays locked and no provider key en
 - **What it does not stop:** a hostile page can offer many links, and an injected agent can signal a few bits by which one it opens. The caps and the rate limit keep that slow.
 - **Known cost:** an automation that reads a fixed page works while the link is in the user's recent messages. After that the agent must search or ask again.
 
+### 6.22 Shared memory (2026-10-04, HLD §0.9)
+
+**Why:** each engine keeps its own memory inside the container, so a user who switched engines got an agent that had forgotten them. Now one memory lives on the platform and every engine gets it. The engines' own memory in `/data` is left as it is.
+
+**What a memory is** (`orchestrator/memory.ts`, table `memories`): one short fact about the user, on one line, at most 300 characters, with a kind: `preference`, `person`, `project`, `instruction` (a standing instruction) or `fact`. The orchestrator owns it because it builds what is delivered on every turn and already owns the other per-user agent state; the Platform MCP owns no tables.
+
+**The tools** (`platform-mcp/tools/memory.ts`). Both engines and every crew member with the platform tools have them. On Claude Code, Scout does not (its tool list is the two web tools).
+- **`remember(content, kind?)`** saves one memory. The same text again (ignoring case and spacing) confirms the first one instead of making a second. Its description tells the agent to save only what the user states or confirms themself, never something it only read, never a secret or a one-off detail.
+- **`recall(query?, limit?)`** finds memories for a question: Postgres text search (`english`), any word counting, best match first; a word of four letters or more found inside a longer word counts too (`beckend` finds `acme/beckend`). With no query it lists the latest. 8 results by default, 20 at most. A memory a search returns is marked as used (`use_count`, `last_used_at`).
+- **`forget(memory_id, correction?)`** removes a memory, or with `correction` gives it the new text and keeps its id.
+- **Limits, each with a plain error:** 300 characters (the error says the length), 200 memories per user ("memory is full", and how to make room), 60 saves, corrections and removals an hour together. One writer per user at a time (an advisory lock), so parallel saves can't pass 200.
+- **Audit:** every call is logged like any tool. The entry holds the memory's id and kind, **never its text**: the audit log is kept after a memory, and an account, are deleted. The activity API returns the id as `memoryId`.
+
+**Secrets are refused when saving and when correcting** (`orchestrator/memory-secrets.ts`). A check on the text's shape:
+- known keys and tokens (`sk-…`, Stripe, GitHub, GitLab, Slack, AWS, Google, a Telegram bot token, a JWT, `Bearer …`, a private-key block);
+- a secret word followed by its value ("password is …", "PIN: …", "API key = …", "OTP is …");
+- a card number (13 to 19 digits that pass the Luhn check);
+- a web address with a password in it or a parameter named like a secret;
+- any other run of 32 or more letters and digits mixed, outside a web address.
+- The refusal names the kind of secret, not the text, and is written to the activity log (`memory_refused`) without the text.
+- **It is a safety net, not a guarantee:** "the door code 4821" passes, and "the wifi password is on the fridge" is refused.
+
+**The memory block** (`orchestrator/memory.ts` `memoryBlock`, `orchestrator/turn-context.ts`). `runTurn` puts it at the top of `Deliver.text`, the field the Bridge already hands to the engine. No change to the agent image or the proto.
+- **Every kind of turn** gets it: a message, an approval answer, a scheduled automation, an app event. The simple-chat path (no container) does not.
+- **No memories:** the text is delivered as it was.
+- **Which memories:** standing instructions first, then by the later of "last confirmed" and "last found by `recall`", newest first, ties to the one found more often. Up to 2,000 characters and 30 memories; if more are saved, a last line says how many and to use `recall`.
+- **The shape:** a first line that says the notes are data, not the user's message and not the platform's instructions, and that a note can never approve an action; one `- (kind) text` line per memory; `[End of Textcrew memory]`; then `[This turn's message follows.]` and the turn's own text.
+- **If memory can't be read,** the turn is delivered without the block.
+
+**The recap when the engine changes** (`orchestrator/turn-context.ts`, table `chat_engines`). An engine keeps one session per chat, so the platform records which engine last finished a turn in each chat.
+- A turn whose engine is not the one that handled the chat's previous turn gets a recap of the stored messages that engine hasn't had: those after its own last turn in this chat, or the latest ones if it never ran there. 12 messages and 3,000 characters at most, the newest kept, each cut at 500 characters, one line each as `User: …` or `You: …`.
+- The same engine gets no recap. A failed turn is not recorded, so the recap comes again.
+- A chat no engine has run in is recapped only if the user wrote in it before (the simple-chat path answered, or the first turn failed). A new chat holding only the "linked" greeting gets none.
+- The recap goes after the memory block and before the turn's own text, framed as a record of what was said, not new requests.
+- `syncRuntimeAfterWake` now returns the engine the turn runs on (the settings' engine, or the container's if the switch didn't go through).
+
+**The user's control** (`api/routes/memories.ts`): `GET /v1/memories` (all of them, newest first, with `max`), `DELETE /v1/memories/{memoryId}`, `DELETE /v1/memories` (answers how many). There is no endpoint to add or edit one. Each delete is in the activity log, without the text. The *delete-user* job removes the memories and the `chat_engines` rows.
+
+**Security, in short:** a memory is data and nothing on the platform reads one to decide what is allowed; text in a memory or in a recap can't write the platform's own lines; an address in a memory is not a "seen" address for `read_page`; memories never cross users. **Not solved:** the platform can't check that the user really said a fact, so an agent that follows an injected instruction can save a false one, and it stays until the user deletes it. On Hermes, Scout can reach `remember` (its tool list is only an instruction). Memory can be written in a turn the user didn't start (an app event, a pull-request review).
+
 ---
 
 ## 7. Data model
 
-### 7.1 Backend database (27 tables, 11 migrations)
+### 7.1 Backend database (29 tables, 12 migrations)
 
 | Module | Table | Purpose / key columns |
 |---|---|---|
@@ -888,6 +935,8 @@ Both run in the api. The container's network stays locked and no provider key en
 | orchestrator | `sandbox_tokens` | user_id → mcp_token_hash (unique) |
 | orchestrator | `agent_settings` | user_id (PK), runtime (hermes/claude_code, default hermes), ai_preference (auto/platform, default auto), claude_connected_at (null = not connected), updated_at. No Claude credential is ever stored |
 | orchestrator | `approvals` | user_id, summary, app, action, arguments, status, session_key, expires_at, decided_at/via, used_at |
+| orchestrator | `memories` | user_id, kind (preference/person/project/instruction/fact), content (one line, at most 300 characters), confirmed_at (saved, saved again or corrected), last_used_at and use_count (found by `recall`), created_at, updated_at. The only place a memory's text is kept |
+| orchestrator | `chat_engines` | user_id + session_key + runtime (**the key**), last_turn_at. Which engine last finished a turn in each chat |
 | integrations | `connections` | user_id, app, composio_account_id (unique), status, account_label |
 | integrations | `user_mcp_servers` | user_id, name, url, domain, auth_header_name, auth_secret (encrypted), enabled |
 | integrations | `composio_triggers` | user_id, composio_trigger_id, trigger_slug, config. **Not used yet:** app-event automations keep their Composio trigger id in `automations.trigger_ref` |
@@ -903,9 +952,9 @@ Both run in the api. The container's network stays locked and no provider key en
 | billing | `coupons` | campaign, credits, max_redemptions, redeemed_count, expires_at, credit_expiry_days, cheap_model_only, new_users_only, plans, active |
 | billing | `coupon_codes` | coupon_id, code_hash (unique), code_prefix, max_redemptions, redeemed_count (per code) |
 | billing | `coupon_redemptions` | coupon_id + user_id (**unique**), ip, grant_id |
-| admin | `audit_log` | user_id, actor (user/agent/admin/system), action, summary, details (`crew` on progress lines), credits_charged (set on `run_app_action` and `web_search` entries) |
+| admin | `audit_log` | user_id, actor (user/agent/admin/system), action, summary, details (`crew` on progress lines, `memoryId` on memory entries, never a memory's text), credits_charged (set on `run_app_action` and `web_search` entries) |
 
-Migrations: `0000_phase1_core`, `0001_phase3_chat`, `0002_phase4_apps_approvals`, `0003_phase7_automations`, `0004_phase5_billing`, `0005_waitlist`, `0006_pricing_90day_credits_waitlist_offer` (coupon expiry default 90, `waitlist_entries.offer_used_at`), `0007_agent_runtime` (`agent_settings`), `0008_polar_payments` (payment ids renamed for Polar), `0009_crew_ai_preference_browser_credits` (`usage_periods.browser_credits`, with the old browser credits moved out of `tool_credits`; `agent_settings.ai_preference`), `0010_pr_review` (`pr_reviews`, `automations.preset`). The launch basics of 2026-10-03 needed no migration. Scout's tools needed none either: paid-tool charges are ledger rows and seen addresses are in Redis.
+Migrations: `0000_phase1_core`, `0001_phase3_chat`, `0002_phase4_apps_approvals`, `0003_phase7_automations`, `0004_phase5_billing`, `0005_waitlist`, `0006_pricing_90day_credits_waitlist_offer` (coupon expiry default 90, `waitlist_entries.offer_used_at`), `0007_agent_runtime` (`agent_settings`), `0008_polar_payments` (payment ids renamed for Polar), `0009_crew_ai_preference_browser_credits` (`usage_periods.browser_credits`, with the old browser credits moved out of `tool_credits`; `agent_settings.ai_preference`), `0010_pr_review` (`pr_reviews`, `automations.preset`). The launch basics of 2026-10-03 needed no migration. Scout's tools needed none either: paid-tool charges are ledger rows and seen addresses are in Redis. `0011_shared_memory` adds `memories` and `chat_engines`.
 
 ### 7.2 vm-manager database
 
@@ -918,7 +967,7 @@ Migrations: `0000_phase1_core`, `0001_phase3_chat`, `0002_phase4_apps_approvals`
 
 ## 8. Interfaces
 
-### 8.1 REST endpoints (all 60 operations in `openapi.yaml`)
+### 8.1 REST endpoints (all 63 operations in `openapi.yaml`)
 
 Auth: **public** = no token · **user** = Clerk session · **admin** = Clerk session + admin role.
 
@@ -959,6 +1008,9 @@ Auth: **public** = no token · **user** = Clerk session · **admin** = Clerk ses
 | agent | `POST /v1/agent/claude/login` | user | Start the Claude Code sign-in in the container; returns Anthropic's URL (10/hour, `503` if unavailable) |
 | agent | `POST /v1/agent/claude/login/{loginId}/complete` | user | Hand over the code from Anthropic's page (`400` wrong/expired, `404` unknown) |
 | agent | `DELETE /v1/agent/claude` | user | Sign Claude Code out; back to Hermes |
+| memory | `GET /v1/memories` | user | What the agent has saved about the user: every memory, newest first, and `max` (200) |
+| memory | `DELETE /v1/memories` | user | Delete all of them; answers `{ deleted }` |
+| memory | `DELETE /v1/memories/{memoryId}` | user | Delete one (`404` if it isn't this user's) |
 | billing | `GET /v1/billing/plans` | public | Plans and top-up packs (`limits.browser` is true on Max, and Max's features name browser use) |
 | billing | `GET /v1/billing/subscription` | user | Current subscription |
 | billing | `POST /v1/billing/checkout` | user | Polar checkout for a plan or top-up |
@@ -967,7 +1019,7 @@ Auth: **public** = no token · **user** = Clerk session · **admin** = Clerk ses
 | credits | `GET /v1/credits/ledger` | user | Credit history |
 | credits | `GET /v1/usage` | user | Usage per period between two dates (AI, awake time, app actions, browser time, paid tools) |
 | coupons | `POST /v1/coupons/redeem` | user | Redeem a coupon code |
-| activity | `GET /v1/activity` | user | Audit log of what the agent did (`creditsCharged` on app actions and web searches, `crew` on progress lines) |
+| activity | `GET /v1/activity` | user | Audit log of what the agent did (`creditsCharged` on app actions and web searches, `crew` on progress lines, `memoryId` on memory entries) |
 | waitlist | `POST /v1/waitlist` | public | Join the waitlist |
 | admin | `GET /v1/admin/coupons` | admin | List coupons |
 | admin | `POST /v1/admin/coupons` | admin | Create a campaign (codes shown once) |
@@ -1005,6 +1057,9 @@ The Telegram, WhatsApp and Sendblue webhooks answer 200 and save nothing while t
 | `list_app_actions` | app?, search? | Actions of connected apps allowed on the plan, with `requires_approval` and `costs_credits` |
 | `web_search` | query, count? | Titles, links and snippets from the search provider. A paid tool (cost × 2.5; `credits_charged` in the result). Says so when search isn't set up |
 | `read_page` | url | The text and links of one public web page. Only an address already seen for the user. Free |
+| `remember` | content, kind? | Saves one short fact about the user to the shared memory. Refused: a secret, more than 300 characters, more than 200 memories. Free |
+| `recall` | query?, limit? | The memories that fit a question, best match first; with no query, the latest. Free |
+| `forget` | memory_id, correction? | Removes a memory, or corrects its text and keeps its id. Free |
 | `run_app_action` | action, arguments, approval_id? | Runs it in Composio as this user; risky ones need a matching approval, except a pull-request comment covered by review being on for that repo; a successful action that changes something costs 1 credit (`credits_charged` in the result) |
 | `request_approval` | summary, action?, arguments?, session_key? | Asks the user; returns `pending`; the agent ends its turn |
 | `schedule_reminder` | text, run_at, session_key? | One-time reminder |
@@ -1074,7 +1129,7 @@ vm-manager variables (see its `.env.example`): `DATABASE_URL`, `VM_INTERNAL_SECR
 | Outside services | Swappable clients: `setVmClient` (a fake vm-manager whose "agent" calls the real `/mcp` with its token), `setTelegramApi`, `setWhatsappApi`, `setSendblueApi`, `setComposioApi`, `setLiteLLMClient`, `setPolarClient`, `setJevClient`, `setChatCompleter`, `setTranscriber`, `setUrlDownloader`, `setByokVerifier`, `setCommandRunner`, `setGitUpstream` (a fake GitHub), `setWebSearchProvider`, `setPageResolver` and `setPageTransport` (a fake internet for `read_page`) |
 | HTTP clients | `phase6-http-clients.test.ts` runs the real HTTP clients against a local stand-in server |
 | Concurrency | 50 parallel coupon redemptions on real Postgres; per-user lock overlap test; parallel sync-usage |
-| Files | `phase1-*` (skeleton), `phase3-*` (Telegram, web), `phase4-*` (approvals, apps), `phase5-*` (credits, usage, coupons, Polar, LiteLLM, jobs, API), `phase6-*` (WhatsApp, Sendblue, media, routing, clients), `phase7-*` (automations), `phase8-*` (hardening), `integration-billing`, `waitlist`, `waitlist-offer`, `claude-plan` (bring your own Claude plan), `git-gateway`, `dev-user-script`, and the launch basics: `channels-switch`, `app-action-charge`, `app-connections`, `telegram-no-purchase-links`, `infra-caddy` (the Caddyfile rule checked against the routes the api mounts), and the crew package: `crew`, `textcrew-ai-choice`, `pr-review`, `scout-tools` |
+| Files | `phase1-*` (skeleton), `phase3-*` (Telegram, web), `phase4-*` (approvals, apps), `phase5-*` (credits, usage, coupons, Polar, LiteLLM, jobs, API), `phase6-*` (WhatsApp, Sendblue, media, routing, clients), `phase7-*` (automations), `phase8-*` (hardening), `integration-billing`, `waitlist`, `waitlist-offer`, `claude-plan` (bring your own Claude plan), `git-gateway`, `dev-user-script`, and the launch basics: `channels-switch`, `app-action-charge`, `app-connections`, `telegram-no-purchase-links`, `infra-caddy` (the Caddyfile rule checked against the routes the api mounts), and the crew package: `crew`, `textcrew-ai-choice`, `pr-review`, `scout-tools`, and shared memory: `memory` (the tools, limits, secrets, per-user checks, the endpoints), `memory-turns` (the block and the recap in what is delivered) |
 | vm-manager | Unit tests with a fake Docker daemon and a fake clock; the store on embedded Postgres; the Bridge with a fake Hermes; `-tags=integration` tests for real Docker (not run yet) |
 
 Commands: `pnpm lint && pnpm typecheck && pnpm test` · `pnpm openapi:lint` · in `vm-manager/`: `go vet ./... && go test ./...`, Bridge: `python3 -m unittest discover -s tests -t .` (in `agent-image/`).
@@ -1134,6 +1189,18 @@ Commands: `pnpm lint && pnpm typecheck && pnpm test` · `pnpm openapi:lint` · i
 - **Choosing Textcrew AI** is a preference next to the runtime, not a third runtime: the key and the Claude connection stay, so switching back needs no new sign-in.
 - **The browser is a proposal only** (HLD §11): a hosted browser driven by platform tools. Nothing is built.
 
+**Shared memory (2026-10-04, `docs/launch-plan.md` W3a)**
+- **The orchestrator owns memory,** not a new module: it builds what is delivered each turn, and the Platform MCP owns no tables.
+- **Three tools named `remember`, `recall` and `forget`.** Correcting is `forget` with a `correction`, so the tool's name says what happens when the correction is left out.
+- **Memory rides inside `Deliver.text`.** The Bridge gives the engine only that field (and attachments), not `metadata_json`. Nothing changed in the agent image or the proto.
+- **The audit log holds no memory text.** It is kept after a memory and an account are deleted, so the text is in `memories` only. The activity entry carries `memoryId` and the web app shows the text from the memory list.
+- **The engine is recorded per chat,** not per user, because each engine keeps one session per chat. A user's Telegram chat and web chat each get their own recap after a switch.
+- **A chat no engine ran in is recapped only if the user wrote in it before.** Otherwise every new user's first turn would carry a recap of the "linked" greeting.
+- **Removals count in the hourly limit,** so an injected instruction can't empty the memory quickly. The user's own deletes are not limited.
+- **No memory block on the simple-chat path.** A message that needs what is known about the user is routed to the agent.
+- **One limit for every plan** (200 memories, 300 characters), as constants in the code.
+- **Finding uses Postgres text search,** computed per query. A user has at most 200 short memories, so there is no text index and no extra column.
+
 **vm-manager**
 - **Secrets live in a file on `/data`**, not in env, so a re-created container keeps the same token.
 - **The egress file is removed on every stop**, not only on delete.
@@ -1168,6 +1235,8 @@ Commands: `pnpm lint && pnpm typecheck && pnpm test` · `pnpm openapi:lint` · i
 | 17 | `read_page` against the real internet (2026-10-04) | Read an https page named in a message; check the pinned connection works with real certificates, a compressed page, and a page that redirects from `http` to `https`. From outside nothing changes: the tool is only reachable through `/mcp` |
 | 18 | Crew progress lines from the real Bridge (2026-10-04) | With the W2b-2 agent image: start a job that uses a specialist and watch `agent.progress` on `/v1/stream`; nothing extra arrives on Telegram |
 | 19 | Scout's tool limit on Hermes (2026-10-04) | On Hermes the limit is an instruction, not a tool list. Check what a delegated Scout can call, and that `read_page` refuses a made-up address whoever calls it |
+| 20 | Shared memory on a real engine (2026-10-04) | On Hermes and on Claude Code: tell the agent a fact, see it in `GET /v1/memories`, and ask about it in a later turn. Check that the engine reads the block at the top of the message as notes, that it uses `remember` and not only its own memory, and how the block looks after the Bridge's own first line |
+| 21 | The recap on a real engine switch (2026-10-04) | Chat on Hermes, connect a Claude plan, send a follow-up that only makes sense with the earlier messages. Then switch back. The new engine carries on, and the same engine's next turn has no recap |
 
 Most likely to break on the first real run:
 - Hermes config keys and its run API
@@ -1178,6 +1247,7 @@ Most likely to break on the first real run:
 - The Claude Code sign-in screen parsing in the pseudo-terminal, and the exact CLI flags of the pinned version
 - Composio's GitHub trigger payload and action names (pull-request review)
 - Pages that redirect to another path: `read_page` refuses those unless the target was seen
+- How each engine treats the memory block at the top of a message, and whether it saves with `remember` or with its own memory tool
 
 ---
 
@@ -1192,8 +1262,8 @@ beckend/
     auth/                     users, sessions, link codes, channel links, waitlist
     events/                   intake, queues, cleanup
     channels/                 adapters (telegram, whatsapp, sendblue, web), messages, outbound, SSE, media, files
-    orchestrator/             turn flow, process-message, Jev routing, approvals, sandbox tokens, lifecycle, gRPC client, lock, agent settings + Claude sign-in, the crew list
-    platform-mcp/             MCP server + tools (core, apps, automations, web), seen web addresses
+    orchestrator/             turn flow, process-message, Jev routing, approvals, sandbox tokens, lifecycle, gRPC client, lock, agent settings + Claude sign-in, the crew list, shared memory + the secret check, the memory block and the recap
+    platform-mcp/             MCP server + tools (core, apps, automations, web, memory), seen web addresses
     integrations/             Composio catalog/client/connections, user MCP servers, BYOK, git gateway, web page reader, web search
     billing/                  plans, credits/ledger, usage, app-action and paid-tool charges, LiteLLM, Polar, coupons, jobs
     automations/              automations + jobs, pull-request review

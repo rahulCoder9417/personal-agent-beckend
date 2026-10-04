@@ -116,6 +116,46 @@ async function defaultBranch(repo: GitRepo, token: string): Promise<string> {
   return body.default_branch;
 }
 
+export interface PullRequestInfo {
+  /** The pull request's current head commit. */
+  headSha: string;
+  open: boolean;
+}
+
+/**
+ * A pull request as GitHub has it now, asked with the user's GitHub connection (pull-request
+ * review, HLD 0.8). Null when GitHub has no such pull request for this account. Throws when
+ * GitHub can't be asked (not connected, token not available, GitHub down).
+ */
+export async function getPullRequest(
+  userId: string,
+  repo: GitRepo,
+  number: number,
+): Promise<PullRequestInfo | null> {
+  const token = await githubTokenFor(userId);
+  const res = await upstream(`${GITHUB_API_URL}/repos/${repo.owner}/${repo.repo}/pulls/${number}`, {
+    headers: {
+      authorization: `Bearer ${token}`,
+      accept: 'application/vnd.github+json',
+      'user-agent': 'personal-agent-git-gateway',
+    },
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (res.status === 404) {
+    await res.body?.cancel();
+    return null;
+  }
+  if (!res.ok) {
+    await res.body?.cancel();
+    throw new GitGatewayError(502, `GitHub answered ${res.status} for the pull request.`);
+  }
+  const body = (await res.json()) as { state?: unknown; head?: { sha?: unknown } };
+  const sha = body.head?.sha;
+  if (typeof sha !== 'string' || !/^[0-9a-f]{40,64}$/.test(sha))
+    throw new GitGatewayError(502, 'GitHub did not say which commit the pull request is at.');
+  return { headSha: sha, open: body.state === 'open' };
+}
+
 function concat(chunks: Uint8Array[]): Uint8Array {
   const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
   let at = 0;

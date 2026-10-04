@@ -16,14 +16,14 @@ export const agentRoutes = [
     const browserPlan = PLAN_IDS.find((id) => PLANS[id].limits.browser) ?? 'max';
     return c.json(
       {
-        items: listCrew().map((m) => ({
+        items: listCrew(c.get('user').plan).map((m) => ({
           id: m.id,
           name: m.name,
           kind: m.kind,
           role: m.role,
           description: m.description,
           available: m.available,
-          browser: m.browser ? { requiresPlan: browserPlan, available: m.browser.available } : null,
+          browser: m.browser ? { requiresPlan: browserPlan, ...m.browser } : null,
         })),
       },
       200,

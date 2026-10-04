@@ -27,7 +27,7 @@ type Member = {
   role: string;
   description: string;
   available: boolean;
-  browser: { requiresPlan: string; available: boolean } | null;
+  browser: { requiresPlan: string; available: boolean; enabled: boolean } | null;
 };
 type Progress = { text: string; crew: string | null; at: string };
 
@@ -41,6 +41,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   delete process.env.CREW_AVAILABLE;
+  delete process.env.BROWSER_AVAILABLE;
   resetConfig();
 });
 
@@ -68,7 +69,7 @@ const turn = (userId: string, sessionKey = 'web') =>
   });
 
 describe('GET /v1/crew', () => {
-  it('returns the lead and the three specialists, with Scout’s browser on Max and not built yet', async () => {
+  it('returns the lead and the three specialists, with Scout’s browser on Max and not there by default', async () => {
     await expectContract('listCrew', await call('/v1/crew'), 401);
     const u = await createUser();
     const items = await crew(u.token);
@@ -80,13 +81,47 @@ describe('GET /v1/crew', () => {
     ]);
     for (const m of items) expect(m.description.length).toBeGreaterThan(10);
     expect(items.filter((m) => m.browser).map((m) => m.id)).toEqual(['scout']);
-    expect(items[3]!.browser).toEqual({ requiresPlan: 'max', available: false });
+    // BROWSER_AVAILABLE is off by default: the apps don't promise a browser yet.
+    expect(items[3]!.browser).toEqual({ requiresPlan: 'max', available: false, enabled: false });
     // Scout's two platform services need Max; the search built into the user's own engine doesn't.
     expect(items[3]!.description).toBe(
       'Searches the web and reads pages. Web search through Textcrew and the real browser need ' +
         "the Max plan. On your own Claude plan, Scout uses Claude Code's built-in search instead: " +
         'any plan, no credits.',
     );
+  });
+
+  it('Scout’s browser: `available` follows the server setting, `enabled` also the user’s plan', async () => {
+    const [free, pro, max] = await Promise.all(
+      (['free', 'pro', 'max'] as const).map((plan) => createUser({ plan })),
+    );
+    const browserOf = async (token: string) => (await crew(token))[3]!.browser;
+    // The default: the deployed image has no browser. Nothing is promised, not on Max either.
+    for (const u of [free!, pro!, max!])
+      expect(await browserOf(u.token)).toEqual({
+        requiresPlan: 'max',
+        available: false,
+        enabled: false,
+      });
+
+    // The image with the browser is deployed: everyone sees that it exists, and Max has it.
+    process.env.BROWSER_AVAILABLE = 'true';
+    resetConfig();
+    for (const u of [free!, pro!])
+      expect(await browserOf(u.token)).toEqual({
+        requiresPlan: 'max',
+        available: true,
+        enabled: false,
+      });
+    expect(await browserOf(max!.token)).toEqual({
+      requiresPlan: 'max',
+      available: true,
+      enabled: true,
+    });
+    // Only Scout has one, and its description says the browser needs Max.
+    const items = await crew(max!.token);
+    expect(items.filter((m) => m.browser).map((m) => m.id)).toEqual(['scout']);
+    expect(items[3]!.description).toMatch(/the real browser need the Max plan/);
   });
 
   it('CREW_AVAILABLE says which specialists are switched on; Tex always is', async () => {

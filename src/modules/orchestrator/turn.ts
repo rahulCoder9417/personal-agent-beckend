@@ -2,6 +2,7 @@
 import { Code, ConnectError } from '@connectrpc/connect';
 import { config } from '../../shared/config.ts';
 import { logger } from '../../shared/logger.ts';
+import { redis } from '../../shared/redis.ts';
 import { audit } from '../admin/audit.ts';
 import { getActiveUser } from '../auth/users.ts';
 import { signedFileUrl } from '../channels/files.ts';
@@ -11,7 +12,11 @@ import { purchaseLinksAllowed, WEB_APP_NAME } from '../channels/purchase-links.t
 import type { MediaRef } from '../channels/schema.ts';
 import { publish } from '../channels/stream.ts';
 import type { Channel } from '../channels/types.ts';
-import { fallBackIfClaudeSignedOut, syncRuntimeAfterWake } from './agent-settings.ts';
+import {
+  fallBackIfClaudeSignedOut,
+  syncRuntimeAfterWake,
+  type RuntimeName,
+} from './agent-settings.ts';
 import { crewOfProgress } from './crew.ts';
 import { ensureSandbox } from './sandbox.ts';
 import { recordEngineTurn, turnText } from './turn-context.ts';
@@ -90,6 +95,44 @@ const KIND: Record<TurnKind, DeliverKind> = {
 
 /** Retryable: the job waits (server full, vm-manager down). */
 export class RetryableTurnError extends Error {}
+
+// --- the engine of the turn in progress (HLD 5.1) ----------------------------------------------
+// read_page opens any public address only while the user's turn runs on Claude Code. Every call
+// from a container carries the same token, so the platform can't ask the caller: the worker
+// records the engine a turn really runs on when it delivers it, and removes the record when the
+// turn ends. No record means "not known", and read_page then keeps its strict rule.
+
+/** Longer than the longest turn (15 minutes), so a record never outlives its turn by much. */
+export const TURN_ENGINE_TTL_SECONDS = 20 * 60;
+const turnEngineKey = (userId: string) => `turn-engine:${userId}`;
+
+/** Never fails the turn: without the record read_page is only stricter. */
+async function recordTurnEngine(userId: string, engine: RuntimeName): Promise<void> {
+  try {
+    await redis().set(turnEngineKey(userId), engine, 'EX', TURN_ENGINE_TTL_SECONDS);
+  } catch (err) {
+    logger().warn({ userId, err: String(err) }, 'engine of the turn not on record');
+  }
+}
+
+async function clearTurnEngine(userId: string): Promise<void> {
+  await redis()
+    .del(turnEngineKey(userId))
+    .catch((err: unknown) =>
+      logger().warn({ userId, err: String(err) }, 'engine of the turn not cleared'),
+    );
+}
+
+/** The engine the user's turn in progress runs on. Null: no turn in progress, or not known. */
+export async function turnEngine(userId: string): Promise<RuntimeName | null> {
+  try {
+    const engine = await redis().get(turnEngineKey(userId));
+    return engine === 'claude_code' || engine === 'hermes' ? engine : null;
+  } catch (err) {
+    logger().warn({ userId, err: String(err) }, 'engine of the turn not readable');
+    return null;
+  }
+}
 
 /** A progress line is short; anything longer is cut. */
 export const PROGRESS_MAX_CHARS = 300;
@@ -176,6 +219,32 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
   // What is known about the user, and a recap of the chat if the engine changed (HLD 0.9).
   const text = await turnText(input, engine);
 
+  // From here until the turn ends, read_page knows which engine is calling it (HLD 5.1).
+  await recordTurnEngine(userId, engine);
+  const outcome = await deliverTurn(input, { text, apps: decision.apps, log }).finally(() =>
+    clearTurnEngine(userId),
+  );
+
+  if (!outcome) throw new RetryableTurnError('deliver stream ended without turn_done');
+  // This engine now has the chat up to here. A failed turn is not recorded: it gets the recap again.
+  if (outcome === 'done')
+    await recordEngineTurn(userId, input.sessionKey, engine).catch((err: unknown) =>
+      log.warn({ err: String(err) }, 'engine of the turn not recorded'),
+    );
+  if (input.inboundMessageId)
+    await setMessageStatus(input.inboundMessageId, outcome === 'done' ? 'delivered' : 'failed');
+  await publish(userId, 'agent.status', { state: 'awake', lastActiveAt: new Date().toISOString() });
+  await hooks.afterTurn(userId, outcome);
+  return outcome;
+}
+
+/** Delivers the turn and follows its stream to the end. Null: the stream ended with no result. */
+async function deliverTurn(
+  input: TurnInput,
+  turn: { text: string; apps: string[] | undefined; log: ReturnType<typeof logger> },
+): Promise<TurnOutcome | null> {
+  const { userId } = input;
+  const { text, log } = turn;
   const startedAt = new Date();
   const progress = { crewLines: 0 };
   let outcome: TurnOutcome | null = null;
@@ -193,7 +262,7 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
     approved: input.approval?.approved ?? false,
     metadataJson: JSON.stringify({
       ...input.metadata,
-      ...(decision.apps?.length ? { apps: decision.apps } : {}),
+      ...(turn.apps?.length ? { apps: turn.apps } : {}),
     }),
   });
 
@@ -247,16 +316,5 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
         break;
     }
   }
-
-  if (!outcome) throw new RetryableTurnError('deliver stream ended without turn_done');
-  // This engine now has the chat up to here. A failed turn is not recorded: it gets the recap again.
-  if (outcome === 'done')
-    await recordEngineTurn(userId, input.sessionKey, engine).catch((err: unknown) =>
-      log.warn({ err: String(err) }, 'engine of the turn not recorded'),
-    );
-  if (input.inboundMessageId)
-    await setMessageStatus(input.inboundMessageId, outcome === 'done' ? 'delivered' : 'failed');
-  await publish(userId, 'agent.status', { state: 'awake', lastActiveAt: new Date().toISOString() });
-  await hooks.afterTurn(userId, outcome);
   return outcome;
 }

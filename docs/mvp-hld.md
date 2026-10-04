@@ -1180,11 +1180,12 @@ Otherwise it is off.
 | When | How |
 |---|---|
 | **A container is created** (sign-up) | `browser_enabled` in *CreateSandbox* |
-| **The plan changes:** upgrade to Max, downgrade from Max, a cancelled subscription reaching its end | Billing reports the change; a **`sync-browser`** job on the *system* queue reads the plan again and calls *SetBrowser*. It retries like any job (section 0.2). No container yet: nothing to do, the container will be created with the right state |
+| **The plan changes:** upgrade to Max, downgrade from Max, a cancelled subscription reaching its end | Billing reports the change; a **`sync-browser`** job on the *system* queue reads the plan again, asks the vm-manager what it has on record (*GetSandbox*) and calls *SetBrowser* when that differs. It retries like any job (section 0.2). No container yet: nothing to do, the container will be created with the right state |
 | **After every wake** | The woken sandbox says what it has on record. If that differs from the rule, *SetBrowser* is sent again. This catches a job that ran out of tries, a container made before the browser existed, and the setting being switched on or off |
 
 - **A change takes effect on the next wake.** A user who upgrades while their container is awake gets the browser after the container has stopped and woken again (it stops after 3 quiet minutes). A user who leaves Max while awake keeps it until then; those minutes are charged.
-- **A plan changes only from Polar's webhooks or when a cancelled period ends** (section 7.6), so that is where the job is added. The dev script (`scripts/dev-user.ts create`) sets a plan directly and sends the switch itself.
+- **A plan changes only from Polar's webhooks or when a cancelled period ends** (section 7.6), so that is where the job is added. The dev script (`scripts/dev-user.ts create`) sets a plan directly and sends the switch itself; its `browser --user <id>` sends it for any user.
+- **Every switch is in the activity log** (`browser_enabled`, `browser_disabled`, actor `system`), so a user can see when their container was given the open way out and when it was closed.
 - **Only Max containers are ever opened.** The setting alone opens nothing.
 
 ### 11.4 Money

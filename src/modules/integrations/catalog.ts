@@ -91,7 +91,8 @@ const RISKY =
   /(^|_)(SEND|REPLY|FORWARD|DELETE|REMOVE|TRASH|ARCHIVE|PAY|PAYMENT|TRANSFER|CHARGE|REFUND|INVITE|SHARE|POST|PUBLISH|TWEET|MERGE|CLOSE|CANCEL|MOVE|UPDATE|CREATE_EVENT|ACCEPT|DECLINE)(_|$)/;
 
 export function actionNeedsApproval(actionSlug: string): boolean {
-  return RISKY.test(actionSlug.toUpperCase());
+  const slug = actionSlug.toUpperCase();
+  return RISKY.test(slug) || writesGithubComment(slug);
 }
 
 // --- Does an action change something? (HLD 7.2: 1 credit if it does, reading is free) ----------
@@ -116,10 +117,23 @@ export const READ_ONLY_TAG = 'readOnlyHint';
 
 export type ActionKind = 'changes' | 'reads' | 'unknown';
 
+/**
+ * GitHub actions that write a comment or a review (their name has COMMENT or REVIEW and isn't a
+ * read). Other people read those, so they need approval like sending a message (HLD 5.1). The one
+ * exception is a repo with pull-request review on (`prCommentTarget` below, HLD 0.8).
+ */
+const GITHUB_COMMENT = /(^|_)(COMMENT|COMMENTS|REVIEW|REVIEWS)(_|$)/;
+
+function writesGithubComment(slug: string): boolean {
+  if (!slug.startsWith('GITHUB_') || !GITHUB_COMMENT.test(slug)) return false;
+  const onlyReads = READS.test(slug) && !WRITES.test(slug) && !RISKY.test(slug);
+  return !onlyReads;
+}
+
 /** What the name alone says. `unknown`: no read word and no write word. */
 export function actionKindByName(actionSlug: string): ActionKind {
   const slug = actionSlug.toUpperCase();
-  if (RISKY.test(slug) || WRITES.test(slug)) return 'changes';
+  if (RISKY.test(slug) || WRITES.test(slug) || writesGithubComment(slug)) return 'changes';
   if (READS.test(slug)) return 'reads';
   return 'unknown';
 }
@@ -129,4 +143,70 @@ export function actionChangesSomething(actionSlug: string, tags: readonly string
   const kind = actionKindByName(actionSlug);
   if (kind !== 'unknown') return kind === 'changes';
   return !tags.includes(READ_ONLY_TAG);
+}
+
+// --- Pull-request review: which comment the standing permission covers (HLD 0.8) --------------
+
+/** The pull request a GitHub action would post a new review or comment on. */
+export interface PrCommentTarget {
+  owner: string;
+  repo: string;
+  number: number;
+  /** The action names a pull request (`pull_number`). False: it takes an issue number. */
+  byPullNumber: boolean;
+}
+
+/**
+ * The GitHub actions the standing permission can cover, by exact name, with the argument that
+ * holds the pull request's number. The list is exact on purpose: other actions also have a
+ * comment word and a create word in their name (a gist comment, a team discussion comment, a
+ * commit comment, a reaction) and are not a pull-request comment. An action that is not here
+ * needs approval, whatever its arguments say.
+ */
+const PR_COMMENT_ACTIONS: Record<string, 'pull_number' | 'issue_number'> = {
+  GITHUB_CREATE_A_REVIEW_FOR_A_PULL_REQUEST: 'pull_number',
+  GITHUB_SUBMIT_A_REVIEW_FOR_A_PULL_REQUEST: 'pull_number',
+  GITHUB_CREATE_A_REVIEW_COMMENT_FOR_A_PULL_REQUEST: 'pull_number',
+  // GitHub treats a pull request as an issue. Covered only for one the platform asked a review for.
+  GITHUB_CREATE_AN_ISSUE_COMMENT: 'issue_number',
+};
+const GITHUB_NAME = /^[A-Za-z0-9_.-]{1,100}$/;
+
+function wholeNumber(v: unknown): number | null {
+  const n = typeof v === 'string' && /^\d{1,9}$/.test(v) ? Number(v) : v;
+  return typeof n === 'number' && Number.isInteger(n) && n > 0 ? n : null;
+}
+
+const given = (v: unknown) => v !== undefined && v !== null;
+
+/**
+ * Is this GitHub action posting a NEW review or comment on a pull request, and on which one?
+ * Null means "not that": the action then needs approval like any other risky one. All of these
+ * must hold:
+ *   - it is one of the four actions in `PR_COMMENT_ACTIONS` (so no reply, edit, delete, dismiss,
+ *     merge or close, and no comment on anything that isn't a pull request);
+ *   - `event` is COMMENT or not given: approving or requesting changes is not commenting (an
+ *     approval can set off an auto-merge);
+ *   - it is not a reply to someone's comment (`in_reply_to`);
+ *   - the arguments name the repo (`owner` and `repo`, each a plain name) and the number.
+ * Whether review is on for that repo is the automations module's question (`prCommentAllowed`).
+ */
+export function prCommentTarget(
+  actionSlug: string,
+  args: Record<string, unknown>,
+): PrCommentTarget | null {
+  const numberArg = Object.hasOwn(PR_COMMENT_ACTIONS, actionSlug.toUpperCase())
+    ? PR_COMMENT_ACTIONS[actionSlug.toUpperCase()]
+    : undefined;
+  if (!numberArg) return null;
+  if (given(args.event)) {
+    if (typeof args.event !== 'string' || args.event.toUpperCase() !== 'COMMENT') return null;
+  }
+  if (given(args.in_reply_to)) return null;
+  const { owner, repo } = args;
+  if (typeof owner !== 'string' || typeof repo !== 'string') return null;
+  if (!GITHUB_NAME.test(owner) || !GITHUB_NAME.test(repo)) return null;
+  const number = wholeNumber(args[numberArg]);
+  if (number === null) return null;
+  return { owner, repo, number, byPullNumber: numberArg === 'pull_number' };
 }

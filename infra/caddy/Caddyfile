@@ -20,3 +20,12 @@
 		}
 	}
 }
+
+# The web app (the `web` service). Pages call their own /api/v1/*, which the web app forwards to
+# the api on the private network.
+{$WEB_DOMAIN} {
+	encode gzip
+	reverse_proxy {$WEB_UPSTREAM} {
+		flush_interval -1
+	}
+}

@@ -48,13 +48,29 @@ Each repo has its own read-only GitHub **deploy key** on the server (`~/.ssh/dep
 
 **To deploy:** push to `main`, then on the server run `/opt/textcrew/deploy.sh`. It:
 
-1. `git fetch` + `git reset --hard origin/main` in both repos (untracked runtime files such as `.env` and the per-user Squid allowlists are kept);
+1. `git fetch` + `git reset --hard origin/main` in each repo (untracked runtime files such as `.env` and the per-user Squid allowlists are kept);
 2. builds the images (unchanged layers are cached) and sets `AGENT_IMAGE_VERSION` to the agent image id, so stopped user containers are re-created from a new image on their next wake (their `/data` is kept);
 3. runs the migrations (`pnpm db:migrate` in a one-off api container);
 4. `docker compose --profile app up -d`, and force-recreates Caddy / LiteLLM / Squid + vm-manager when their bind-mounted config changed;
 5. checks `https://$API_DOMAIN/healthz` and that every service is running; exits non-zero otherwise.
 
 Other checks: `./dc --profile egress-test run --rm egress-test` (egress isolation).
+
+### The web app on the same server (optional)
+
+The web app (`../user-frontend-web`) can run next to the API as the `web` service. It is only pulled, built and started when its repo is checked out on the server.
+
+| Path under `/opt/textcrew` | What |
+|---|---|
+| `user-frontend-web/` | clone of `personal-agent-web-frontend`, with its own read-only deploy key and `gh-web` host alias |
+| `web.env` | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` for the running container (mode 600, not in git) |
+| `clerk_secret` | the Clerk secret key by itself, read as a build secret (mode 600, not in git) |
+
+In `compose.env`: `WEB_DOMAIN` (the web app's host name; Caddy gets its certificate), `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` (a build argument, because it is compiled into the browser bundle), `WEB_ENV_FILE=/opt/textcrew/web.env` and `CLERK_SECRET_FILE=/opt/textcrew/clerk_secret`.
+
+In `beckend/.env`: `WEB_APP_URL` and `CLERK_AUTHORIZED_PARTIES` are the web app's address (`https://$WEB_DOMAIN`), and `CLERK_WEBHOOK_SECRET` is set, with the Clerk dashboard sending `user.created` to `https://$API_DOMAIN/webhooks/clerk`. Without that webhook a person can sign in but has no account on the platform.
+
+`deploy.sh` then pulls the third repo too and adds the `web` profile. The web container talks only to `http://api:8080` on the private network; browsers talk only to the web app.
 
 ## Sizing on 12 GB RAM
 

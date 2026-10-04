@@ -30,6 +30,11 @@ networks:
           # the egress proxy's fixed 172.30.0.2 is never handed to a container that started first.
           ip_range: 172.30.128.0/17
 
+secrets:
+  # Only the `web` build reads it. The default is an empty file, so nothing else needs it to exist.
+  clerk_secret_key:
+    file: ${CLERK_SECRET_FILE:-/dev/null}
+
 volumes:
   pgdata: {}
   redisdata: {}
@@ -43,6 +48,9 @@ services:
     environment:
       API_DOMAIN: ${API_DOMAIN:-localhost}
       API_UPSTREAM: ${API_UPSTREAM:-host.docker.internal:8080}
+      # The web app's own host name (the `web` service below). Unused until that service runs.
+      WEB_DOMAIN: ${WEB_DOMAIN:-web.localhost}
+      WEB_UPSTREAM: ${WEB_UPSTREAM:-web:3000}
     extra_hosts: ['host.docker.internal:host-gateway']
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
@@ -209,6 +217,26 @@ services:
       redis: { condition: service_healthy }
     networks: [platform]
     profiles: [app]
+
+  # The web app (../user-frontend-web), served by Caddy at WEB_DOMAIN. It has its own profile so
+  # the backend can run where that repo isn't checked out. It talks only to the api.
+  # Clerk: the publishable key is a build argument (it is compiled into the browser bundle); the
+  # secret key is a build secret read from CLERK_SECRET_FILE and, at run time, comes from
+  # WEB_ENV_FILE together with the publishable key. Neither file is in git.
+  web:
+    build:
+      context: ../../user-frontend-web
+      args:
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
+      secrets: [clerk_secret_key]
+    restart: unless-stopped
+    env_file:
+      - path: ${WEB_ENV_FILE:-../web.env}
+        required: false
+    environment:
+      TEXTCREW_API_URL: http://api:8080
+    networks: [edge]
+    profiles: [web]
 
   # Phase 0 "done when": a container on the sandbox network can reach only the egress proxy.
   egress-test:

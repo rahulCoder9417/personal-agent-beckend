@@ -43,6 +43,7 @@ export const agentRoutes = [
           action: e.action,
           summary: e.summary,
           crew: crewOfDetails(e.details),
+          memoryId: typeof e.details?.memoryId === 'string' ? e.details.memoryId : null,
           creditsCharged: e.creditsCharged,
           createdAt: e.createdAt.toISOString(),
         })),

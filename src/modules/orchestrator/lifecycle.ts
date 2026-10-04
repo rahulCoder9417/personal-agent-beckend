@@ -4,6 +4,7 @@ import { deleteUserLinks } from '../auth/links.ts';
 import { getActiveUser } from '../auth/users.ts';
 import { deleteUserChannelData } from '../channels/messages.ts';
 import { deleteAgentSettings } from './agent-settings.ts';
+import { deleteAllMemories } from './memory.ts';
 import { deleteSandboxRecord, ensureSandbox } from './sandbox.ts';
 import { vm } from './vm.ts';
 
@@ -28,7 +29,10 @@ export async function handleOnboardUser(job: Job): Promise<unknown> {
   return null;
 }
 
-/** system/delete-user: delete the container and data, revoke the LiteLLM key, remove links. */
+/**
+ * system/delete-user: delete the container and data (memories and messages too), revoke the
+ * LiteLLM key, remove links.
+ */
 export async function handleDeleteUser(job: Job): Promise<unknown> {
   const { userId } = job.data as { userId: string };
   try {
@@ -38,6 +42,8 @@ export async function handleDeleteUser(job: Job): Promise<unknown> {
   }
   await deleteSandboxRecord(userId);
   await deleteAgentSettings(userId);
+  // Shared memory (HLD 0.9).
+  await deleteAllMemories(userId);
   await hooks.offboard(userId);
   await deleteUserLinks(userId);
   await deleteUserChannelData(userId);

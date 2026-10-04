@@ -9,7 +9,7 @@ import { queue } from '../events/queues.ts';
 import { appForToolkit, findApp } from '../integrations/catalog.ts';
 import { connectionForToolkit } from '../integrations/apps.ts';
 import { composio } from '../integrations/composio.ts';
-import { automations } from './schema.ts';
+import { automations, prReviews } from './schema.ts';
 
 export type Automation = typeof automations.$inferSelect;
 
@@ -25,7 +25,15 @@ export function setMinIntervalMs(ms: number): void {
   minIntervalMs = ms;
 }
 
-export class AutomationError extends Error {}
+export class AutomationError extends Error {
+  constructor(
+    message: string,
+    /** `plan_limit`: the plan's automations are used up. */
+    readonly code: 'invalid' | 'plan_limit' = 'invalid',
+  ) {
+    super(message);
+  }
+}
 
 export function toApiAutomation(a: Automation) {
   return {
@@ -37,6 +45,7 @@ export function toApiAutomation(a: Automation) {
     cron: a.cron,
     timezone: a.timezone,
     trigger: a.trigger ? { app: a.trigger.app, event: a.trigger.event } : null,
+    preset: a.preset ?? null,
     enabled: a.enabled,
     pausedReason: a.pausedReason ?? null,
     nextRunAt: a.nextRunAt ? a.nextRunAt.toISOString() : null,
@@ -112,6 +121,8 @@ export interface CreateInput {
   cron?: string;
   timezone?: string;
   trigger?: { app: string; event: string; config?: Record<string, unknown> };
+  /** Set only by the platform itself (pr-review.ts), never from the agent's tools. */
+  preset?: NonNullable<Automation['preset']>;
 }
 
 /** Checks plan limit, 15-minute minimum and timezone → saves → registers the timer. */
@@ -131,6 +142,7 @@ export async function createAutomation(input: CreateInput): Promise<Automation> 
   if (n >= limit)
     throw new AutomationError(
       `Your ${user.plan} plan allows ${limit} automations; cancel one or upgrade`,
+      'plan_limit',
     );
 
   let kind: Automation['kind'];
@@ -172,6 +184,7 @@ export async function createAutomation(input: CreateInput): Promise<Automation> 
       timezone: tz,
       trigger: input.trigger ?? null,
       triggerRef,
+      preset: input.preset ?? null,
       sessionKey: input.sessionKey,
       nextRunAt,
     })
@@ -303,4 +316,5 @@ export async function deleteUserAutomations(userId: string): Promise<void> {
         .catch(() => {});
   }
   await db().delete(automations).where(eq(automations.userId, userId));
+  await db().delete(prReviews).where(eq(prReviews.userId, userId));
 }

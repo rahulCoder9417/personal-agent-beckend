@@ -1,4 +1,13 @@
-import { boolean, index, integer, jsonb, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
 
 /** Source of truth for automations; BullMQ only holds the timers (HLD 0.4). */
 export const automations = pgTable(
@@ -15,6 +24,11 @@ export const automations = pgTable(
     /** kind=event: the app + trigger, and Composio's trigger instance id. */
     trigger: jsonb().$type<{ app: string; event: string; config?: Record<string, unknown> }>(),
     triggerRef: text(),
+    /**
+     * `pr_review`: pull-request review for one GitHub repo (HLD 0.8). Only the user can set it,
+     * through the REST api; the agent's create_automation tool never does.
+     */
+    preset: text({ enum: ['pr_review'] }),
     /** Where results are sent. */
     sessionKey: text().notNull(),
     enabled: boolean().notNull().default(true),
@@ -26,4 +40,29 @@ export const automations = pgTable(
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index().on(t.userId), index().on(t.triggerRef)],
+);
+
+/**
+ * One row per reviewed pull-request head commit (HLD 0.8). The unique index is what makes "one
+ * review per head commit" true: a re-delivered or repeated event finds the row and does nothing.
+ */
+export const prReviews = pgTable(
+  'pr_reviews',
+  {
+    id: text().primaryKey(),
+    userId: text().notNull(),
+    automationId: text().notNull(),
+    /** Lower-cased: GitHub names don't depend on case. */
+    owner: text().notNull(),
+    repo: text().notNull(),
+    prNumber: integer().notNull(),
+    headSha: text().notNull(),
+    /** The event that asked for this review. A re-run of that same job goes on with it. */
+    eventId: text().notNull(),
+    status: text({ enum: ['requested', 'done', 'failed'] })
+      .notNull()
+      .default('requested'),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex().on(t.userId, t.owner, t.repo, t.prNumber, t.headSha)],
 );

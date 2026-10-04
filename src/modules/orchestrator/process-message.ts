@@ -1,15 +1,24 @@
 import type { Job } from 'bullmq';
 import { config, isChannelEnabled } from '../../shared/config.ts';
-import { hit } from '../../shared/rate-limit.ts';
+import { badRequest, channelDisabled, outOfCredits } from '../../shared/errors.ts';
+import { enforce, hit } from '../../shared/rate-limit.ts';
 import { audit } from '../admin/audit.ts';
 import { findLink, linkWithCode, normalizeLinkCode, touchInbound } from '../auth/links.ts';
-import { getEvent } from '../events/intake.ts';
+import { getEvent, ingestEvent } from '../events/intake.ts';
+import { getUserAttachments } from '../channels/files.ts';
 import { acknowledgeButton, parseInbound } from '../channels/inbound.ts';
-import { getMessageById, saveInbound, setMessageStatus } from '../channels/messages.ts';
+import {
+  getMessageById,
+  saveInbound,
+  saveWebMessage,
+  setMessageEvent,
+  setMessageStatus,
+  type MessageRow,
+} from '../channels/messages.ts';
 import { queueOutbound, queueRawOutbound } from '../channels/outbound.ts';
 import { sessionKeyFor, type InboundMessage } from '../channels/types.ts';
 import { IGNORED } from '../../worker/ignored.ts';
-import { runTurn } from './turn.ts';
+import { runTurn, userHasCredits } from './turn.ts';
 
 /** Hooks other modules plug into the inbound path (approvals, coupons in chat). */
 export interface InboundHooks {
@@ -150,6 +159,42 @@ async function handleUnlinked(msg: InboundMessage, eventId: string): Promise<voi
     sessionKey: sessionKeyFor(msg.channel, msg.externalChatId),
     text: '✅ Linked! You can chat with your agent right here. What can I do for you?',
   });
+}
+
+/**
+ * A message the user sends in web chat (POST /v1/messages): the channel must be on, at most 30 a
+ * minute, refused at zero credits, saved once per `clientMessageId`, and the turn is queued as an
+ * inbound job. Returns at once; the worker runs the turn. Throws the api's errors (403
+ * channel_disabled, 429, 402 out_of_credits, 400).
+ */
+export async function sendWebMessage(
+  userId: string,
+  input: { text: string; clientMessageId: string; attachmentIds?: string[] },
+): Promise<{ message: MessageRow; eventId: string }> {
+  if (!isChannelEnabled('web')) throw channelDisabled('web');
+  await enforce({ key: `msg:user:${userId}`, max: 30, windowSeconds: 60 });
+  if (!(await userHasCredits(userId))) throw outOfCredits();
+  const ids = input.attachmentIds ?? [];
+  const files = await getUserAttachments(userId, ids);
+  if (files.length !== ids.length) throw badRequest('Unknown attachment');
+  const { message, created } = await saveWebMessage({
+    userId,
+    text: input.text,
+    clientMessageId: input.clientMessageId,
+    media: files.map((f) => ({ id: f.id, name: f.name, mimeType: f.mimeType, path: f.path })),
+  });
+  const { eventId } = await ingestEvent({
+    source: 'web',
+    externalId: `${userId}:${input.clientMessageId}`,
+    type: 'message',
+    userId,
+    payload: { messageId: message.id },
+    queue: 'inbound',
+    jobName: 'web-message',
+    jobData: { messageId: message.id },
+  });
+  if (created) await setMessageEvent(message.id, eventId);
+  return { message, eventId };
 }
 
 /** inbound/web-message: a message sent from the web app. */

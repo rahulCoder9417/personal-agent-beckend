@@ -1,22 +1,14 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { streamSSE } from 'hono/streaming';
-import { getUserAttachments } from '../../modules/channels/files.ts';
-import {
-  listMessages,
-  saveWebMessage,
-  setMessageEvent,
-  toApiMessage,
-} from '../../modules/channels/messages.ts';
+import { listMessages, toApiMessage } from '../../modules/channels/messages.ts';
 import { attachments } from '../../modules/channels/schema.ts';
 import { subscribe } from '../../modules/channels/stream.ts';
-import { ingestEvent } from '../../modules/events/intake.ts';
-import { userHasCredits } from '../../modules/orchestrator/turn.ts';
-import { config, isChannelEnabled } from '../../shared/config.ts';
+import { sendWebMessage } from '../../modules/orchestrator/process-message.ts';
+import { config } from '../../shared/config.ts';
 import { db } from '../../shared/db/client.ts';
-import { AppError, badRequest, channelDisabled, outOfCredits } from '../../shared/errors.ts';
+import { AppError, badRequest } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
-import { enforce } from '../../shared/rate-limit.ts';
 import { route } from '../router.ts';
 
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -31,30 +23,13 @@ export const chatRoutes = [
     return c.json({ items: page.items.map(toApiMessage), nextCursor: page.nextCursor }, 200);
   }),
 
+  // The checks, the save and the job are one function, shared with the dev script's `send`.
   route('sendMessage', async (c, { body }) => {
-    const user = c.get('user');
-    if (!isChannelEnabled('web')) throw channelDisabled('web');
-    await enforce({ key: `msg:user:${user.id}`, max: 30, windowSeconds: 60 });
-    if (!(await userHasCredits(user.id))) throw outOfCredits();
-    const files = await getUserAttachments(user.id, body.attachmentIds ?? []);
-    if (files.length !== (body.attachmentIds ?? []).length) throw badRequest('Unknown attachment');
-    const { message, created } = await saveWebMessage({
-      userId: user.id,
+    const { message } = await sendWebMessage(c.get('user').id, {
       text: body.text,
       clientMessageId: body.clientMessageId,
-      media: files.map((f) => ({ id: f.id, name: f.name, mimeType: f.mimeType, path: f.path })),
+      ...(body.attachmentIds ? { attachmentIds: body.attachmentIds } : {}),
     });
-    const { eventId } = await ingestEvent({
-      source: 'web',
-      externalId: `${user.id}:${body.clientMessageId}`,
-      type: 'message',
-      userId: user.id,
-      payload: { messageId: message.id },
-      queue: 'inbound',
-      jobName: 'web-message',
-      jobData: { messageId: message.id },
-    });
-    if (created) await setMessageEvent(message.id, eventId);
     return c.json(toApiMessage(message), 202);
   }),
 

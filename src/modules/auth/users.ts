@@ -1,5 +1,5 @@
 import { createClerkClient } from '@clerk/backend';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, ne } from 'drizzle-orm';
 import { config } from '../../shared/config.ts';
 import { db, type Tx } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
@@ -105,8 +105,14 @@ export async function updateProfile(
   return row!;
 }
 
-export async function setPlan(userId: string, plan: PlanId, tx: Tx = db()): Promise<void> {
-  await tx.update(users).set({ plan }).where(eq(users.id, userId));
+/** Sets the user's plan. True: it changed (the user was on another plan). */
+export async function setPlan(userId: string, plan: PlanId, tx: Tx = db()): Promise<boolean> {
+  const rows = await tx
+    .update(users)
+    .set({ plan })
+    .where(and(eq(users.id, userId), ne(users.plan, plan)))
+    .returning({ id: users.id });
+  return rows.length > 0;
 }
 
 export async function flagUser(userId: string): Promise<void> {

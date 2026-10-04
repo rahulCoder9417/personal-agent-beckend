@@ -5,6 +5,7 @@ import { db, type Tx } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import { setPlan } from '../auth/users.ts';
 import { afterCreditsRemoved } from './enforce.ts';
+import { firePlanChanged } from './hooks.ts';
 import type { PlanId } from './plans.ts';
 import { subscriptions } from './schema.ts';
 
@@ -98,6 +99,7 @@ export async function setSubscriptionStatus(
  * plan). Credits already granted keep their own 90-day expiry. Idempotent (`ended_at`).
  */
 export async function endSubscription(sub: Subscription, now = new Date()): Promise<boolean> {
+  let planChanged = false;
   const ended = await db().transaction(async (tx) => {
     const [row] = await tx
       .update(subscriptions)
@@ -118,10 +120,11 @@ export async function endSubscription(sub: Subscription, now = new Date()): Prom
       )
       .orderBy(desc(subscriptions.updatedAt))
       .limit(1);
-    await setPlan(sub.userId, other?.plan ?? 'free', tx);
+    planChanged = await setPlan(sub.userId, other?.plan ?? 'free', tx);
     return true;
   });
   if (ended) await afterCreditsRemoved(sub.userId); // also updates the key's models
+  if (planChanged) await firePlanChanged(sub.userId); // e.g. Scout's browser goes off
   return ended;
 }
 

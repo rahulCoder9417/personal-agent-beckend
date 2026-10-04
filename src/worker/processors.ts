@@ -15,6 +15,7 @@ import {
   handleSyncAllowlist,
 } from '../modules/integrations/jobs.ts';
 import { expireApprovals, handleProcessApproval } from '../modules/orchestrator/approvals.ts';
+import { handleSyncBrowser } from '../modules/orchestrator/browser.ts';
 import { handleDeleteUser, handleOnboardUser } from '../modules/orchestrator/lifecycle.ts';
 import { handleProcessMessage, handleWebMessage } from '../modules/orchestrator/process-message.ts';
 import type { Processors } from './runner.ts';
@@ -43,6 +44,7 @@ export function processors(): Processors {
       'onboard-user': handleOnboardUser,
       'delete-user': handleDeleteUser,
       'sync-allowlist': handleSyncAllowlist,
+      'sync-browser': handleSyncBrowser,
       'composio-event': handleComposioEvent,
       'check-connection': handleCheckConnection,
       'expire-approvals': async () => expireApprovals(),

@@ -110,14 +110,29 @@ export class FakeLiteLLM implements LiteLLMClient {
 
 // --- vm-manager -------------------------------------------------------------------------------
 
-/** Awake/browser seconds recorded at a point in time; GetUsage sums the ones in [since, until). */
+/**
+ * Awake/browser seconds recorded at a point in time; GetUsage sums the ones in [since, until).
+ * Every user has a container here, with the browser switch the backend last sent.
+ */
 export class FakeVm {
   samples: Array<{ userId: string; at: number; awake: number; browser: number }> = [];
+  /** The browser switch on record per user, and every SetBrowser call. */
+  browser = new Map<string, boolean>();
+  browserCalls: Array<{ userId: string; enabled: boolean }> = [];
   add(userId: string, awakeSeconds: number, browserSeconds = 0, at = Date.now() - 1) {
     this.samples.push({ userId, at, awake: awakeSeconds, browser: browserSeconds });
   }
   client(): VmClient {
     return {
+      getSandbox: async (req: { userId: string }) => ({
+        userId: req.userId,
+        browserEnabled: this.browser.get(req.userId) ?? false,
+      }),
+      setBrowser: async (req: { userId: string; enabled: boolean }) => {
+        this.browserCalls.push({ userId: req.userId, enabled: req.enabled });
+        this.browser.set(req.userId, req.enabled);
+        return { sandbox: { userId: req.userId, browserEnabled: req.enabled } };
+      },
       getUsage: async (req: { sinceUnixMs: bigint; untilUnixMs: bigint; userId: string }) => {
         const since = Number(req.sinceUnixMs);
         const until = Number(req.untilUnixMs);
@@ -153,7 +168,7 @@ export function installFakes() {
 }
 
 /** A user with `credits` and a LiteLLM key, created a minute ago. */
-export async function member(credits = 100, plan: 'free' | 'pro' = 'free') {
+export async function member(credits = 100, plan: 'free' | 'pro' | 'max' = 'free') {
   const u = await createUser({ plan });
   await createGrant({
     userId: u.id,

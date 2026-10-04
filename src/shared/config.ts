@@ -177,6 +177,13 @@ export const configSchema = z.object({
   CREW_AVAILABLE: z.string().default('byte,patch,scout').pipe(specialistList),
 
   /**
+   * The deployed agent image has Scout's browser (HLD 11.3). The image is deployed apart from the
+   * backend, which can't see it, so this says so. Off by default: until it is on, no container's
+   * browser is switched on (whatever the plan) and the apps don't show a browser as available.
+   */
+  BROWSER_AVAILABLE: bool,
+
+  /**
    * Scout's web search through Textcrew (HLD 5.1; a Max feature). The provider behind the
    * `web_search` platform tool.
    */

@@ -1,5 +1,6 @@
 import { appActionCreditsFor } from '../../modules/billing/app-actions.ts';
 import { getBalance, listBalanceGrants, listLedger } from '../../modules/billing/credits.ts';
+import { paidToolCreditsFor } from '../../modules/billing/paid-tools.ts';
 import { listUsagePeriods } from '../../modules/billing/usage.ts';
 import { badRequest } from '../../shared/errors.ts';
 import { toBalance, toLedgerEntry, toUsagePeriod } from '../billing-presenters.ts';
@@ -30,8 +31,11 @@ export const creditRoutes = [
     if (!(from < to)) throw badRequest('`from` must be before `to`');
     const userId = c.get('user').id;
     const periods = await listUsagePeriods(userId, from, to);
-    const appActions = await appActionCreditsFor(userId, periods);
-    const items = periods.map((p, i) => toUsagePeriod(p, appActions[i] ?? 0));
+    const [appActions, paidTools] = await Promise.all([
+      appActionCreditsFor(userId, periods),
+      paidToolCreditsFor(userId, periods),
+    ]);
+    const items = periods.map((p, i) => toUsagePeriod(p, appActions[i] ?? 0, paidTools[i] ?? 0));
     const sum = (
       k:
         | 'aiCredits'

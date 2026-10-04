@@ -75,6 +75,39 @@ export function secretIn(text: string): SecretKind | null {
   return null;
 }
 
+const HIDDEN = '[hidden]';
+/** A hash (a commit id, a checksum): long, but only hex digits. Not a secret, and worth reading. */
+const HEX_ONLY = /^[0-9a-f]+$/i;
+const ADDRESS_OR_LONG_RUN = new RegExp(`${WEB_ADDRESS.source}|${LONG_RUN.source}`, 'gi');
+
+/**
+ * The same text with what looks like a secret blanked out, for tools that print stored text (the
+ * dev script). Keys and tokens with a known shape, web addresses that carry a password or a
+ * token, the value after a secret word ("password is …": the rest of that line), card numbers,
+ * and long random runs that are not a plain hash. Like `secretIn`, it is a safety net.
+ */
+export function hideSecrets(text: string): string {
+  let out = text;
+  for (const shape of KEY_SHAPES)
+    out = out.replace(new RegExp(shape.source, `${shape.flags}g`), HIDDEN);
+  out = out.replace(WEB_ADDRESS, (address) =>
+    ADDRESS_PASSWORD.test(address) || SECRET_PARAM.test(address) ? HIDDEN : address,
+  );
+  out = out
+    .split('\n')
+    .map((line) => {
+      const found = SECRET_WORD.exec(line);
+      return found ? `${line.slice(0, found.index)}${HIDDEN}` : line;
+    })
+    .join('\n');
+  out = out.replace(CARD_DIGITS, (digits) => (luhn(digits.replace(/\D/g, '')) ? HIDDEN : digits));
+  // A web address may hold a long id (a shared document), so addresses are stepped over whole;
+  // elsewhere a long random run is hidden.
+  return out.replace(ADDRESS_OR_LONG_RUN, (found) =>
+    /^https?:/i.test(found) || !looksRandom(found) || HEX_ONLY.test(found) ? found : HIDDEN,
+  );
+}
+
 const WHAT: Record<SecretKind, string> = {
   key: 'an API key or a token',
   password: 'a password, a PIN or a code',

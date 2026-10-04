@@ -84,6 +84,21 @@ export async function syncBrowser(
   }
 }
 
+/**
+ * The switch as it stands, for a status line: what the plan and the setting say (`wanted`) and
+ * what the vm-manager has on record (null: no container, or it can't be asked).
+ */
+export async function browserStatus(
+  userId: string,
+  plan: PlanId,
+): Promise<{ available: boolean; wanted: boolean; onRecord: boolean | null }> {
+  const onRecord = await vm()
+    .getSandbox({ userId })
+    .then((s) => s.browserEnabled)
+    .catch(() => null);
+  return { available: browserAvailable(), wanted: browserWanted(plan), onRecord };
+}
+
 /** The user's plan changed → check the browser switch (system job, with the queue's retries). */
 export async function queueBrowserSync(userId: string): Promise<void> {
   await addJob('system', 'sync-browser', { userId }, { jobId: `browser-${userId}-${Date.now()}` });

@@ -15,6 +15,8 @@ export interface PlatformTool<S extends z.ZodRawShape = z.ZodRawShape> {
   summarize?(args: z.infer<z.ZodObject<S>>, result: unknown): string;
   /** What the audit log keeps of the arguments (default: all of them). */
   auditArgs?(args: z.infer<z.ZodObject<S>>): Record<string, unknown>;
+  /** More for the audit entry's details, taken from the result (e.g. the id of what was made). */
+  auditDetails?(args: z.infer<z.ZodObject<S>>, result: unknown): Record<string, unknown>;
   /** Credits this call cost, for the activity log (`creditsCharged`). Omit when a tool never charges. */
   creditsCharged?(args: z.infer<z.ZodObject<S>>, result: unknown): number | null;
 }

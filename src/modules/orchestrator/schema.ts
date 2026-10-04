@@ -1,4 +1,4 @@
-import { index, jsonb, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { index, integer, jsonb, pgTable, primaryKey, text, timestamp } from 'drizzle-orm/pg-core';
 
 /**
  * Maps a container's Platform MCP token (sha256 hex, from CreateSandbox) to its user.
@@ -56,3 +56,43 @@ export const agentSettings = pgTable('agent_settings', {
   claudeConnectedAt: timestamp({ withTimezone: true }),
   updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
 });
+
+export const MEMORY_KINDS = ['preference', 'person', 'project', 'instruction', 'fact'] as const;
+
+/**
+ * Shared memory (HLD 0.9): short facts about the user that every engine gets. One line of text
+ * each. This is the only place a memory's text is kept: the audit log holds ids, never the text.
+ */
+export const memories = pgTable(
+  'memories',
+  {
+    id: text().primaryKey(),
+    userId: text().notNull(),
+    kind: text({ enum: MEMORY_KINDS }).notNull().default('fact'),
+    content: text().notNull(),
+    /** Last saved, saved again or corrected by the agent. */
+    confirmedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    /** Last returned by a `recall` search; with `useCount`, what "most used" means. */
+    lastUsedAt: timestamp({ withTimezone: true }),
+    useCount: integer().notNull().default(0),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    /** When the text last changed. */
+    updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index().on(t.userId, t.id)],
+);
+
+/**
+ * Which engine last finished a turn in each chat (HLD 0.9). An engine keeps one session per chat,
+ * so a turn on another engine than the chat's previous one gets a recap of the chat.
+ */
+export const chatEngines = pgTable(
+  'chat_engines',
+  {
+    userId: text().notNull(),
+    sessionKey: text().notNull(),
+    runtime: text({ enum: ['hermes', 'claude_code'] }).notNull(),
+    lastTurnAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.sessionKey, t.runtime] })],
+);

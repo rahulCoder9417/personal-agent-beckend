@@ -24,6 +24,7 @@ import { automationRoutes } from './routes/automations.ts';
 import { channelRoutes } from './routes/channels.ts';
 import { chatRoutes } from './routes/chat.ts';
 import { meRoutes } from './routes/me.ts';
+import { memoryRoutes } from './routes/memories.ts';
 import { systemRoutes } from './routes/system.ts';
 import { waitlistRoutes } from './routes/waitlist.ts';
 import { polarWebhookRoutes } from './routes/webhooks-polar.ts';
@@ -41,6 +42,7 @@ export const allRoutes: RouteDef[] = [
   ...approvalRoutes,
   ...appRoutes,
   ...automationRoutes,
+  ...memoryRoutes,
   ...webhookRoutes,
   ...channelWebhookRoutes,
   // Phase 5: billing, credits, coupons, bring-your-own key, admin, Polar webhook

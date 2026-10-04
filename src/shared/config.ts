@@ -176,6 +176,14 @@ export const configSchema = z.object({
    */
   CREW_AVAILABLE: z.string().default('byte,patch,scout').pipe(specialistList),
 
+  /** Scout's web search (HLD 5.1). The provider behind the `web_search` platform tool. */
+  WEB_SEARCH_PROVIDER: z.enum(['brave']).default('brave'),
+  /** Without it `web_search` answers that search isn't set up; nothing else changes. */
+  BRAVE_SEARCH_API_KEY: optional,
+  BRAVE_SEARCH_API_URL: z.string().url().default('https://api.search.brave.com'),
+  /** What one search costs us, in dollars. It is charged × 2.5 as a paid tool (HLD 7.2). */
+  WEB_SEARCH_COST_USD: z.coerce.number().min(0).max(1).default(0.005),
+
   /** Optional monthly cap on free credits (sign-up + coupons). */
   FREE_CREDITS_MONTHLY_CAP: z.coerce.number().int().positive().optional(),
 

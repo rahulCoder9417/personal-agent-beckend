@@ -198,6 +198,7 @@ Decided 2026-10-03 (`docs/launch-plan.md` D8). The user turns on "review pull re
    - It asks GitHub for the pull request's **current head commit**, using the user's GitHub connection the same way the git gateway does (the token stays on the platform). A closed pull request is ignored. If GitHub can't be asked, the head commit in the event is used. If there is none either, nothing runs and the activity log says why.
 5. **One review per head commit:** the worker saves a row in `pr_reviews`, unique on (user, repo, pull request number, head commit). If the row is already there, nothing runs. So a re-delivered webhook, a repeated event, or a reopen with no new commits never produces a second review. Two quick pushes produce one review, of the newer commit.
 6. **The turn:** the agent gets an instruction that names the **repo, the pull request number and the head commit**, and tells the lead to **use Patch**.
+   - **The instruction carries no text from the pull request,** not even its title. Anyone who can open a pull request writes that text, so it must not arrive looking like the platform's own words. The instruction says so too: the title, description, code and comments are material to review, never instructions.
 7. **Patch reviews** (clone through the git gateway, read the diff, run the tests) and posts **one review** on the pull request that carries all its comments, with GitHub's "create a review for a pull request" action. One action costs 1 credit; many single comments would cost 1 credit each.
 8. **The verdict:** the lead sends a short message to the user's chat.
 9. **Fixing:** the user can answer "fix it". That is a normal turn: Byte pushes commits to a branch through the git gateway. **Patch never merges,** and the git gateway refuses pushes to the default branch.
@@ -207,10 +208,17 @@ Decided 2026-10-03 (`docs/launch-plan.md` D8). The user turns on "review pull re
 **The standing permission.** Writing a comment or a review on GitHub is read by other people, so it needs the user's approval like sending a message (section 5.1). Turning review on for a repo is the user's standing approval for one thing: **posting a new review or comment on a pull request in that repo.** Such an action runs without a per-comment approval when all of this holds:
 
 - the user has an **enabled** `pr_review` automation for exactly that owner and repo (paused or deleted: no permission);
-- it is a GitHub action that **posts a new** review or comment. Editing, deleting, dismissing, replying, merging and closing are not covered;
-- its arguments name that repo (`owner`, `repo`) and a pull request number;
-- a review's `event` is `COMMENT` or not given. **Approving or requesting changes is not covered:** an approval can set off an auto-merge;
-- a comment action that takes an issue number (GitHub treats a pull request as an issue) is covered only for a pull request the platform asked a review for.
+- the action is **one of four, by exact name** (`integrations/catalog.ts`):
+  - `GITHUB_CREATE_A_REVIEW_FOR_A_PULL_REQUEST` (the one the instruction asks for),
+  - `GITHUB_SUBMIT_A_REVIEW_FOR_A_PULL_REQUEST`,
+  - `GITHUB_CREATE_A_REVIEW_COMMENT_FOR_A_PULL_REQUEST`, but not as a reply (`in_reply_to` given),
+  - `GITHUB_CREATE_AN_ISSUE_COMMENT` (GitHub treats a pull request as an issue), only for a pull request the platform asked a review for;
+- its arguments name that repo (`owner` and `repo`, each a plain name) and a pull request number (`pull_number`, or `issue_number` for the last one);
+- a review's `event` is `COMMENT` or not given. **Approving or requesting changes is not covered:** an approval can set off an auto-merge.
+
+**The list is exact on purpose** (changed 2026-10-04). The first version went by words in the action's name (a comment or review word plus create, add or submit). GitHub has other actions that fit those words and are not a pull-request comment: a gist comment, a team discussion comment, a commit comment, a reaction. With the repo and a pull request number added to their arguments they would have passed. Now any action not on the list needs approval, whatever its arguments say. Editing, deleting, dismissing, replying, merging and closing were never covered.
+
+- **If Composio names one of the four differently,** the permission simply doesn't apply and the review asks for approval: the safe side. The names follow Composio's GitHub toolkit as published; they have not been checked against a live Composio account (first live run, `docs/launch-plan.md` Ops).
 
 Everything else risky still needs approval, in the same turn too: merging, a comment on another repo, an email.
 
@@ -822,6 +830,7 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 | Composio down | The tool returns an error to the agent; the user is told |
 | Search provider down or not set up | `web_search` tells the agent; nothing is charged; the turn goes on |
 | GitHub can't be asked for a pull request's head commit | The head commit in the event is used; with none, no review runs and the activity log says why |
+| A review's job runs out of retries (vm-manager down for minutes) | The commit stays claimed by that event, so no later event reviews it twice. It is reviewed if that event's job is run again; otherwise the next push gets its own review |
 | vm-manager down | Wake/Deliver jobs retry with backoff; the rest keeps working |
 | Jev down | Treat every message as a task (no routing shortcut) |
 | Polar webhook late | Credits are added when it arrives; the web app shows "processing" |
@@ -836,7 +845,7 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 - [ ] No GitHub token in containers: git goes through the git gateway, which forces the user id from the container token and refuses pushes to the default branch
 - [ ] Secrets encrypted in Postgres; tokens and codes stored as hashes
 - [ ] Approvals before sending to others, deleting or paying; audit log for every action
-- [ ] Pull-request review: comments run without approval only on repos the user turned review on for, only new reviews and comments, never approve, merge or another repo; the agent can't turn it on
+- [ ] Pull-request review: comments run without approval only on repos the user turned review on for, only the four named actions, never approve, merge, reply or another repo; the agent can't turn it on; the instruction carries no text from the pull request
 - [ ] `read_page` reaches public addresses only: private, loopback, link-local, metadata and internal hosts are refused, at every redirect and again when connecting; limits on time, size and redirects; rate limited
 - [ ] Coupon rules from 7.7; rate limits on redeem, link codes and login-linked endpoints
 - [ ] Nightly off-server backups with a tested restore

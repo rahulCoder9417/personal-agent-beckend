@@ -484,7 +484,9 @@ export interface paths {
          * @description Tex is the lead (the agent the user texts). Byte, Patch and Scout are the specialists it
          *     hands work to. The ids are fixed. `available` says whether a member works on this
          *     deployment yet. Scout's `browser` says which plan the real browser needs and whether it is
-         *     built yet.
+         *     built yet. Scout's `description` says what else needs that plan: web search through
+         *     Textcrew is part of Max too, while the search built into the user's own Claude plan works
+         *     on every plan and costs no credits.
          */
         get: operations["listCrew"];
         put?: never;
@@ -753,7 +755,9 @@ export interface paths {
         /**
          * Audit log of everything the agent did for this user
          * @description A `run_app_action` entry carries `creditsCharged`: 1 for a successful action that changed
-         *     something, 0 for one that only read. A `web_search` entry carries what the search cost.
+         *     something, 0 for one that only read. A `web_search` entry carries what the search cost
+         *     (1 credit). A `web_search_refused` entry is a search that did not run because web search
+         *     through Textcrew is part of the Max plan and the user is on another plan; it cost nothing.
          *     A `read_page_refused` entry is a web address the agent asked to read and was not allowed to.
          *     A `crew_progress` entry is a progress line from a specialist; `crew` names it.
          *     Memory (HLD 0.9): `remember` (the agent saved a memory), `forget` (it removed or corrected
@@ -1392,6 +1396,10 @@ export interface components {
                 /** @description Browser use is part of this plan (Max only). */
                 browser: boolean;
             };
+            /**
+             * @description Lines for the pricing page. Max names Scout's web search (1 credit per search) and
+             *     browser use (2 credits per minute); Free and Pro name neither.
+             */
             features: string[];
         };
         TopUpPack: {
@@ -1463,8 +1471,8 @@ export interface components {
             /** @description Browser time (2 credits per minute) */
             browserCredits: number;
             /**
-             * @description Paid tools, such as web search (their cost × 2.5). Browser time is not in here: it has
-             *     its own number, `browserCredits`.
+             * @description Paid tools. Today that is Scout's web search through Textcrew: 1 credit per search,
+             *     Max plan only. Browser time is not in here: it has its own number, `browserCredits`.
              */
             toolCredits: number;
             /** @description aiCredits + awakeCredits + appActionCredits + browserCredits + toolCredits */
@@ -1651,6 +1659,7 @@ export interface components {
              * @example coupon_redeemed
              * @example channel_linked
              * @example web_search
+             * @example web_search_refused
              * @example read_page
              * @example read_page_refused
              * @example crew_progress
@@ -1671,7 +1680,7 @@ export interface components {
             crew?: "byte" | "patch" | "scout" | null;
             /** @description The memory this entry is about (`remember`, `forget`, `memory_deleted`). It may have been deleted since. Null for every other entry. */
             memoryId?: string | null;
-            /** @description Credits this entry cost. App actions: 1 if it changed something, 0 if it only read. Web search: what the search cost. Null when nothing is charged per entry. */
+            /** @description Credits this entry cost. App actions: 1 if it changed something, 0 if it only read. Web search: 1 for a search that ran, 0 for one that did not. Null when nothing is charged per entry. */
             creditsCharged?: number | null;
             /** Format: date-time */
             createdAt: string;

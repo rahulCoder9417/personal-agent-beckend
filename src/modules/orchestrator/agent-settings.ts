@@ -131,27 +131,34 @@ export async function sandboxRuntime(userId: string): Promise<AgentRuntime> {
 /**
  * Tells the vm-manager which agent to run (applied on the next delivery). Best effort: no
  * container yet → it is created with the right runtime; vm-manager down → the next turn re-syncs
- * after WakeSandbox (see `syncRuntimeAfterWake`).
+ * after WakeSandbox (see `syncRuntimeAfterWake`). True: the vm-manager took it.
  */
-export async function pushRuntime(userId: string, settings?: AgentSettingsView): Promise<void> {
+export async function pushRuntime(userId: string, settings?: AgentSettingsView): Promise<boolean> {
   const s = settings ?? (await getAgentSettings(userId));
   try {
     await vm().setAgentRuntime({ userId, runtime: toVmRuntime(s.effectiveRuntime) });
+    return true;
   } catch (err) {
-    if (err instanceof ConnectError && err.code === Code.NotFound) return;
+    if (err instanceof ConnectError && err.code === Code.NotFound) return false;
     logger().warn({ userId, err: String(err) }, 'setAgentRuntime failed; next turn re-syncs');
+    return false;
   }
 }
 
-/** After WakeSandbox: if the container runs another agent than it should, switch it. */
+/**
+ * After WakeSandbox: if the container runs another agent than it should, switch it. Returns the
+ * engine this turn runs on: the one the settings say, or, if the switch didn't go through, the
+ * one the container still has.
+ */
 export async function syncRuntimeAfterWake(
   userId: string,
   sandbox: { runtime?: AgentRuntime } | undefined,
-): Promise<void> {
-  if (!sandbox) return;
+): Promise<RuntimeName> {
   const settings = await getAgentSettings(userId);
-  if (sameVmRuntime(sandbox.runtime, toVmRuntime(settings.effectiveRuntime))) return;
-  await pushRuntime(userId, settings);
+  const wanted: RuntimeName = settings.effectiveRuntime ?? 'hermes';
+  if (!sandbox || sameVmRuntime(sandbox.runtime, toVmRuntime(wanted))) return wanted;
+  if (await pushRuntime(userId, settings)) return wanted;
+  return sandbox.runtime === AgentRuntime.CLAUDE_CODE ? 'claude_code' : 'hermes';
 }
 
 /**

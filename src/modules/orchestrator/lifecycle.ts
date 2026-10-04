@@ -6,6 +6,7 @@ import { deleteUserChannelData } from '../channels/messages.ts';
 import { deleteAgentSettings } from './agent-settings.ts';
 import { deleteAllMemories } from './memory.ts';
 import { deleteSandboxRecord, ensureSandbox } from './sandbox.ts';
+import { deleteChatEngines } from './turn-context.ts';
 import { vm } from './vm.ts';
 
 /** Extra onboarding/offboarding steps from other modules (billing: grant + LiteLLM key). */
@@ -42,8 +43,9 @@ export async function handleDeleteUser(job: Job): Promise<unknown> {
   }
   await deleteSandboxRecord(userId);
   await deleteAgentSettings(userId);
-  // Shared memory (HLD 0.9).
+  // Shared memory and the engine each chat ran on (HLD 0.9).
   await deleteAllMemories(userId);
+  await deleteChatEngines(userId);
   await hooks.offboard(userId);
   await deleteUserLinks(userId);
   await deleteUserChannelData(userId);

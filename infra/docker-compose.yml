@@ -106,7 +106,12 @@ services:
 
   egress-proxy:
     image: ubuntu/squid:latest
-    restart: unless-stopped
+    # `always`, not `unless-stopped`: the vm-manager reloads Squid with `docker kill -s HUP`, and Docker
+    # marks a container that was sent ANY signal that way as "stopped by hand". With unless-stopped it
+    # then stays down after a server reboot. The explicit stop signal keeps a HUP from also switching
+    # off restart-on-exit (Docker does that when no stop signal is set).
+    restart: always
+    stop_signal: SIGTERM
     container_name: egress-proxy
     # Squid must be PID 1: the vm-manager applies allowlist changes with `docker kill -s HUP`, and
     # the image's bash entrypoint (PID 1) would silently drop the signal. The tail keeps the

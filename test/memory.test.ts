@@ -366,6 +366,33 @@ describe('recall', () => {
     expect(last.summary).toMatch(/^Searched memory \(\d+ found\)$/);
     expect(JSON.stringify(last)).not.toContain('secret plan');
   });
+
+  it('takes any text as a question: quotes, operators, stop words only, a very long one', async () => {
+    const { user, token } = await agent();
+    await remember(token, 'The R&D team plans a 100% remote week in May');
+    const odd = [
+      `r&d team's "plans" (2026) 100% _under_ \\ ' ; -- <a> | ! :* & |`,
+      "'; drop table memories; --",
+      'the of and a',
+      '%',
+      '___',
+      '!!! ??? :::',
+      'x'.repeat(1000),
+      '\u0000\n\t',
+    ];
+    for (const query of odd) {
+      const r = await mcpCall(token, 'recall', { query });
+      expect(r.isError, `${query}: ${r.text}`).toBe(false);
+    }
+    // "%" and "_" are looked for as they are, not as wildcards.
+    await remember(token, 'Discount code style is SAVE_10');
+    await remember(token, 'Older codes looked like SAVEX10');
+    const exact = ok<Recalled>(await mcpCall(token, 'recall', { query: 'SAVE_10' }));
+    expect(exact.memories.map((m) => m.content)).toEqual(['Discount code style is SAVE_10']);
+    const all = ok<Recalled>(await mcpCall(token, 'recall', { query: 'SAV%' }));
+    expect(all.memories).toEqual([]);
+    expect(await rowsOf(user.id)).toHaveLength(3);
+  });
 });
 
 describe('forget', () => {

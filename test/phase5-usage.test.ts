@@ -10,7 +10,8 @@ import { reverseTurn, syncAllUsage, syncUsageForUser } from '../src/modules/bill
 import { setByokKey } from '../src/modules/integrations/byok.ts';
 import { db } from '../src/shared/db/client.ts';
 import { installFakes, member, type FakeLiteLLM, type FakeVm } from './billing-fakes.ts';
-import { ledgerMatchesGrants, ledgerOf } from './billing-helpers.ts';
+import { DAY, ledgerMatchesGrants, ledgerOf } from './billing-helpers.ts';
+import { call, expectContract } from './helpers.ts';
 
 // One set of fakes for the whole file: the 5-minute job syncs every user created so far.
 const { llm, vm }: { llm: FakeLiteLLM; vm: FakeVm } = installFakes();
@@ -150,6 +151,125 @@ describe('sync-usage', () => {
     expect(res.failed).toBe(0);
     expect(await getBalance(a.id)).toBe(99);
     expect(await getBalance(b.id)).toBe(98);
+  });
+});
+
+// Scout's browser (HLD 11.4): the vm-manager reports the seconds the browser was in use with
+// GetUsage, and the usage sync charges them. 2 credits per minute is 1 credit per 30 seconds.
+describe('browser time: 2 credits per minute, charged once by the usage sync', () => {
+  const periodsOf = (userId: string) =>
+    db()
+      .select()
+      .from(usagePeriods)
+      .where(eq(usagePeriods.userId, userId))
+      .orderBy(usagePeriods.periodStart);
+
+  it('one minute is 2 credits, five minutes are 10; awake time is charged beside it', async () => {
+    const u = await member(100, 'max');
+    vm.add(u.id, 0, 60);
+    expect((await syncUsageForUser(u.id)).charged).toBe(2);
+    await new Promise((r) => setTimeout(r, 5));
+    // A five-minute browser session in a container that was awake for ten minutes.
+    vm.add(u.id, 600, 300);
+    const res = await syncUsageForUser(u.id, new Date(Date.now() + 1));
+    expect(res.charged).toBe(11); // 10 for the browser, 1 for the awake time
+    expect(res.balance).toBe(87);
+    expect(
+      (await periodsOf(u.id)).map((p) => [p.browserSeconds, p.browserCredits, p.awakeCredits]),
+    ).toEqual([
+      [60, 2, 0],
+      [300, 10, 1],
+    ]);
+    expect(await ledgerMatchesGrants(u.id)).toBe(true);
+  });
+
+  it('part minutes carry over between syncs: nothing is rounded up and nothing is lost', async () => {
+    const u = await member(100, 'max');
+    // Each use lands after the window the sync before it closed.
+    const use = async (browserSeconds: number) => {
+      await new Promise((r) => setTimeout(r, 5));
+      vm.add(u.id, 0, browserSeconds);
+      return (await syncUsageForUser(u.id, new Date(Date.now() + 1))).charged;
+    };
+    expect(await use(20)).toBe(0); // 20 s: not a credit yet
+    expect(await use(10)).toBe(1); // 30 s in all
+    expect(await use(45)).toBe(1); // 75 s in all: 2 credits, 1 already charged
+    expect(await use(15)).toBe(1); // 90 s in all
+    expect(await getBalance(u.id)).toBe(97);
+    const periods = await periodsOf(u.id);
+    expect(periods.map((p) => p.browserSeconds)).toEqual([20, 10, 45, 15]);
+    expect(periods.reduce((n, p) => n + p.browserCredits, 0)).toBe(3); // 90 s ÷ 30
+  });
+
+  it('is charged exactly once: the same window in parallel, again, a later window, the 5-minute job', async () => {
+    const u = await member(100, 'max');
+    vm.add(u.id, 0, 120); // two minutes: 4 credits
+    const now = new Date();
+    const runs = await Promise.all([1, 2, 3, 4].map(() => syncUsageForUser(u.id, now)));
+    expect(runs.map((r) => r.charged).sort()).toEqual([0, 0, 0, 4]);
+    expect((await syncUsageForUser(u.id, now)).charged).toBe(0);
+    expect((await syncUsageForUser(u.id)).charged).toBe(0);
+    await syncAllUsage();
+    expect(await getBalance(u.id)).toBe(96);
+    const charges = (await ledgerOf(u.id)).filter((l) => l.reason === 'charge');
+    expect(charges.map((c) => [c.delta, c.description])).toEqual([[-4, 'Usage: browser 4']]);
+    expect(await periodsOf(u.id)).toHaveLength(1);
+  });
+
+  it('shows in usage as browserSeconds and browserCredits, apart from paid tools', async () => {
+    const u = await member(100, 'max');
+    vm.add(u.id, 600, 120);
+    await syncUsageForUser(u.id);
+    const from = new Date(Date.now() - DAY).toISOString();
+    const to = new Date(Date.now() + DAY).toISOString();
+    const body = await expectContract<{
+      items: Array<Record<string, number>>;
+      totals: Record<string, number>;
+    }>('getUsage', await call(`/v1/usage?from=${from}&to=${to}`, { token: u.token }), 200);
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0]).toMatchObject({
+      browserSeconds: 120,
+      browserCredits: 4,
+      awakeSeconds: 600,
+      awakeCredits: 1,
+      toolCredits: 0,
+      totalCredits: 5,
+    });
+    expect(body.totals).toMatchObject({ browserCredits: 4, toolCredits: 0, totalCredits: 5 });
+    // The credit history names it.
+    const ledger = await expectContract<{ items: Array<{ description: string; delta: number }> }>(
+      'listLedger',
+      await call('/v1/credits/ledger?limit=1', { token: u.token }),
+      200,
+    );
+    expect(ledger.items[0]).toMatchObject({
+      delta: -5,
+      description: 'Usage: awake time 1, browser 4',
+    });
+  });
+
+  it('a turn reversed as our fault gives its browser credits back, once', async () => {
+    const u = await member(100, 'max');
+    const startedAt = new Date(Date.now() - 30_000);
+    vm.add(u.id, 600, 90, Date.now() - 10_000); // 1 for awake time, 3 for the browser
+    const endedAt = new Date();
+    await syncUsageForUser(u.id);
+    expect(await getBalance(u.id)).toBe(96);
+    const turn = { startedAt, endedAt, idempotencyKey: `turn:${u.id}` };
+    expect(await reverseTurn(u.id, turn)).toEqual({ restored: 4 });
+    expect(await reverseTurn(u.id, turn)).toEqual({ restored: 0 });
+    expect(await getBalance(u.id)).toBe(100);
+  });
+
+  it('browser seconds that arrive are charged whatever the plan is now, and can use up the balance', async () => {
+    // A user who left Max while their container was awake used the browser until it stopped.
+    const u = await member(10, 'pro');
+    vm.add(u.id, 0, 600); // ten minutes: 20 credits, more than the 10 there are
+    const res = await syncUsageForUser(u.id);
+    expect(res.charged).toBe(20);
+    expect(res.balance).toBe(-10);
+    expect(await hasCredits(u.id)).toBe(false); // so the next turn does not wake the container
+    expect(llm.remainingBudget(u.id)).toBe(0);
   });
 });
 

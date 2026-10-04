@@ -2,6 +2,8 @@
 // The specialists themselves are defined in the Bridge inside the agent image. This file is what
 // the platform knows about them: the list the apps show, and how to read a progress line.
 import { config, SPECIALIST_IDS, type SpecialistId } from '../../shared/config.ts';
+import type { PlanId } from '../auth/users.ts';
+import { browserAvailable, browserWanted } from './browser.ts';
 
 export { SPECIALIST_IDS, type SpecialistId };
 export type CrewId = 'tex' | SpecialistId;
@@ -14,21 +16,23 @@ export interface CrewMember {
   description: string;
   /** Works on this deployment (Tex always; a specialist when it is in CREW_AVAILABLE). */
   available: boolean;
-  /** Scout only: it can drive a real browser (a Max feature, HLD section 11). */
-  browser: { available: boolean } | null;
+  /**
+   * Scout only: it can drive a real browser inside the user's container (a Max feature, HLD
+   * section 11). `available`: this deployment's agent image has it (`BROWSER_AVAILABLE`).
+   * `enabled`: it is on for this user, which is the state the vm-manager is sent.
+   */
+  browser: { available: boolean; enabled: boolean } | null;
 }
 
-/** Scout's real browser isn't built yet (launch-plan W2c). */
-const BROWSER_BUILT = false;
-
-const CREW: Array<Omit<CrewMember, 'available'>> = [
+/** What is the same for every user and deployment. `browser`: the member can have one. */
+const CREW: Array<Omit<CrewMember, 'available' | 'browser'> & { browser: boolean }> = [
   {
     id: 'tex',
     name: 'Tex',
     kind: 'lead',
     role: 'Lead',
     description: 'The one you text. Plans the job, hands parts to the crew and answers you.',
-    browser: null,
+    browser: false,
   },
   {
     id: 'byte',
@@ -36,7 +40,7 @@ const CREW: Array<Omit<CrewMember, 'available'>> = [
     kind: 'specialist',
     role: 'Coding',
     description: 'Writes and changes code, and opens pull requests.',
-    browser: null,
+    browser: false,
   },
   {
     id: 'patch',
@@ -44,7 +48,7 @@ const CREW: Array<Omit<CrewMember, 'available'>> = [
     kind: 'specialist',
     role: 'Code review',
     description: 'Reviews code with several reviewers: bugs, security and tests.',
-    browser: null,
+    browser: false,
   },
   {
     id: 'scout',
@@ -57,16 +61,17 @@ const CREW: Array<Omit<CrewMember, 'available'>> = [
       'Searches the web and reads pages. Web search through Textcrew and the real browser need ' +
       "the Max plan. On your own Claude plan, Scout uses Claude Code's built-in search instead: " +
       'any plan, no credits.',
-    browser: { available: BROWSER_BUILT },
+    browser: true,
   },
 ];
 
-/** The lead and the three specialists, in a fixed order. */
-export function listCrew(): CrewMember[] {
+/** The lead and the three specialists, in a fixed order, as a user on `plan` should see them. */
+export function listCrew(plan: PlanId): CrewMember[] {
   const on = config().CREW_AVAILABLE;
   return CREW.map((m) => ({
     ...m,
     available: m.kind === 'lead' || on.includes(m.id as SpecialistId),
+    browser: m.browser ? { available: browserAvailable(), enabled: browserWanted(plan) } : null,
   }));
 }
 

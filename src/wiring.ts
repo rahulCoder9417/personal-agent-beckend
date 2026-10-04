@@ -19,6 +19,7 @@ import {
   onBalanceDepleted,
   onboardBilling,
   onCreditsAdded,
+  planHasWebSearch,
   planLimits,
   redeemFromChat,
   reverseTurn,
@@ -44,7 +45,7 @@ import {
 import { setSandboxConfigProvider } from './modules/orchestrator/sandbox.ts';
 import { connectAiText, setTurnHooks } from './modules/orchestrator/turn.ts';
 import { setAppActionCharger } from './modules/platform-mcp/tools/apps.ts';
-import { setPaidToolCharger } from './modules/platform-mcp/tools/web.ts';
+import { setPaidToolCharger, setWebSearchPlanCheck } from './modules/platform-mcp/tools/web.ts';
 import { logger } from './shared/logger.ts';
 
 let wired = false;
@@ -98,7 +99,10 @@ export function wireModules(): void {
 
   // 1 credit for each successful app action that changes something (HLD 7.2).
   setAppActionCharger(async (userId, input) => (await chargeAppAction(userId, input)).charged);
-  // A paid tool (Scout's web search) costs its real cost × 2.5 (HLD 7.2).
+  // Web search through Textcrew is a Max feature (HLD 7.1).
+  setWebSearchPlanCheck(planHasWebSearch);
+  // A paid tool costs its configured cost × 2.5 (HLD 7.2). For Scout's web search that is set
+  // to exactly 1 credit a search.
   setPaidToolCharger(
     async (userId, { costUsd, ...input }) =>
       (await chargePaidTool(userId, { ...input, costMicroUsd: Math.round(costUsd * 1_000_000) }))

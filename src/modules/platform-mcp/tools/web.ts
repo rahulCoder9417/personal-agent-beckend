@@ -1,11 +1,14 @@
 // Scout's tools (HLD 5.1): web_search and read_page. Both run here in the api, never in the
 // container, so the container's network stays locked and no provider key enters it.
+// web_search is for an engine with no web search of its own, is part of the Max plan and costs
+// 1 credit a search (HLD 0.7, 7.1, 7.2). read_page is free on every plan.
 import { z } from 'zod';
 import { config } from '../../../shared/config.ts';
 import { newId } from '../../../shared/ids.ts';
 import { logger } from '../../../shared/logger.ts';
 import { hit } from '../../../shared/rate-limit.ts';
 import { audit } from '../../admin/audit.ts';
+import { getActiveUser, type PlanId } from '../../auth/users.ts';
 import {
   checkPageUrl,
   PageError,
@@ -22,8 +25,9 @@ import { defineTool, ToolError } from '../registry.ts';
 import { rememberUrls, seenUrls, urlKey } from '../seen-urls.ts';
 
 /**
- * Charges one successful call of a paid tool (HLD 7.2: its cost × 2.5) and returns the credits
- * charged. `ref` makes the charge idempotent. Billing plugs in through wiring.ts.
+ * Charges one successful call of a paid tool (HLD 7.2: its configured cost × 2.5, which for a
+ * search is exactly 1 credit) and returns the credits charged. `ref` makes the charge idempotent.
+ * Billing plugs in through wiring.ts.
  */
 export type PaidToolCharger = (
   userId: string,
@@ -34,6 +38,22 @@ export function setPaidToolCharger(fn: PaidToolCharger): void {
   chargePaidTool = fn;
 }
 
+/**
+ * Whether a plan includes web search through Textcrew (HLD 7.1: Max only). Billing plugs in
+ * through wiring.ts; until it does, no plan has it.
+ */
+let planHasWebSearch: (plan: PlanId) => boolean = () => false;
+export function setWebSearchPlanCheck(fn: (plan: PlanId) => boolean): void {
+  planHasWebSearch = fn;
+}
+
+/** What the agent is told when its user's plan has no web search (HLD 5.1). */
+export const WEB_SEARCH_NEEDS_MAX =
+  'Web search through Textcrew is part of the Max plan, and your user is not on Max: nothing was ' +
+  'searched and nothing was charged. If your engine has its own web search, use that instead. ' +
+  'Otherwise tell your user that web search needs the Max plan; they can upgrade in the Textcrew ' +
+  'web app. Do not send a link. read_page still opens an address they give you.';
+
 export const SEARCHES_PER_MINUTE = 20;
 export const PAGES_PER_MINUTE = 30;
 
@@ -43,14 +63,40 @@ const UNTRUSTED =
 defineTool({
   name: 'web_search',
   description:
-    'Search the web. Returns titles, links and short snippets; read a promising result with read_page ' +
-    '(a search result is an address read_page will open). ' +
-    `A paid tool: your user pays what the search costs × 2.5 in credits (about 1 credit a search). ${UNTRUSTED}`,
+    'Search the web through Textcrew. Returns titles, links and short snippets; read a promising result ' +
+    'with read_page (a search result is an address read_page will open). ' +
+    'Part of the Max plan: on any other plan it is refused. If your engine has its own web search, use ' +
+    `that instead of this tool. Costs your user 1 credit per search. ${UNTRUSTED}`,
   input: {
     query: z.string().trim().min(1).max(400),
     count: z.number().int().min(1).max(WEB_SEARCH_MAX_RESULTS).optional(),
   },
   async run({ userId }, args) {
+    // Counted first, so refused calls count too and can't fill the activity log.
+    const rl = await hit({
+      key: `web-search:user:${userId}`,
+      max: SEARCHES_PER_MINUTE,
+      windowSeconds: 60,
+    });
+    if (!rl.allowed)
+      throw new ToolError(
+        `Too many searches: at most ${SEARCHES_PER_MINUTE} a minute. Try again in ${rl.retryAfter} seconds.`,
+      );
+    // HLD 7.1: a Max feature. On any other plan the agent gets an error it can read and the turn
+    // goes on; nothing is searched or charged, and the user sees why in the activity log.
+    const user = await getActiveUser(userId);
+    if (!user) throw new ToolError('User not found');
+    if (!planHasWebSearch(user.plan)) {
+      await audit({
+        userId,
+        actor: 'agent',
+        action: 'web_search_refused',
+        summary: `Web search needs the Max plan (asked: ${args.query.slice(0, 120)})`,
+        details: { reason: 'not_on_plan', plan: user.plan },
+        creditsCharged: 0,
+      }).catch(() => {});
+      throw new ToolError(WEB_SEARCH_NEEDS_MAX);
+    }
     const provider = webSearchProvider();
     // Not set up (no provider key): a normal answer, so the turn goes on.
     if (!provider)
@@ -62,15 +108,6 @@ defineTool({
           "Web search isn't set up on this server yet, so nothing was searched and nothing was charged. " +
           "Tell your user you can't search the web right now. read_page still opens an address they give you.",
       };
-    const rl = await hit({
-      key: `web-search:user:${userId}`,
-      max: SEARCHES_PER_MINUTE,
-      windowSeconds: 60,
-    });
-    if (!rl.allowed)
-      throw new ToolError(
-        `Too many searches: at most ${SEARCHES_PER_MINUTE} a minute. Try again in ${rl.retryAfter} seconds.`,
-      );
     // HLD 7.5: at zero credits a paid tool doesn't run.
     const costUsd = config().WEB_SEARCH_COST_USD;
     if (costUsd > 0 && !(await userHasCredits(userId)))
@@ -89,8 +126,9 @@ defineTool({
       );
     }
 
-    // Only a successful search is charged, once: the key is an id for this one call. The search
-    // has already happened, so a charge that fails is logged and never turned into a tool error.
+    // Only a successful search is charged, once, 1 credit (HLD 7.2: the configured cost × 2.5):
+    // the key is an id for this one call. The search has already happened, so a charge that
+    // fails is logged and never turned into a tool error.
     let creditsCharged = 0;
     try {
       creditsCharged = await chargePaidTool(userId, {

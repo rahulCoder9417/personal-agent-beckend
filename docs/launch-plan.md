@@ -48,7 +48,7 @@ Keep the status table in section 3 current: update it in the same commit as the 
 | W2c | **Scout's browser** (D10), after the founder picks the option proposed in W2b-1. Navigation needs the same seen-address rule as `read_page`, and typing into pages needs its own limit (`docs/mvp-hld.md` section 11.5) | `beckend`, `vm-manager` | Not started |
 | W3a | **Shared memory** (D11) | `beckend` | **Done 2026-10-04,** on `main`. Backend only: `vm-manager` and the proto did not change. One memory on the platform (table `memories`, owned by the orchestrator); the tools `remember`, `recall` and `forget` for both engines; what is known about the user at the top of every delivered turn; a recap of the chat when the engine changes; endpoints to list and delete. Lint, type check and all tests pass (38 files, 388 tests). Not deployed, and never run on a real Hermes or Claude Code: how an engine reads the block, and whether it saves with `remember` rather than its own memory, is unchecked. Design: `docs/mvp-hld.md` section 0.9. What the web app needs and what the founder decides: under this table |
 | W3b | **App jobs without a container** (D12) | `beckend` | Not started. Proposed to wait until there is load: it only saves container time, and the simple-chat path that is already built needs just a key |
-| W3c | **Web app screens** for PR review, crew and memory, and the new fields from W2b-1 | `user-frontend-web` | In progress (started 2026-10-04) for the W2b-1 fields: crew from the API, the PR review screen, choosing Textcrew AI, usage split, crew progress. The memory screen can start: W3a is done, and what it needs is under this table |
+| W3c | **Web app screens** for PR review, crew and memory, and the new fields from W2b-1 | `user-frontend-web` | **Done 2026-10-04,** on `main` of `personal-agent-web-frontend`: the crew page from the API, pull-request review (a tab under Automations), choosing Textcrew AI, the usage split, crew in chat and activity, and Settings → Memory. 191 tests pass. Viewed in demo mode only; never run against the real backend, real sign-in or a phone. Gaps it found in the contract are listed under "Follow-ups" below |
 | Ops | **On the server** (it is stopped; start it first): reconnect Gmail with the founder's Gmail account; first live run of the git gateway; add a model provider key; add a Brave Search key; first live run of pull-request review (the Composio trigger, the four GitHub action names, one review per pull request) and of `web_search` and `read_page`; first live run of shared memory (a fact saved on one engine and used on the other, and the recap after a switch); off-server backups and alerts; set up Polar; deploy the web app | server | Not started |
 
 ### Memory screen: what the web app needs (from W3a)
@@ -80,6 +80,17 @@ All three need the Clerk session, like every `/v1` route. The contract is `opena
 - **The limits:** 200 memories of 300 characters on every plan; 2,000 characters of memory on each turn (about 500 tokens of the user's AI per turn at most).
 - **The agent image** (`vm-manager`, not changed): the lead's instructions don't mention memory, and Hermes still has its own memory tool, so facts can end up in two places. One line in the Bridge's instructions, and perhaps switching Hermes's own memory off, would settle it.
 - **Simple chat.** A reply from the cheap model (no container) is not shown to the engine afterwards, as before. The recap could carry those messages too.
+
+### Follow-ups found while building
+
+Small gaps between what the web app's screens want and what the API offers. None blocks the launch.
+
+- **Pull-request review:** no history of past reviews, no verdict or failure reason on a review, no list of the user's repos to pick from, and no check for admin access before turning review on.
+- **Automations:** a review automation doesn't carry its repo (the web app joins it with `/v1/pr-reviews` by id).
+- **Credit ledger:** entries have no charge kind, so "Web search" is recognised by its name.
+- **Progress:** only live progress lines carry the crew member, and progress isn't replayed after a page reload.
+- **Memory:** `forget` doesn't say whether it removed or corrected; there is no add or edit from the web app and no live event.
+- **Web app:** the usage chart's first date label overlaps at phone width (older issue).
 
 ### Deploy order
 

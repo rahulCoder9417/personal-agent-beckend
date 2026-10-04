@@ -10,11 +10,13 @@ import {
   appActionChangesSomething,
   connectionForToolkit,
 } from '../../integrations/apps.ts';
+import { prCommentAllowed } from '../../automations/pr-review.ts';
 import {
   actionChangesSomething,
   actionNeedsApproval,
   appAllowedOnPlan,
   appForToolkit,
+  prCommentTarget,
 } from '../../integrations/catalog.ts';
 import { composio } from '../../integrations/composio.ts';
 import { approvals } from '../../orchestrator/schema.ts';
@@ -65,7 +67,8 @@ defineTool({
   name: 'list_app_actions',
   description:
     'Actions you can run in your user\'s connected apps (connected apps × plan). Optionally filter by app (e.g. "gmail"). ' +
-    'Actions marked requires_approval need request_approval first, then run_app_action with the approval_id. ' +
+    'Actions marked requires_approval need request_approval first, then run_app_action with the approval_id ' +
+    '(one exception: a new review or comment on a pull request, in a repo where your user turned on pull-request review). ' +
     'costs_credits is what a successful run costs your user: 1 for an action that changes something, 0 for reading.',
   input: { app: z.string().optional(), search: z.string().optional() },
   async run({ userId }, args) {
@@ -122,8 +125,9 @@ defineTool({
   name: 'run_app_action',
   description:
     "Run an action in one of your user's connected apps (from list_app_actions). Risky actions need approval_id from an APPROVED request_approval " +
-    'with the same action and arguments. A successful action that changes something (send, create, update, delete) costs your user 1 credit; ' +
-    'reading, listing and searching are free.',
+    'with the same action and arguments. Posting a new review or comment on a pull request needs no approval in a repo where your user turned on ' +
+    'pull-request review (a review must use event "COMMENT"); merging, approving and comments on other repos still do. ' +
+    'A successful action that changes something (send, create, update, delete) costs your user 1 credit; reading, listing and searching are free.',
   input: {
     action: z.string().min(3),
     arguments: z.record(z.string(), z.unknown()).default({}),
@@ -148,7 +152,15 @@ defineTool({
       );
 
     let consumedId: string | null = null;
-    if (actionNeedsApproval(args.action)) {
+    // Pull-request review is on for this repo: the user's standing approval covers a new review
+    // or comment on its pull requests, and nothing else (HLD 0.8).
+    let prReviewRepo: string | null = null;
+    if (actionNeedsApproval(args.action) && !args.approval_id) {
+      const target = prCommentTarget(args.action, args.arguments);
+      if (target && (await prCommentAllowed(userId, target)))
+        prReviewRepo = `${target.owner}/${target.repo}`;
+    }
+    if (actionNeedsApproval(args.action) && !prReviewRepo) {
       if (!args.approval_id)
         throw new ToolError(
           "This action needs the user's approval first: call request_approval and end your turn",
@@ -199,8 +211,17 @@ defineTool({
         logger().error({ userId, action: args.action, err: String(err) }, 'app action not charged');
       }
     }
-    return { ok: true, data, credits_charged: creditsCharged };
+    return {
+      ok: true,
+      data,
+      credits_charged: creditsCharged,
+      ...(prReviewRepo ? { pr_review: prReviewRepo } : {}),
+    };
   },
-  summarize: (args) => `Ran ${args.action}${args.approval_id ? ' (approved)' : ''}`,
+  summarize: (args, result) => {
+    const repo = (result as { pr_review?: string }).pr_review;
+    if (repo) return `Ran ${args.action} (pull-request review is on for ${repo})`;
+    return `Ran ${args.action}${args.approval_id ? ' (approved)' : ''}`;
+  },
   creditsCharged: (_args, result) => (result as { credits_charged: number }).credits_charged,
 });

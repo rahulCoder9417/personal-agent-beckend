@@ -5,9 +5,10 @@ import { queueOutbound } from '../channels/outbound.ts';
 import { parseSessionKey } from '../channels/types.ts';
 import { getEvent, ingestEvent } from '../events/intake.ts';
 import type { ComposioTriggerEvent } from '../integrations/composio.ts';
-import { runTurn, type TurnKind } from '../orchestrator/turn.ts';
+import { runTurn, type TurnKind, type TurnOutcome } from '../orchestrator/turn.ts';
 import { IGNORED } from '../../worker/ignored.ts';
 import { findByTriggerRef, recordRun, setEnabled, type Automation } from './automations.ts';
+import { finishPrReview, preparePrReview } from './pr-review.ts';
 import { automations } from './schema.ts';
 
 export const MAX_FAILURES = 3;
@@ -40,7 +41,8 @@ async function runAutomationTurn(
   deliveryId: string,
   kind: TurnKind,
   text: string,
-): Promise<void> {
+  metadata: Record<string, unknown> = {},
+): Promise<TurnOutcome> {
   const session = parseSessionKey(a.sessionKey) ?? { channel: 'web' as const };
   const outcome = await runTurn({
     userId: a.userId,
@@ -49,11 +51,11 @@ async function runAutomationTurn(
     sessionKey: a.sessionKey,
     channel: session.channel,
     text,
-    metadata: { automationId: a.id, title: a.title },
+    metadata: { automationId: a.id, title: a.title, ...metadata },
   });
   if (outcome === 'out_of_credits') {
     await setEnabled(a.userId, a.id, false, 'out_of_credits');
-    return;
+    return outcome;
   }
   const updated = await recordRun(a, outcome !== 'error');
   if (outcome === 'error' && updated.failCount >= MAX_FAILURES && updated.enabled) {
@@ -64,6 +66,7 @@ async function runAutomationTurn(
       text: `I paused the automation "${a.title}" because it failed ${MAX_FAILURES} times in a row. You can resume it in the web app.`,
     });
   }
+  return outcome;
 }
 
 /** inbound/automation-turn: same path as a normal message, with the saved instruction. */
@@ -85,6 +88,14 @@ export async function handleComposioTrigger(job: Job): Promise<unknown> {
   const a = await findByTriggerRef(t.triggerId);
   // The event must belong to the automation's owner.
   if (!a || a.userId !== t.userId || a.userId !== event.userId || !a.enabled) return IGNORED;
+  // Pull-request review (HLD 0.8): one review per head commit, with its own instruction.
+  if (a.preset === 'pr_review') {
+    const run = await preparePrReview(a, t, eventId);
+    if (!run) return IGNORED;
+    const outcome = await runAutomationTurn(a, eventId, 'app_event', run.text, run.metadata);
+    await finishPrReview(run.claimId, outcome);
+    return null;
+  }
   const summary = JSON.stringify(t.payload).slice(0, 4000);
   await runAutomationTurn(
     a,

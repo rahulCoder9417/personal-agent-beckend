@@ -126,7 +126,7 @@
   - memory, skills, sessions and files in **/data**
 
 **One turn:**
-1. The vm-manager **delivers** a message to the Bridge.
+1. The vm-manager **delivers** a message to the Bridge. The backend has already put what is known about the user at the top of its text, and a recap of the chat if the engine changed (section 0.9).
 2. The Bridge hands it to Hermes in that chat's session.
 3. Hermes loops: LLM → tool call on the Platform MCP → result → … → final answer.
 4. The final answer goes out through *send_message* (outbound queue).
@@ -134,7 +134,7 @@
 
 **Approvals never block:** *request_approval* returns "pending", and Hermes ends its turn ("waiting for your OK"). The user's ✅ or ❌ arrives later as a new message, and Hermes continues from its saved session.
 
-**Learning:** memory and skills are updated in /data, so each agent improves for its own user only.
+**Learning:** memory and skills are updated in /data, so each agent improves for its own user only. That memory belongs to one engine and is lost to the user when they switch engines. The memory that every engine shares is on the platform (section 0.9).
 
 ### 0.6 Closing containers
 
@@ -233,6 +233,138 @@ Everything else risky still needs approval, in the same turn too: merging, a com
 - **Pausing:** at zero credits, and after 3 failed reviews in a row, like any automation.
 - **Teams** should use an API key for this, not one person's Claude plan (`docs/market-and-mvp.md` section 6.5).
 
+### 0.9 Shared memory
+
+Decided 2026-10-03 (`docs/launch-plan.md` D11), designed and built 2026-10-04.
+
+**The problem.** Each engine keeps its own memory inside the container (Hermes under `/data/hermes`, Claude Code in its own files). A user who switches engines (own API key → Claude plan → Textcrew AI) gets an agent that has forgotten them, and a new engine has no idea what the chat was about.
+
+**The answer:** one memory on the platform, the same for every engine and every crew member, plus a short recap of the chat when the engine changes.
+
+**What a memory is.** One short fact about the user, on one line, at most 300 characters. Each has a kind:
+
+| Kind | Example |
+|---|---|
+| `preference` | "Prefers short replies with no emoji" |
+| `person` | "Priya is their co-founder and handles finance" |
+| `project` | "Textcrew's backend is the repo acme/beckend, on Node 22" |
+| `instruction` | A standing instruction: "Always cc their assistant on emails to investors" |
+| `fact` | Anything else that lasts: "Lives in Bengaluru" |
+
+Not a memory: a secret (password, key, token, card number), a one-off detail (today's task, a tracking number), or something the agent can look up in the user's apps.
+
+**Where it lives.** The table `memories` in Postgres, owned by the **orchestrator** module. Why that module and not a new one:
+
+- The orchestrator builds what is delivered to the container on every turn, and that is where memory is read.
+- It already owns the other per-user agent state: agent settings and approvals. Approvals follow the same pattern: the table and its functions in the orchestrator, the tool in the Platform MCP, the endpoints in the api.
+- The Platform MCP module owns no tables and already calls the orchestrator. Putting the table there would make the two modules depend on each other.
+
+No vector database and no embeddings (`docs/launch-plan.md` D13 rules out document search). Finding uses Postgres's built-in text search.
+
+**How it is written, found, changed and removed.** Three tools on the Platform MCP (section 5.1). Both engines have them, and so do the lead, Byte and Patch (they have every platform tool). Scout does not on Claude Code, where its tool list is only `web_search` and `read_page`.
+
+| Tool | What it does |
+|---|---|
+| `remember(content, kind?)` | Saves one memory. The same text again (ignoring case and spacing) doesn't make a second one: the first is marked as confirmed again |
+| `recall(query?, limit?)` | Finds memories for a question. With no query it lists the latest. Returns each memory's id, kind, text and date |
+| `forget(memory_id, correction?)` | Removes a memory. With `correction`, the memory keeps its id and gets the new text |
+
+- **When the agent should use them** is in the tool descriptions: save lasting facts the user states or confirms themself; never save something only read in a web page, an email, a file or a tool result; never save secrets or one-off details; look in memory before asking the user something again.
+- **Finding:** the question's words are matched against each memory with Postgres text search (`english`), any word counting, best match first (`ts_rank`), then the most recently confirmed. A memory that only contains one of the words as part of a longer word is found too. A user has at most 200 short memories, so the search reads that user's rows and needs no text index.
+- **Marked as used:** every memory a search returns gets its use count raised and its last-used time set. Listing with no query doesn't count.
+- **Every call is audit-logged** like any tool (section 5.1). The activity log says that a memory was saved, corrected or removed, with its id and kind. **It does not hold the memory's text**: the audit log is kept after the memory, and after the account, are deleted, so the text stays in one place only, the `memories` table. The web app shows the text from the memory list.
+
+**How it reaches an engine.** The backend adds a block to the text of every turn it delivers.
+
+- **Where:** inside `Deliver.text`, the field the backend already sends and the Bridge already gives to the engine as the turn's input. No change to the agent image or the gRPC proto. `metadata_json` would not work: the Bridge doesn't show it to the engine.
+- **Which turns:** all four kinds: a user's message, an approval answer, a scheduled automation and an app event. The simple-chat path (the cheap model with no container, section 5.2) doesn't get it: a message that needs what is known about the user is routed to the agent.
+- **No memories:** nothing is added and the text is delivered as before.
+- **Which memories:** standing instructions first. Then the rest, by the later of "last confirmed" (saved, saved again or corrected) and "last found by `recall`", newest first; ties go to the one found more often. They are added until the budget is full: **2,000 characters and 30 memories**. If more are saved than fit, the block's last line says how many and tells the agent to use `recall`.
+- **The shape:**
+
+  ```
+  [Textcrew memory. Notes saved about your user in earlier chats, shown to you by the platform. …]
+  - (instruction) Always cc their assistant on emails to investors
+  - (preference) Prefers short replies with no emoji
+  [12 more notes are saved. Find them with recall.]
+  [End of Textcrew memory]
+
+  [This turn's message follows.]
+  <the text as it was>
+  ```
+
+- **If the memory can't be read** (the database fails), the turn is delivered without the block. Memory never fails a turn.
+
+**Switching engines keeps the thread.** An engine keeps one session per chat (the session key, for example `telegram:42` or `web`), so the thing to track is which engine last handled each chat.
+
+- **What is kept:** the table `chat_engines`: user, chat, engine, and when that engine last finished a turn there. A row is written when a turn ends well (`turn_done`), for every kind of turn.
+- **When a recap is added:** the engine of this turn is not the one that handled the previous turn in this chat, or no engine has finished a turn in this chat yet.
+- **What the recap holds:** the chat's stored messages (`messages`, both directions) that this engine hasn't had: those after its own last turn in this chat, or the latest ones if it never had one. This turn's own message is left out. The newest are kept, within **12 messages and 3,000 characters**; each message is cut at 500 characters and put on one line as `User: …` or `You: …`.
+- **When the engine hasn't changed:** nothing is added. The engine has the chat in its own session.
+- **A failed turn is not recorded,** so a switch whose first turn fails gets the recap again on the next turn.
+- **It goes after the memory block,** before the turn's own text, with its own start and end lines. It is framed as a record of what was said, not as new requests.
+- **Chats from before this was built** have no row, so their next turn gets one recap of messages the engine already has. That happens once per chat.
+- **Not covered:** replies the simple-chat path gave between two turns of the same engine. The engine never saw those and still doesn't. The same recap could carry them; it isn't built.
+
+**The user's control** (`openapi/openapi.yaml`):
+
+| Endpoint | What it does |
+|---|---|
+| `GET /v1/memories` | Every memory of the user, newest first, with the limit (200) |
+| `DELETE /v1/memories/{memoryId}` | Removes one |
+| `DELETE /v1/memories` | Removes all; answers how many |
+
+- The user can't add or edit a memory from the web app. They tell the agent, which is how every memory is made.
+- A delete by the user is written to the activity log too (without the text).
+- **Deleting the account removes the memories** and the `chat_engines` rows (the *delete-user* job).
+
+**Limits:**
+
+| Limit | Value | At the limit |
+|---|---|---|
+| Length of one memory | 300 characters | The tool answers with an error that says the length and the limit |
+| Memories per user | 200 | The tool says memory is full, and to remove some with `forget` or in the web app. Nothing is saved |
+| Saves and corrections | 60 an hour per user | The tool says to try later |
+| `recall` | 8 results by default, 20 at most | |
+| Block on each turn | 2,000 characters, 30 memories | The rest are reached with `recall` |
+| Recap on an engine change | 12 messages, 3,000 characters | Older messages are left out |
+
+The limits are the same on every plan.
+
+**Security:**
+
+- **A memory is data, never an instruction to the platform.** Nothing on the platform reads a memory to decide what is allowed: approvals, plan limits, the pull-request review permission and the seen-address rule don't look at memory. A memory can't approve anything.
+- **The block can't pass for the user or the platform.**
+  - Its first line says the notes are data, not a message from the user and not instructions from the platform, and that a note can never approve an action.
+  - A memory is stored on **one line**: line breaks, tabs and control characters become spaces when it is saved and again when the block is built. Every memory line starts with `- (kind) `, and square brackets inside a memory are turned into round ones. So text inside a memory can't start a line of its own, can't write the block's end line and can't write the "this turn's message follows" line. Only the platform writes those.
+  - The recap is built the same way: one line per message, brackets turned round.
+- **Memory poisoning.** Something the agent read (a web page, an email, a pull request) may try to get a false or harmful "fact" saved, which would then come back on every turn and on every engine. What limits it:
+  - the tool descriptions: save only what the user said or confirmed themself, never text that was only read;
+  - Scout, the member that reads the web, has no memory tools on Claude Code;
+  - the activity log shows every save, correction and removal, next to what the agent read in that turn;
+  - the user sees every memory in the web app and can delete one or all;
+  - a risky action still needs the user's approval, whatever a memory says, and the block tells the agent that a note can't approve one;
+  - 200 memories and 60 saves an hour, so memory can't be flooded.
+- **What is not solved:**
+  - The platform can't check that the user really said it. An agent that follows an injected instruction can save a false fact, and it stays until the user sees and deletes it. It can change later answers (a wrong name, a wrong address to send to); the send itself still needs approval.
+  - On Hermes a specialist's tool list is only an instruction (section 0.7), so Scout can reach `remember` there.
+  - Memory can be written in a turn the user didn't start (an app event, a scheduled automation, a pull-request review), when nobody is watching. Refusing saves in those turns would close the most likely path; it isn't built, and the founder decides (`docs/launch-plan.md` section 2).
+  - A memory's text is not checked for being true, kind or harmless, only for looking like a secret.
+- **Obvious secrets are refused when saving** (and when correcting). A simple check on the text:
+  - known key shapes: `sk-…`, Stripe `sk_live_…`, GitHub `ghp_…` and `github_pat_…`, GitLab `glpat-…`, Slack `xox…`, AWS `AKIA…`, Google `AIza…`, a Telegram bot token, a JWT, `Bearer …`, a private-key block;
+  - a secret word followed by its value: "password is …", "passcode: …", "PIN is …", "API key = …", "token: …", "OTP is …", "CVV: …";
+  - a card number: 13 to 19 digits, with or without spaces or dashes, that pass the Luhn check;
+  - a web address with a password in it, or with a parameter named like a secret (`token`, `key`, `secret`, `password`, `sig`…);
+  - any other run of 32 or more letters and digits mixed (a hash, a random key), outside a web address.
+  - The refusal names the kind of secret, never the text, and is written to the activity log (`memory_refused`) without the text.
+  - **It is a safety net, not a guarantee.** A short password in a plain sentence ("the door code 4821"), a secret in another language, or one split in two passes. It also refuses some harmless text ("the wifi password is on the fridge"); the agent is told to say it without the secret.
+- **Per user, never across users.** Every query filters by the user id, and the tools take the user id only from the container token (section 0.1). A memory id of another user answers "not found", for `forget` and for the web app's delete alike. Tested.
+- **No secrets leave the platform through memory** by design: memories go only to the user's own container and the user's own web app.
+
+**The engines' own memory is left as it is.** Hermes still learns into `/data/hermes` and Claude Code keeps its own files (section 0.5). Those stay per engine and are not copied, read or cleared by the platform. **Platform memory is the shared one:** it is what survives an engine switch, and the only one the user can see and delete from the web app.
+
+**Not built:** editing or adding a memory from the web app; memory kept per crew member; memories that expire; search by meaning (no embeddings); telling the Bridge about memory in its own instructions (`vm-manager`), so today the agent learns of the tools from their descriptions and from the block.
+
 ---
 
 ## 1. Architecture decisions: services, microservices, gRPC
@@ -253,8 +385,8 @@ Everything else risky still needs approval, in the same turn too: merging, a com
 | **auth** | Users, Clerk integration, link codes, channel links |
 | **channels** | WhatsApp / Telegram / Sendblue / web adapters (receive + send) |
 | **events** | Webhook intake, `events` table, queue producers |
-| **orchestrator** | Per-user lock, Jev routing, the wake → deliver flow, agent settings, the crew list |
-| **platform-mcp** | The MCP server the agents call, including Scout's web search and page reader |
+| **orchestrator** | Per-user lock, Jev routing, the wake → deliver flow, agent settings, the crew list, shared memory and the engine each chat last ran on |
+| **platform-mcp** | The MCP server the agents call, including Scout's web search and page reader and the memory tools |
 | **integrations** | Composio (connect, run actions, triggers), user MCP servers |
 | **billing** | Plans, subscriptions, credit grants, ledger, coupons, Polar, LiteLLM keys and budgets |
 | **automations** | Automation rows and timers, pull-request review |
@@ -375,7 +507,7 @@ The web app lives in `user-frontend/` and is built from `openapi.yaml` + `ignore
 ### 5.1 api
 
 - **Webhooks:** WhatsApp, Telegram, Sendblue, Clerk, Polar, Composio. Each one: verify → save the event (unique key) → add a job → 200. A chat webhook whose channel is switched off answers 200 and does nothing (section 0.3).
-- **REST + SSE for the web app** (every endpoint, schema and error is in `openapi/openapi.yaml`): profile, link codes, channels (with the list of channels that are switched on), apps (Composio connect links), user MCP servers, approvals, chat history, **plans / checkout / credits balance / usage history / coupon redeem**, bring-your-own key, automations list, **pull-request review per repo**, agent settings (which AI pays), the **crew list**.
+- **REST + SSE for the web app** (every endpoint, schema and error is in `openapi/openapi.yaml`): profile, link codes, channels (with the list of channels that are switched on), apps (Composio connect links), user MCP servers, approvals, chat history, **plans / checkout / credits balance / usage history / coupon redeem**, bring-your-own key, automations list, **pull-request review per repo**, agent settings (which AI pays), the **crew list**, **memory** (list, delete one, delete all).
 - **Platform MCP (`/mcp`)**, called with the container token:
 
 | Tool | Effect |
@@ -388,6 +520,9 @@ The web app lives in `user-frontend/` and is built from `openapi.yaml` + `ignore
 | get_profile | Name, timezone, plan, connected apps |
 | web_search | Scout's search. Asks the search provider from the server and returns titles, links and snippets. A **paid tool**: its cost × 2.5 in credits (section 7.2) |
 | read_page | Scout's page reader. Fetches one public web page from the server and returns its text and links. Only an address already seen for this user (their own messages, a search result, a link on a page already read). Free |
+| remember | Saves one short fact about the user to the shared memory (section 0.9). Refused: a secret, more than 300 characters, more than 200 memories. Free |
+| recall | Finds the memories that fit a question, best match first; with no question, the latest. Free |
+| forget | Removes a memory, or corrects its text. Free |
 
 Every call is audit-logged and triggers a vm-manager *Touch*. `/mcp` is closed to the internet (section 4).
 
@@ -443,12 +578,12 @@ Every call is audit-logged and triggers a vm-manager *Touch*. `/mcp` is closed t
 
 | Job (queue) | What happens |
 |---|---|
-| process-message (inbound) | Take the lock → channel still on? (section 0.3) → **credit check** (section 7.5) → Jev: simple or task, apps, spam → simple: cheap model via LiteLLM → outbound; task: *WakeSandbox* → *Deliver* (stream until turn done). Progress lines from the stream go to the web chat's live stream (section 0.7) |
-| process-approval (inbound) | Mark the approval → Wake + Deliver the answer |
+| process-message (inbound) | Take the lock → channel still on? (section 0.3) → **credit check** (section 7.5) → Jev: simple or task, apps, spam → simple: cheap model via LiteLLM → outbound; task: *WakeSandbox* → *Deliver* (stream until turn done). The delivered text starts with the memory block, and with a recap of the chat when the engine changed (section 0.9). Progress lines from the stream go to the web chat's live stream (section 0.7) |
+| process-approval (inbound) | Mark the approval → Wake + Deliver the answer (with the memory block and the recap, like any turn) |
 | run-automation (scheduled → inbound) | Same as process-message with the saved instruction |
 | composio-trigger (inbound) | Same as process-message with the event summary. For a pull-request review automation: check the event, find the head commit, one review per head commit, then the review instruction (section 0.8) |
 | send-outbound (outbound) | Send via the channel (24-hour rule → template). Nothing is sent to a channel that is switched off. On Telegram, purchase links are taken out (section 7.6) |
-| create-sandbox / delete-sandbox (system) | LiteLLM key create/revoke + vm-manager Create/Delete |
+| create-sandbox / delete-sandbox (system) | LiteLLM key create/revoke + vm-manager Create/Delete. Deleting a user also removes their memories and messages |
 | check-connection (system) | Added when a connect link is created. Asks Composio for the account's status 15 s later, then after 30 s, 1 min, 2 min, 4 min and 8 min (six checks in about 16 minutes). It stops as soon as the connection is no longer `pending`. Safe to re-run: it only copies Composio's status. After the last check a connection that is still pending is left as it is; the webhook or the app list can still finish it |
 | sync-usage (system, every 5 min) | LiteLLM spend + vm-manager *GetUsage* → **charges** (section 7.4) → enforce zero balance |
 | grant-monthly-credits (system) | On subscription renewal (Polar's paid renewal order) → a new monthly grant |
@@ -696,6 +831,8 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 | integrations | user_mcp_servers | user_id, url, domain, auth_secret (encrypted), enabled |
 | integrations | byok_keys | user_id, provider, key (encrypted) |
 | orchestrator | agent_settings | user_id, runtime (hermes/claude_code), ai_preference (auto/platform), claude_connected_at |
+| orchestrator | memories | id, user_id, kind (preference/person/project/instruction/fact), content (one line, at most 300 characters), confirmed_at, last_used_at, use_count, created_at, updated_at |
+| orchestrator | chat_engines | user_id, session_key, runtime (**the three together are the key**), last_turn_at |
 | automations | automations | id, user_id, kind (once/repeat/event), schedule/cron, timezone, trigger_ref, instruction, preset (null/pr_review), enabled, fail_count, next_run_at |
 | automations | pr_reviews | user_id, owner, repo, pr_number, head_sha (**unique together**), automation_id, event_id, status (requested/done/failed) |
 | billing | subscriptions | user_id, plan, polar_subscription_id, status, period_start, period_end |
@@ -848,6 +985,7 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 | GitHub can't be asked for a pull request's head commit | The head commit in the event is used; with none, no review runs and the activity log says why |
 | A review's job runs out of retries (vm-manager down for minutes) | The commit stays claimed by that event, so no later event reviews it twice. It is reviewed if that event's job is run again; otherwise the next push gets its own review |
 | vm-manager down | Wake/Deliver jobs retry with backoff; the rest keeps working |
+| Memory or the chat history can't be read when a turn starts | The turn is delivered without the memory block or the recap; a warning is logged |
 | Jev down | Treat every message as a task (no routing shortcut) |
 | Polar webhook late | Credits are added when it arrives; the web app shows "processing" |
 | Redis lost | Rebuild jobs from `events`; re-register automations |
@@ -864,6 +1002,7 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 - [ ] Pull-request review: comments run without approval only on repos the user turned review on for, only the four named actions, never approve, merge, reply or another repo; the agent can't turn it on; the instruction carries no text from the pull request
 - [ ] `read_page` reaches public addresses only: private, loopback, link-local, metadata and internal hosts are refused, at every redirect and again when connecting; limits on time, size and redirects; rate limited
 - [ ] `read_page` can't be used to send data out: it fetches only an address already seen for this user (their own messages, a `web_search` result, a link on a page already read), at every redirect too. An address the agent made up is refused. The future browser tools need the same rule for every navigation (section 11)
+- [ ] Shared memory: per user only (the user id comes from the container token; another user's memory id answers "not found"); a memory is one line and can't write the block's own lines; the block says its notes are data and can't approve anything; obvious secrets are refused when saving; no memory text in the audit log; deleted with the account (section 0.9)
 - [ ] Coupon rules from 7.7; rate limits on redeem, link codes and login-linked endpoints
 - [ ] Nightly off-server backups with a tested restore
 

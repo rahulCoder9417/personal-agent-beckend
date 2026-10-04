@@ -2,7 +2,12 @@
 export { chargeAppAction } from './app-actions.ts';
 export { chargePaidTool } from './paid-tools.ts';
 export { getBalanceSummary, hasCredits, type BalanceSummary } from './balance.ts';
-export { onBalanceDepleted, onCreditsAdded, type BalanceListener } from './hooks.ts';
+export {
+  onBalanceDepleted,
+  onCreditsAdded,
+  onPlanChanged,
+  type BalanceListener,
+} from './hooks.ts';
 export { getLiteLLMKey } from './litellm.ts';
 export { onboardBilling, offboardBilling } from './onboard.ts';
 export { planHasWebSearch, planLimits, type PlanLimits, type PlanId } from './plans.ts';

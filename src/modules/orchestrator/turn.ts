@@ -17,6 +17,7 @@ import {
   syncRuntimeAfterWake,
   type RuntimeName,
 } from './agent-settings.ts';
+import { syncBrowserAfterWake } from './browser.ts';
 import { crewOfProgress } from './crew.ts';
 import { ensureSandbox } from './sandbox.ts';
 import { recordEngineTurn, turnText } from './turn-context.ts';
@@ -216,6 +217,8 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
   }
   // The container runs the agent the user's settings say (Hermes or Claude Code).
   const engine = await syncRuntimeAfterWake(userId, woke.sandbox);
+  // Scout's browser is on for this container only if the plan says so (HLD 11.3).
+  await syncBrowserAfterWake(userId, user.plan, woke.sandbox);
   // What is known about the user, and a recap of the chat if the engine changed (HLD 0.9).
   const text = await turnText(input, engine);
 

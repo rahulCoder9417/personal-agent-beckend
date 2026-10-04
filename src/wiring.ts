@@ -19,6 +19,7 @@ import {
   onBalanceDepleted,
   onboardBilling,
   onCreditsAdded,
+  onPlanChanged,
   planHasWebSearch,
   planLimits,
   redeemFromChat,
@@ -33,6 +34,7 @@ import { activeConnections, deleteUserConnections } from './modules/integrations
 import { setInboundPriority } from './modules/events/intake.ts';
 import { deleteUserMcpServers, sandboxMcpConfig } from './modules/integrations/mcp-servers.ts';
 import { handleApprovalReply } from './modules/orchestrator/approvals.ts';
+import { queueBrowserSync, setBrowserPlanCheck } from './modules/orchestrator/browser.ts';
 import { setLifecycleHooks } from './modules/orchestrator/lifecycle.ts';
 import { setInboundHooks } from './modules/orchestrator/process-message.ts';
 import { getAgentSettings } from './modules/orchestrator/agent-settings.ts';
@@ -119,6 +121,11 @@ export function wireModules(): void {
     await publishCredits(userId);
   });
   setAutomationLimit((plan) => planLimits(plan).automations);
+
+  // Scout's browser is part of the Max plan (HLD 11.3). When a plan changes, a system job tells
+  // the vm-manager to switch it on or off.
+  setBrowserPlanCheck((plan) => planLimits(plan).browser);
+  onPlanChanged(queueBrowserSync);
 
   // Max plan: priority in the inbound queue (lower number runs first; FIFO within a priority).
   setInboundPriority(async (userId) => {

@@ -5,6 +5,7 @@ import { sha256Hex } from '../../shared/crypto.ts';
 import { logger } from '../../shared/logger.ts';
 import { getActiveUser } from '../auth/users.ts';
 import { sandboxRuntime } from './agent-settings.ts';
+import { browserWanted } from './browser.ts';
 import { sandboxTokens } from './schema.ts';
 import { planPriority, SandboxState, vm } from './vm.ts';
 
@@ -50,6 +51,8 @@ export async function ensureSandbox(userId: string): Promise<void> {
     mcpServers: await provider.mcpServers(userId),
     timezone: user.timezone,
     runtime: await sandboxRuntime(userId),
+    // Scout's browser: on for a Max user while the deployed image has it (HLD 11.3).
+    browserEnabled: browserWanted(user.plan),
   });
   await db()
     .insert(sandboxTokens)

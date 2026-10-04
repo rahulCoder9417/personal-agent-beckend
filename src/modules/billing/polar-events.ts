@@ -14,6 +14,7 @@ import { findWaitlistOffer, markWaitlistOfferUsed } from '../auth/waitlist.ts';
 import { getEvent } from '../events/intake.ts';
 import { createGrantInTx } from './credits.ts';
 import { afterCreditsAdded, afterCreditsRemoved } from './enforce.ts';
+import { firePlanChanged } from './hooks.ts';
 import { PLANS, TOP_UPS, PLAN_IDS, creditExpiry, type PlanId } from './plans.ts';
 import { isTopUpProduct, planForProduct, type PolarWebhook } from './polar.ts';
 import { creditGrants, payments } from './schema.ts';
@@ -130,6 +131,7 @@ async function startPeriod(
   const periodEnd = date(s, 'current_period_end') ?? new Date(periodStart.getTime() + 30 * DAY);
   const now = new Date();
 
+  let planChanged = false;
   const granted = await db().transaction(async (tx) => {
     await upsertSubscriptionInTx(tx, {
       userId,
@@ -139,7 +141,7 @@ async function startPeriod(
       periodStart,
       periodEnd,
     });
-    await setPlan(userId, plan, tx);
+    planChanged = await setPlan(userId, plan, tx);
     // Every credit lasts 90 days from the grant, so unused monthly credits carry over (no
     // expiry at renewal). A late event still grants: the period was paid for.
     const { created } = await createGrantInTx(tx, {
@@ -165,6 +167,8 @@ async function startPeriod(
     return true;
   });
   await afterCreditsAdded(userId); // also applies the plan's models to the LiteLLM key
+  // A new plan, not a renewal of the same one: what the plan switches on follows (HLD 11.3).
+  if (planChanged) await firePlanChanged(userId);
   if (kind === 'activated') await useWaitlistOffer(s, userId);
   return { granted };
 }
@@ -213,6 +217,7 @@ async function syncSubscription(s: Data, event: PolarWebhook) {
     return { status, ended: true };
   }
   const plan = planOf(s) ?? sub.plan;
+  let planChanged = false;
   await db().transaction(async (tx) => {
     await upsertSubscriptionInTx(tx, {
       userId: sub.userId,
@@ -223,9 +228,10 @@ async function syncSubscription(s: Data, event: PolarWebhook) {
       periodEnd: date(s, 'current_period_end') ?? sub.periodEnd,
     });
     // A plan change (Pro ↔ Max) applies now; its credits come with the next period.
-    if (plan !== sub.plan) await setPlan(sub.userId, plan, tx);
+    if (plan !== sub.plan) planChanged = await setPlan(sub.userId, plan, tx);
   });
   if (plan !== sub.plan) await afterCreditsAdded(sub.userId);
+  if (planChanged) await firePlanChanged(sub.userId);
   return { status, plan };
 }
 

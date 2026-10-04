@@ -65,6 +65,8 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
   const tokens = new Map<string, string>();
   const deliveries: Delivery[] = [];
   const created: string[] = [];
+  /** Every WakeSandbox call, by user id. */
+  const wakes: string[] = [];
   const touches: string[] = [];
   const allowlists: Array<{
     userId: string;
@@ -82,6 +84,8 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
     claudeError: null as Error | null,
     /** SetAgentRuntime fails with this while it is set (the vm-manager can't be told). */
     runtimeError: null as Error | null,
+    /** SetBrowser fails with this while it is set (a function: asked at every call). */
+    browserError: null as Error | (() => Error | null) | null,
     /** The next delivered turn ends with this ERROR instead of TURN_DONE (used once). */
     turnError: null as { message: string; platformFault: boolean } | null,
     /** Like turnError, but the agent runs first (it may have acted before the turn failed). */
@@ -96,11 +100,15 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
   const logins = new Map<string, { userId: string; code: string }>();
   const logouts: string[] = [];
   let loginSeq = 0;
+  // Scout's browser: the switch the vm-manager has on record per user, and every SetBrowser call.
+  const browser = new Map<string, boolean>();
+  const browserCalls: Array<{ userId: string; enabled: boolean }> = [];
   const sandboxView = (userId: string, s: SandboxState) => ({
     userId,
     state: s,
     runtime: runtimes.get(userId) ?? AgentRuntime.UNSPECIFIED,
     claudeConnected: claudeConnected.has(userId),
+    browserEnabled: browser.get(userId) ?? false,
   });
   const takeClaudeError = () => {
     const e = state.claudeError;
@@ -109,13 +117,15 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
   };
 
   const fake = {
-    async createSandbox(req: { userId: string; runtime?: AgentRuntime }) {
+    async createSandbox(req: { userId: string; runtime?: AgentRuntime; browserEnabled?: boolean }) {
       let token = tokens.get(req.userId);
+      // Idempotent per user, like the real one: a second call changes nothing.
       if (!token) {
         token = randomBytes(24).toString('hex');
         tokens.set(req.userId, token);
         created.push(req.userId);
         runtimes.set(req.userId, req.runtime ?? AgentRuntime.UNSPECIFIED);
+        browser.set(req.userId, req.browserEnabled ?? false);
       }
       return {
         sandbox: sandboxView(req.userId, SandboxState.STOPPED),
@@ -123,6 +133,7 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
       };
     },
     async wakeSandbox(req: { userId: string }) {
+      wakes.push(req.userId);
       if (state.wakeError) throw state.wakeError;
       return { sandbox: sandboxView(req.userId, SandboxState.AWAKE), wasStopped: true };
     },
@@ -167,7 +178,18 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
     },
     async deleteSandbox(req: { userId: string }) {
       tokens.delete(req.userId);
+      browser.delete(req.userId);
       return {};
+    },
+    /** Stored now; a real container gets it on its next wake. */
+    async setBrowser(req: { userId: string; enabled: boolean }) {
+      browserCalls.push({ userId: req.userId, enabled: req.enabled });
+      const failure =
+        typeof state.browserError === 'function' ? state.browserError() : state.browserError;
+      if (failure) throw failure;
+      if (!tokens.has(req.userId)) throw new ConnectError('sandbox not found', Code.NotFound);
+      browser.set(req.userId, req.enabled);
+      return { sandbox: sandboxView(req.userId, SandboxState.STOPPED) };
     },
     async setEgressAllowlist(req: {
       userId: string;
@@ -222,6 +244,7 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
     tokens,
     deliveries,
     created,
+    wakes,
     touches,
     allowlists,
     state,
@@ -230,6 +253,8 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
     runtimeCalls,
     logins,
     logouts,
+    browser,
+    browserCalls,
   };
 }
 

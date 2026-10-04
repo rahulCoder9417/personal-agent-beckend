@@ -1,11 +1,13 @@
-// In-process listeners for balance changes (HLD 7.5). Other modules register here, e.g. the
-// automations module pauses a user's automations at zero and un-pauses them when credits arrive.
+// In-process listeners for balance and plan changes (HLD 7.5, 11.3). Other modules register here,
+// e.g. the automations module pauses a user's automations at zero and un-pauses them when credits
+// arrive, and the orchestrator switches Scout's browser on or off when the plan changes.
 import { logger } from '../../shared/logger.ts';
 
 export type BalanceListener = (userId: string) => void | Promise<void>;
 
 const depleted = new Set<BalanceListener>();
 const added = new Set<BalanceListener>();
+const planChanged = new Set<BalanceListener>();
 
 /** Called when a sync leaves the balance at or below zero. Returns an unsubscribe function. */
 export function onBalanceDepleted(fn: BalanceListener): () => void {
@@ -17,6 +19,15 @@ export function onBalanceDepleted(fn: BalanceListener): () => void {
 export function onCreditsAdded(fn: BalanceListener): () => void {
   added.add(fn);
   return () => added.delete(fn);
+}
+
+/**
+ * Called after a user's plan changed: an upgrade, a downgrade, or a cancelled subscription
+ * reaching its end. Not called when a renewal keeps the plan.
+ */
+export function onPlanChanged(fn: BalanceListener): () => void {
+  planChanged.add(fn);
+  return () => planChanged.delete(fn);
 }
 
 async function fire(listeners: Set<BalanceListener>, userId: string, hook: string): Promise<void> {
@@ -31,3 +42,4 @@ async function fire(listeners: Set<BalanceListener>, userId: string, hook: strin
 
 export const fireBalanceDepleted = (userId: string) => fire(depleted, userId, 'balance_depleted');
 export const fireCreditsAdded = (userId: string) => fire(added, userId, 'credits_added');
+export const firePlanChanged = (userId: string) => fire(planChanged, userId, 'plan_changed');

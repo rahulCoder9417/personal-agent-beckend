@@ -81,6 +81,12 @@ describe('GET /v1/crew', () => {
     for (const m of items) expect(m.description.length).toBeGreaterThan(10);
     expect(items.filter((m) => m.browser).map((m) => m.id)).toEqual(['scout']);
     expect(items[3]!.browser).toEqual({ requiresPlan: 'max', available: false });
+    // Scout's two platform services need Max; the search built into the user's own engine doesn't.
+    expect(items[3]!.description).toBe(
+      'Searches the web and reads pages. Web search through Textcrew and the real browser need ' +
+        "the Max plan. On your own Claude plan, Scout uses Claude Code's built-in search instead: " +
+        'any plan, no credits.',
+    );
   });
 
   it('CREW_AVAILABLE says which specialists are switched on; Tex always is', async () => {

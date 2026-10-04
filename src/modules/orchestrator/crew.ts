@@ -51,7 +51,12 @@ const CREW: Array<Omit<CrewMember, 'available'>> = [
     name: 'Scout',
     kind: 'specialist',
     role: 'Research',
-    description: 'Searches the web and reads pages. On Max it also drives a real browser.',
+    // What needs Max and what doesn't (HLD 0.7, 7.1): Scout's two platform services do; the
+    // search built into the user's own engine does not.
+    description:
+      'Searches the web and reads pages. Web search through Textcrew and the real browser need ' +
+      "the Max plan. On your own Claude plan, Scout uses Claude Code's built-in search instead: " +
+      'any plan, no credits.',
     browser: { available: BROWSER_BUILT },
   },
 ];

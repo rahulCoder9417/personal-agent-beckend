@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Deploy the latest `main` of both repos on the server (docs/deployment.md, "Deploying").
+# Deploy the latest `main` of the repos on the server (docs/deployment.md, "Deploying").
 #
 # Layout (ROOT, default /opt/textcrew):
 #   beckend/      git clone of personal-agent-beckend   (its .env holds the api/worker secrets)
 #   vm-manager/   git clone of personal-agent-vm-manager
+#   user-frontend-web/   optional: git clone of personal-agent-web-frontend (the `web` service);
+#                        needs web.env, clerk_secret and WEB_DOMAIN (docs/deployment.md)
 #   compose.env   compose variables (Postgres password, LiteLLM master key, VM_INTERNAL_SECRET, domain…)
 #   backups/      BACKUP_HOST_DIR
 #
-# Steps: pull both repos (hard reset to origin/main) → build images (cached layers are reused) →
+# Steps: pull the repos (hard reset to origin/main) → build images (cached layers are reused) →
 # migrations → up → recreate services whose bind-mounted config changed → health check.
 # The whole body is in main() so bash has parsed it before `git reset` rewrites this file; after
 # the pull the script re-runs itself from the new copy with --no-pull.
@@ -16,7 +18,13 @@ set -euo pipefail
 main() {
   local root="${ROOT:-/opt/textcrew}"
   local branch="${DEPLOY_BRANCH:-main}"
-  local be="$root/beckend" vmm="$root/vm-manager"
+  local be="$root/beckend" vmm="$root/vm-manager" web="$root/user-frontend-web"
+  # The web app is optional: it is pulled, built and run only where its repo is checked out.
+  local repos=("$be" "$vmm") profiles=(--profile app)
+  if [ -d "$web/.git" ]; then
+    repos+=("$web")
+    profiles+=(--profile web)
+  fi
   # sudo only when this user can't reach Docker; AGENT_IMAGE_VERSION is passed explicitly
   # because sudo drops the environment.
   local sudo=()
@@ -24,13 +32,13 @@ main() {
   local docker=("${sudo[@]}" docker)
   compose() {
     "${sudo[@]}" env AGENT_IMAGE_VERSION="${AGENT_IMAGE_VERSION:-dev}" docker compose \
-      --env-file "$root/compose.env" -f "$be/infra/docker-compose.yml" --profile app "$@"
+      --env-file "$root/compose.env" -f "$be/infra/docker-compose.yml" "${profiles[@]}" "$@"
   }
 
   if [ "${1:-}" != "--no-pull" ]; then
     local old_be new_be
     old_be=$(git -C "$be" rev-parse HEAD)
-    for repo in "$be" "$vmm"; do
+    for repo in "${repos[@]}"; do
       git -C "$repo" fetch --quiet origin "$branch"
       git -C "$repo" reset --quiet --hard "origin/$branch"
       echo "$(basename "$repo"): $(git -C "$repo" log --oneline -1)"

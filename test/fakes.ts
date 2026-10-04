@@ -288,7 +288,12 @@ export interface ExecutedAction {
 export async function installFakeComposio() {
   const { setComposioApi } = await import('../src/modules/integrations/composio.ts');
   const executed: ExecutedAction[] = [];
-  const triggers: Array<{ userId: string; slug: string; triggerId: string }> = [];
+  const triggers: Array<{
+    userId: string;
+    slug: string;
+    triggerId: string;
+    config: Record<string, unknown>;
+  }> = [];
   const state = {
     /** What Composio reports for a user's connected accounts (listAccounts). */
     accounts: new Map<string, ComposioAccount[]>(),
@@ -304,6 +309,8 @@ export async function installFakeComposio() {
     tagsError: null as Error | null,
     /** The next execute returns this failure, or throws it (used once). */
     executeFailure: null as string | Error | null,
+    /** The next createTrigger throws this (used once). */
+    triggerError: null as Error | null,
   };
   let n = 0;
   setComposioApi({
@@ -359,9 +366,13 @@ export async function installFakeComposio() {
       executed.push({ slug, ...input });
       return { successful: true, data: { ok: true }, error: null };
     },
-    async createTrigger(userId, slug) {
-      const triggerId = `ti_${n++}`;
-      triggers.push({ userId, slug, triggerId });
+    async createTrigger(userId, slug, _connectedAccountId, config) {
+      const err = state.triggerError;
+      state.triggerError = null;
+      if (err) throw err;
+      // Unique across installs, as Composio's are: a test file installs this fake more than once.
+      const triggerId = `ti_${randomBytes(6).toString('hex')}`;
+      triggers.push({ userId, slug, triggerId, config });
       return { triggerId };
     },
     async deleteTrigger(triggerId) {

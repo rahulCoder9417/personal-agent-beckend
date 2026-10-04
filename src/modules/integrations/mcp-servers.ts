@@ -25,6 +25,11 @@ export function toApiMcpServer(s: McpServerRow) {
 const BLOCKED_HOSTS =
   /^(localhost|.*\.local|.*\.internal|.*\.localhost|api|litellm|postgres|redis|vm-manager|egress-proxy|caddy)$/i;
 
+/** A host name that can't be a public site: one of ours, a local one, or one with no dot. */
+export function isInternalHostName(host: string): boolean {
+  return BLOCKED_HOSTS.test(host) || !host.includes('.');
+}
+
 /** Only public https hosts; never our own services or private addresses. */
 export function validateMcpUrl(raw: string): { url: string; domain: string } {
   let u: URL;
@@ -35,8 +40,7 @@ export function validateMcpUrl(raw: string): { url: string; domain: string } {
   }
   if (u.protocol !== 'https:') throw badRequest('The MCP server URL must use https');
   const host = u.hostname.toLowerCase();
-  if (isIP(host) || BLOCKED_HOSTS.test(host) || !host.includes('.'))
-    throw badRequest('This host is not allowed');
+  if (isIP(host) || isInternalHostName(host)) throw badRequest('This host is not allowed');
   if (u.username || u.password) throw badRequest('Put credentials in the auth secret, not the URL');
   return { url: u.toString(), domain: host };
 }

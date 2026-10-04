@@ -26,14 +26,24 @@ describe('Caddy: /mcp and /git are closed to the internet', () => {
     const matcher = code.indexOf('@containers_only path /mcp* /git /git/*');
     const handle = code.indexOf('handle @containers_only {');
     const respond = code.indexOf('respond "Not found" 404');
-    const proxy = code.findIndex((l) => l.startsWith('reverse_proxy '));
+    const proxy = code.findIndex((l) => l.startsWith('reverse_proxy {$API_UPSTREAM}'));
     expect(matcher).toBeGreaterThan(-1);
     expect(handle).toBeGreaterThan(matcher);
     expect(respond).toBe(handle + 1);
     // The proxy sits in the catch-all `handle`, which only runs when the first one didn't match.
     expect(code[proxy - 1]).toBe('handle {');
     expect(proxy).toBeGreaterThan(respond);
-    expect(code.filter((l) => l.startsWith('reverse_proxy '))).toHaveLength(1);
+    // The api is proxied from that one place, inside the api's own site. The only other proxy is
+    // the web app's site, which goes to the web app and never straight to the api.
+    const site = code.indexOf('{$API_DOMAIN} {');
+    const webSite = code.indexOf('{$WEB_DOMAIN} {');
+    expect(site).toBeGreaterThan(-1);
+    expect(matcher).toBeGreaterThan(site);
+    expect(webSite).toBeGreaterThan(proxy);
+    expect(code.filter((l) => l.startsWith('reverse_proxy '))).toEqual([
+      'reverse_proxy {$API_UPSTREAM} {',
+      'reverse_proxy {$WEB_UPSTREAM} {',
+    ]);
   });
 
   it('covers every /mcp and /git route the api mounts, and no other route', () => {

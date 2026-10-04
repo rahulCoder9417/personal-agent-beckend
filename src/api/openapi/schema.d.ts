@@ -483,10 +483,11 @@ export interface paths {
          * The crew, the lead and its specialists
          * @description Tex is the lead (the agent the user texts). Byte, Patch and Scout are the specialists it
          *     hands work to. The ids are fixed. `available` says whether a member works on this
-         *     deployment yet. Scout's `browser` says which plan the real browser needs and whether it is
-         *     built yet. Scout's `description` says what else needs that plan: web search through
-         *     Textcrew is part of Max too, while the search built into the user's own Claude plan works
-         *     on every plan and costs no credits.
+         *     deployment yet. Scout's `browser` says which plan the real browser needs, whether this
+         *     deployment has it (`available`) and whether it is on for the signed-in user (`enabled`).
+         *     Scout's `description` says what else needs that plan: web search through Textcrew is part
+         *     of Max too, while the search built into the user's own Claude plan works on every plan and
+         *     costs no credits.
          */
         get: operations["listCrew"];
         put?: never;
@@ -760,6 +761,8 @@ export interface paths {
          *     through Textcrew is part of the Max plan and the user is on another plan; it cost nothing.
          *     A `read_page_refused` entry is a web address the agent asked to read and was not allowed to.
          *     A `crew_progress` entry is a progress line from a specialist; `crew` names it.
+         *     `browser_enabled` and `browser_disabled` (actor `system`): Scout's browser was switched on
+         *     or off for the user, because their plan changed or the deployment got or lost the browser.
          *     Memory (HLD 0.9): `remember` (the agent saved a memory), `forget` (it removed or corrected
          *     one), `recall` (it searched), `memory_refused` (a save was refused because it looked like
          *     a secret), `memory_deleted` and `memories_cleared` (the user deleted in the web app).
@@ -1336,11 +1339,24 @@ export interface components {
             description: string;
             /** @description Whether this member works on this deployment yet. */
             available: boolean;
-            /** @description Scout only. The real browser Scout can drive. */
+            /**
+             * @description Scout only. The real browser Scout can drive. It runs inside the user's own container
+             *     and costs 2 credits per minute of browser time.
+             */
             browser: {
                 requiresPlan: components["schemas"]["PlanId"];
-                /** @description Whether the browser is built yet (not the same as being on the plan). */
+                /**
+                 * @description Whether this deployment has the browser (the server setting `BROWSER_AVAILABLE`).
+                 *     The same for every user, and not the same as being on the plan. False: don't
+                 *     offer a browser to anyone yet.
+                 */
                 available: boolean;
+                /**
+                 * @description Whether the browser is switched on for the signed-in user: the deployment has it
+                 *     and the user's plan includes it. After a change of plan, the user's agent has it
+                 *     (or loses it) from its next start.
+                 */
+                enabled: boolean;
             } | null;
         };
         AgentProgress: {
@@ -1467,8 +1483,12 @@ export interface components {
              *     send, create, update or delete; reading and searching are free).
              */
             appActionCredits: number;
+            /** @description Seconds Scout's browser was in use in this period. */
             browserSeconds?: number;
-            /** @description Browser time (2 credits per minute) */
+            /**
+             * @description Browser time, at 2 credits per minute (1 credit per 30 seconds). Part minutes carry
+             *     over to the next period, so this can be 0 for a period with a few browser seconds.
+             */
             browserCredits: number;
             /**
              * @description Paid tools. Today that is Scout's web search through Textcrew: 1 credit per search,
@@ -1663,6 +1683,8 @@ export interface components {
              * @example read_page
              * @example read_page_refused
              * @example crew_progress
+             * @example browser_enabled
+             * @example browser_disabled
              * @example pr_review_requested
              * @example remember
              * @example recall

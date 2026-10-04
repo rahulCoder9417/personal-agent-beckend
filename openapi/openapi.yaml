@@ -776,7 +776,9 @@ paths:
         Tex is the lead (the agent the user texts). Byte, Patch and Scout are the specialists it
         hands work to. The ids are fixed. `available` says whether a member works on this
         deployment yet. Scout's `browser` says which plan the real browser needs and whether it is
-        built yet.
+        built yet. Scout's `description` says what else needs that plan: web search through
+        Textcrew is part of Max too, while the search built into the user's own Claude plan works
+        on every plan and costs no credits.
       responses:
         "200":
           description: OK
@@ -1127,7 +1129,9 @@ paths:
       summary: Audit log of everything the agent did for this user
       description: |
         A `run_app_action` entry carries `creditsCharged`: 1 for a successful action that changed
-        something, 0 for one that only read. A `web_search` entry carries what the search cost.
+        something, 0 for one that only read. A `web_search` entry carries what the search cost
+        (1 credit). A `web_search_refused` entry is a search that did not run because web search
+        through Textcrew is part of the Max plan and the user is on another plan; it cost nothing.
         A `read_page_refused` entry is a web address the agent asked to read and was not allowed to.
         A `crew_progress` entry is a progress line from a specialist; `crew` names it.
         Memory (HLD 0.9): `remember` (the agent saved a memory), `forget` (it removed or corrected
@@ -1961,6 +1965,9 @@ components:
               description: Browser use is part of this plan (Max only).
         features:
           type: array
+          description: |
+            Lines for the pricing page. Max names Scout's web search (1 credit per search) and
+            browser use (2 credits per minute); Free and Pro name neither.
           items: { type: string }
 
     TopUpPack:
@@ -2036,8 +2043,8 @@ components:
         toolCredits:
           type: integer
           description: |
-            Paid tools, such as web search (their cost × 2.5). Browser time is not in here: it has
-            its own number, `browserCredits`.
+            Paid tools. Today that is Scout's web search through Textcrew: 1 credit per search,
+            Max plan only. Browser time is not in here: it has its own number, `browserCredits`.
         totalCredits:
           type: integer
           description: aiCredits + awakeCredits + appActionCredits + browserCredits + toolCredits
@@ -2242,7 +2249,7 @@ components:
       properties:
         id: { type: string }
         actor: { type: string, enum: [user, agent, admin, system] }
-        action: { type: string, examples: [run_app_action, send_message, approval_requested, approval_decided, coupon_redeemed, channel_linked, web_search, read_page, read_page_refused, crew_progress, pr_review_requested, remember, recall, forget, memory_refused, memory_deleted, memories_cleared] }
+        action: { type: string, examples: [run_app_action, send_message, approval_requested, approval_decided, coupon_redeemed, channel_linked, web_search, web_search_refused, read_page, read_page_refused, crew_progress, pr_review_requested, remember, recall, forget, memory_refused, memory_deleted, memories_cleared] }
         summary: { type: string }
         crew:
           type: [string, "null"]
@@ -2253,7 +2260,7 @@ components:
           description: The memory this entry is about (`remember`, `forget`, `memory_deleted`). It may have been deleted since. Null for every other entry.
         creditsCharged:
           type: [integer, "null"]
-          description: "Credits this entry cost. App actions: 1 if it changed something, 0 if it only read. Web search: what the search cost. Null when nothing is charged per entry."
+          description: "Credits this entry cost. App actions: 1 if it changed something, 0 if it only read. Web search: 1 for a search that ran, 0 for one that did not. Null when nothing is charged per entry."
         createdAt: { type: string, format: date-time }
 
     StreamEvent:

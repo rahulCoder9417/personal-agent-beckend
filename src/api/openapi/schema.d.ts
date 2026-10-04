@@ -710,6 +710,7 @@ export interface paths {
          * Audit log of everything the agent did for this user
          * @description A `run_app_action` entry carries `creditsCharged`: 1 for a successful action that changed
          *     something, 0 for one that only read. A `web_search` entry carries what the search cost.
+         *     A `read_page_refused` entry is a web address the agent asked to read and was not allowed to.
          *     A `crew_progress` entry is a progress line from a specialist; `crew` names it.
          */
         get: operations["listActivity"];
@@ -1573,6 +1574,7 @@ export interface components {
              * @example channel_linked
              * @example web_search
              * @example read_page
+             * @example read_page_refused
              * @example crew_progress
              * @example pr_review_requested
              */

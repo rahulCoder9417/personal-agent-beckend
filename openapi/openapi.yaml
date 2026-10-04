@@ -1070,6 +1070,7 @@ paths:
       description: |
         A `run_app_action` entry carries `creditsCharged`: 1 for a successful action that changed
         something, 0 for one that only read. A `web_search` entry carries what the search cost.
+        A `read_page_refused` entry is a web address the agent asked to read and was not allowed to.
         A `crew_progress` entry is a progress line from a specialist; `crew` names it.
       parameters:
         - $ref: "#/components/parameters/Cursor"
@@ -2147,7 +2148,7 @@ components:
       properties:
         id: { type: string }
         actor: { type: string, enum: [user, agent, admin, system] }
-        action: { type: string, examples: [run_app_action, send_message, approval_requested, approval_decided, coupon_redeemed, channel_linked, web_search, read_page, crew_progress, pr_review_requested] }
+        action: { type: string, examples: [run_app_action, send_message, approval_requested, approval_decided, coupon_redeemed, channel_linked, web_search, read_page, read_page_refused, crew_progress, pr_review_requested] }
         summary: { type: string }
         crew:
           type: [string, "null"]

@@ -196,18 +196,21 @@ defineTool({
       const open = (await turnEngine(userId)) === 'claude_code';
       const seen = await seenUrls(userId);
       const known = seen.get(urlKey(asked) ?? '');
-      if (!known && !open) throw new PageError(NOT_SEEN, 'refused');
-      const page = open
-        ? // As asked, and every redirect that passes the address checks is followed.
-          await readPage(asked.toString())
-        : // The address as it was seen, not the agent's spelling of it. A redirect is followed to a
-          // seen address, or to the same one in another spelling.
-          await readPage(known!, {
-            mayFollow: (next, from) => {
-              const key = urlKey(next);
-              return key !== null && (key === urlKey(from) || seen.has(key));
-            },
-          });
+      let page;
+      if (open) {
+        // As asked, and every redirect that passes the address checks is followed.
+        page = await readPage(asked.toString());
+      } else {
+        if (!known) throw new PageError(NOT_SEEN, 'refused');
+        // The address as it was seen, not the agent's spelling of it. A redirect is followed to a
+        // seen address, or to the same one in another spelling.
+        page = await readPage(known, {
+          mayFollow: (next, from) => {
+            const key = urlKey(next);
+            return key !== null && (key === urlKey(from) || seen.has(key));
+          },
+        });
+      }
       // The page's links may be read next (kept on both engines: the user may change engine).
       await rememberUrls(
         userId,

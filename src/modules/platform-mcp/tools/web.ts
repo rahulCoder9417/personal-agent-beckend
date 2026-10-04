@@ -1,7 +1,8 @@
 // Scout's tools (HLD 5.1): web_search and read_page. Both run here in the api, never in the
-// container, so the container's network stays locked and no provider key enters it.
+// container, so they need no way out of the container and no provider key enters it.
 // web_search is for an engine with no web search of its own, is part of the Max plan and costs
-// 1 credit a search (HLD 0.7, 7.1, 7.2). read_page is free on every plan.
+// 1 credit a search (HLD 0.7, 7.1, 7.2). read_page is free on every plan; which addresses it
+// opens depends on the engine the turn runs on.
 import { z } from 'zod';
 import { config } from '../../../shared/config.ts';
 import { newId } from '../../../shared/ids.ts';
@@ -20,7 +21,7 @@ import {
   WEB_SEARCH_MAX_RESULTS,
   webSearchProvider,
 } from '../../integrations/web-search.ts';
-import { userHasCredits } from '../../orchestrator/turn.ts';
+import { turnEngine, userHasCredits } from '../../orchestrator/turn.ts';
 import { defineTool, ToolError } from '../registry.ts';
 import { rememberUrls, seenUrls, urlKey } from '../seen-urls.ts';
 
@@ -159,13 +160,22 @@ const NOT_SEEN =
   "link on a page you already read. This one didn't, so it was not opened. Find the page with " +
   'web_search, or ask your user for the link.';
 
+/**
+ * Pages read under the open rule at an address that had not been seen for the user. Only the
+ * activity log is told (`seen: false`), not the agent.
+ */
+const unseenReads = new WeakSet<object>();
+
 defineTool({
   name: 'read_page',
+  // One description for both engines: it must not tell Scout on Claude Code that the results of
+  // its own search can't be read (HLD 5.1).
   description:
     'Read one public web page and get its text and its links (HTML, plain text, JSON or XML; long pages are cut). ' +
-    'It only opens an address that was already seen: one your user wrote in a message, a web_search result, or a ' +
-    'link on a page you already read. An address you put together yourself is refused: search first, or ask your ' +
-    `user for the link. Public pages only, with no sign-in; scripts are not run. Free. ${UNTRUSTED}`,
+    'Give the full address. Public pages only, with no sign-in; scripts are not run. Free. ' +
+    'On some engines it only opens an address that was already seen (one your user wrote in a message, a ' +
+    'web_search result, or a link on a page you already read) and refuses any other: the refusal says what to ' +
+    `do then. ${UNTRUSTED}`,
   input: { url: z.string().trim().min(4).max(2000) },
   async run({ userId }, args) {
     const rl = await hit({
@@ -178,25 +188,34 @@ defineTool({
         `Too many pages: at most ${PAGES_PER_MINUTE} a minute. Try again in ${rl.retryAfter} seconds.`,
       );
     try {
-      // The address checks first, then the rule that it must have been seen for this user. What is
-      // fetched is the address as it was seen, not the agent's spelling of it.
+      // The address checks first (public addresses only, on every engine), then the engine's rule.
       const asked = checkPageUrl(args.url);
+      // HLD 5.1: a turn that runs on Claude Code may open any public address: there only Scout can
+      // call this tool, and Scout has no files, no shell and no app tools. On Hermes, and whenever
+      // no turn is on record, the address must have been seen for this user.
+      const open = (await turnEngine(userId)) === 'claude_code';
       const seen = await seenUrls(userId);
       const known = seen.get(urlKey(asked) ?? '');
-      if (!known) throw new PageError(NOT_SEEN, 'refused');
-      const page = await readPage(known, {
-        // A redirect is followed to a seen address, or to the same one in another spelling.
-        mayFollow: (next, from) => {
-          const key = urlKey(next);
-          return key !== null && (key === urlKey(from) || seen.has(key));
-        },
-      });
-      // The page's links may be read next.
+      if (!known && !open) throw new PageError(NOT_SEEN, 'refused');
+      const page = open
+        ? // As asked, and every redirect that passes the address checks is followed.
+          await readPage(asked.toString())
+        : // The address as it was seen, not the agent's spelling of it. A redirect is followed to a
+          // seen address, or to the same one in another spelling.
+          await readPage(known!, {
+            mayFollow: (next, from) => {
+              const key = urlKey(next);
+              return key !== null && (key === urlKey(from) || seen.has(key));
+            },
+          });
+      // The page's links may be read next (kept on both engines: the user may change engine).
       await rememberUrls(
         userId,
         page.links.map((l) => l.url),
       );
-      return { ...page, note: UNTRUSTED };
+      const result = { ...page, note: UNTRUSTED };
+      if (!known) unseenReads.add(result);
+      return result;
     } catch (err) {
       if (!(err instanceof PageError)) throw err;
       if (err.kind === 'refused') {
@@ -218,4 +237,6 @@ defineTool({
   // The address without its query string: that part can hold someone's secrets.
   summarize: (args) => `Read ${pageAddressForLog(args.url)}`,
   auditArgs: (args) => ({ url: pageAddressForLog(args.url) }),
+  // An address nobody had seen (the open rule on Claude Code) is marked, so it can be found.
+  auditDetails: (_args, result) => (unseenReads.has(result as object) ? { seen: false } : {}),
 });

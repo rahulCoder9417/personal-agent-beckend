@@ -80,6 +80,8 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
     wakeError: null as Error | null,
     /** Next StartClaudeLogin / ClaudeLogout error (e.g. UNAVAILABLE), used once. */
     claudeError: null as Error | null,
+    /** SetAgentRuntime fails with this while it is set (the vm-manager can't be told). */
+    runtimeError: null as Error | null,
     /** The next delivered turn ends with this ERROR instead of TURN_DONE (used once). */
     turnError: null as { message: string; platformFault: boolean } | null,
     /** Like turnError, but the agent runs first (it may have acted before the turn failed). */
@@ -181,6 +183,7 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
     },
     async setAgentRuntime(req: { userId: string; runtime: AgentRuntime }) {
       runtimeCalls.push({ userId: req.userId, runtime: req.runtime });
+      if (state.runtimeError) throw state.runtimeError;
       if (!tokens.has(req.userId)) throw new ConnectError('sandbox not found', Code.NotFound);
       runtimes.set(req.userId, req.runtime);
       return { sandbox: sandboxView(req.userId, SandboxState.AWAKE) };

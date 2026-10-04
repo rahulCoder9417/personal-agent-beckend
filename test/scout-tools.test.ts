@@ -46,7 +46,17 @@ import {
   webSearchProvider,
   type WebSearchResult,
 } from '../src/modules/integrations/web-search.ts';
+import {
+  markClaudeConnected,
+  markClaudeDisconnected,
+} from '../src/modules/orchestrator/agent-settings.ts';
 import { ensureSandbox } from '../src/modules/orchestrator/sandbox.ts';
+import {
+  runTurn,
+  TURN_ENGINE_TTL_SECONDS,
+  turnEngine,
+  type TurnOutcome,
+} from '../src/modules/orchestrator/turn.ts';
 import {
   rememberUrls,
   SEEN_URL_TTL_SECONDS,
@@ -68,7 +78,7 @@ import { wireModules } from '../src/wiring.ts';
 import { processors } from '../src/worker/processors.ts';
 import { startWorkers } from '../src/worker/runner.ts';
 import { grantsOf, ledgerMatchesGrants, ledgerOf } from './billing-helpers.ts';
-import { installFakeVm, mcpCall } from './fakes.ts';
+import { installFakeVm, mcpCall, type McpResult } from './fakes.ts';
 import { call, chatUser, createUser, expectContract, waitFor } from './helpers.ts';
 
 let workers: Worker[];
@@ -594,7 +604,7 @@ describe('read_page: limits and text', () => {
   });
 });
 
-describe('read_page: only an address already seen for the user', () => {
+describe('read_page: only an address already seen for the user (Hermes, and outside a Claude Code turn)', () => {
   it('urlKey: the path and the query must match exactly; scheme, www, a trailing slash and the fragment don’t count', () => {
     const key = urlKey('https://example.com/docs/page?a=1&b=2');
     for (const same of [
@@ -946,6 +956,288 @@ describe('read_page: the tool', () => {
     expect(over.text).toMatch(/Too many pages: at most 30 a minute/);
     // Another user has their own allowance.
     expect((await other.tool('read_page', { url: 'https://example.com/' })).isError).toBe(false);
+  });
+});
+
+// --- read_page: the rule by engine -----------------------------------------------------------------
+
+/**
+ * Runs one turn for the user in which the agent reads these addresses with read_page, in order,
+ * and returns what the tool answered. `during` runs inside the turn, before the reads.
+ */
+async function turnReading(
+  userId: string,
+  urls: string[],
+  during?: () => Promise<void>,
+): Promise<{ outcome: TurnOutcome; reads: McpResult[]; engine: string | null }> {
+  const reads: McpResult[] = [];
+  let engine: string | null = null;
+  vm.state.agent = async (_d, mcp) => {
+    await during?.();
+    engine = await turnEngine(userId);
+    for (const url of urls) reads.push(await mcp('read_page', { url }));
+  };
+  const outcome = await runTurn({
+    userId,
+    deliveryId: `evt_${randomUUID()}`,
+    kind: 'message',
+    sessionKey: 'web',
+    channel: 'web',
+    text: 'look it up',
+  });
+  return { outcome, reads, engine };
+}
+
+/** A user whose turns run on Claude Code (their Claude plan is connected). Free plan. */
+async function claudeCodeAgent() {
+  const u = await agent();
+  await markClaudeConnected(u.id);
+  return u;
+}
+
+describe('read_page: any public address on Claude Code, only a seen one on Hermes', () => {
+  // What Claude Code's built-in search found: the platform never saw these addresses.
+  const FOUND = 'https://news.example.org/story?id=42';
+  const internet = () =>
+    fakeInternet(
+      {
+        'news.example.org': [PUBLIC],
+        'cdn.example.net': ['1.1.1.1'],
+        'intranet.example.com': ['10.0.0.5'],
+      },
+      {
+        [FOUND]: { body: '<title>Story</title><p>the story</p><a href="/more">more</a>' },
+        'https://news.example.org/short': {
+          status: 302,
+          location: 'https://cdn.example.net/long?utm=1',
+        },
+        'https://cdn.example.net/long?utm=1': { body: '<p>after the redirect</p>' },
+        'https://news.example.org/inside': {
+          status: 302,
+          location: 'http://169.254.169.254/latest/meta-data/',
+        },
+        'https://news.example.org/to-localhost': { status: 301, location: 'http://127.0.0.1/' },
+      },
+    );
+
+  it('Claude Code: a turn reads an address nobody has seen, follows its redirects, and the activity log marks it', async () => {
+    const u = await claudeCodeAgent();
+    const net = internet();
+    const { outcome, reads, engine } = await turnReading(u.id, [
+      FOUND,
+      'https://news.example.org/short',
+    ]);
+    expect(outcome).toBe('done');
+    expect(engine).toBe('claude_code');
+    expect(reads.map((r) => r.isError)).toEqual([false, false]);
+    expect(JSON.parse(reads[0]!.text)).toMatchObject({
+      url: FOUND,
+      title: 'Story',
+      text: 'the story\nmore',
+      links: [{ text: 'more', url: 'https://news.example.org/more' }],
+    });
+    // A redirect to another site that nobody has seen is followed too.
+    expect(JSON.parse(reads[1]!.text)).toMatchObject({
+      url: 'https://cdn.example.net/long?utm=1',
+      text: 'after the redirect',
+    });
+    expect(net.requests.map((r) => r.url)).toEqual([
+      FOUND,
+      'https://news.example.org/short',
+      'https://cdn.example.net/long?utm=1',
+    ]);
+    expect(await auditsOf(u.id, 'read_page_refused')).toEqual([]);
+    // Free, and in the activity log without the query string, marked as not seen before.
+    expect(await getBalance(u.id)).toBe(1000);
+    const entries = await auditsOf(u.id, 'read_page');
+    expect(entries.map((e) => [e.summary, e.details])).toEqual([
+      [
+        'Read https://news.example.org/story',
+        { args: { url: 'https://news.example.org/story' }, seen: false },
+      ],
+      [
+        'Read https://news.example.org/short',
+        { args: { url: 'https://news.example.org/short' }, seen: false },
+      ],
+    ]);
+    // The page's links are still remembered, as on Hermes.
+    expect((await seenUrls(u.id)).has('news.example.org/more')).toBe(true);
+  });
+
+  it('Claude Code: an address that was seen is read as before, and is not marked', async () => {
+    const u = await claudeCodeAgent();
+    internet();
+    await says(u.id, `read ${FOUND}`);
+    const { reads } = await turnReading(u.id, [FOUND]);
+    expect(reads[0]!.isError).toBe(false);
+    const [entry] = await auditsOf(u.id, 'read_page');
+    expect(entry!.details).toEqual({ args: { url: 'https://news.example.org/story' } });
+  });
+
+  it('Claude Code: private, loopback, link-local, metadata and internal addresses stay refused, at every redirect too', async () => {
+    const u = await claudeCodeAgent();
+    const net = internet();
+    const internal = [
+      'http://169.254.169.254/latest/meta-data/iam/security-credentials/',
+      'http://127.0.0.1/',
+      'http://localhost/',
+      'http://10.0.0.5/',
+      'http://192.168.1.1/',
+      'http://[::1]/',
+      'http://[fe80::1]/',
+      'http://api/mcp',
+      'http://litellm.internal/key/info',
+      'https://intranet.example.com/wiki', // a public name that resolves to a private address
+    ];
+    const byRedirect = [
+      'https://news.example.org/inside', // → the metadata address
+      'https://news.example.org/to-localhost',
+    ];
+    const { outcome, reads, engine } = await turnReading(u.id, [
+      ...internal,
+      ...byRedirect,
+      'file:///etc/passwd',
+      'https://user:pw@news.example.org/',
+      'https://news.example.org:8443/',
+    ]);
+    expect(outcome).toBe('done');
+    expect(engine).toBe('claude_code');
+    for (const [i, url] of [...internal, ...byRedirect].entries()) {
+      expect(reads[i]!.isError, url).toBe(true);
+      expect(reads[i]!.text, url).toMatch(refusal);
+    }
+    expect(reads.slice(-3).map((r) => r.isError)).toEqual([true, true, true]);
+    // Nothing internal was connected to: only the two public pages that then redirected inside.
+    expect(net.requests.map((r) => r.url)).toEqual(byRedirect);
+    expect(await auditsOf(u.id, 'read_page')).toEqual([]);
+    expect(await auditsOf(u.id, 'read_page_refused')).toHaveLength(reads.length);
+  });
+
+  it('Hermes: the same turn is refused, and nothing is fetched', async () => {
+    const u = await agent();
+    const net = internet();
+    const { outcome, reads, engine } = await turnReading(u.id, [
+      FOUND,
+      'https://news.example.org/short',
+    ]);
+    expect(outcome).toBe('done');
+    expect(engine).toBe('hermes');
+    for (const r of reads) {
+      expect(r.isError).toBe(true);
+      expect(r.text).toMatch(notSeen);
+    }
+    expect(net.requests).toEqual([]);
+    expect(await auditsOf(u.id, 'read_page_refused')).toHaveLength(2);
+
+    // What the user named is read; a redirect from it to an unseen address is still not followed.
+    await says(u.id, `${FOUND} and https://news.example.org/short`);
+    const again = await turnReading(u.id, [FOUND, 'https://news.example.org/short']);
+    expect(again.reads[0]!.isError).toBe(false);
+    expect(again.reads[1]!.text).toMatch(/has not been seen/);
+    const [entry] = await auditsOf(u.id, 'read_page');
+    expect(entry!.details).toEqual({ args: { url: 'https://news.example.org/story' } });
+  });
+
+  it('the open rule lasts for the turn only: before it, after it and after a failed one the strict rule applies', async () => {
+    const u = await claudeCodeAgent();
+    const net = internet();
+    // No turn in progress: the platform does not know which engine is calling.
+    expect(await turnEngine(u.id)).toBeNull();
+    expect((await u.tool('read_page', { url: FOUND })).text).toMatch(notSeen);
+
+    let ttl = -2;
+    const during = await turnReading(u.id, [FOUND], async () => {
+      ttl = await redis().ttl(`turn-engine:${u.id}`);
+    });
+    expect(during.reads[0]!.isError).toBe(false);
+    expect(ttl).toBeGreaterThan(TURN_ENGINE_TTL_SECONDS - 60);
+    expect(ttl).toBeLessThanOrEqual(TURN_ENGINE_TTL_SECONDS);
+
+    // The turn is over: the record is gone.
+    expect(await turnEngine(u.id)).toBeNull();
+    expect((await u.tool('read_page', { url: 'https://news.example.org/short' })).text).toMatch(
+      notSeen,
+    );
+
+    // A turn that ends in an error, and one that breaks off, leave no record either.
+    vm.state.turnErrorAfterAgent = { message: 'the engine stopped', platformFault: false };
+    expect((await turnReading(u.id, [])).outcome).toBe('error');
+    expect(await turnEngine(u.id)).toBeNull();
+    vm.state.agent = async () => {
+      throw new Error('the stream broke');
+    };
+    await expect(
+      runTurn({
+        userId: u.id,
+        deliveryId: `evt_${randomUUID()}`,
+        kind: 'message',
+        sessionKey: 'web',
+        channel: 'web',
+        text: 'again',
+      }),
+    ).rejects.toThrow('the stream broke');
+    expect(await turnEngine(u.id)).toBeNull();
+    expect(net.requests.map((r) => r.url)).toEqual([FOUND]);
+  });
+
+  it('the engine on record is the one the turn really runs on, not what the settings say', async () => {
+    const net = internet();
+    // A Hermes turn is running when the user connects their Claude plan: that turn stays strict.
+    const u = await agent();
+    const midTurn = await turnReading(u.id, [FOUND], async () => {
+      await markClaudeConnected(u.id);
+    });
+    expect(midTurn.engine).toBe('hermes');
+    expect(midTurn.reads[0]!.text).toMatch(notSeen);
+    // The next turn runs on Claude Code and is open.
+    const next = await turnReading(u.id, [FOUND]);
+    expect(next.engine).toBe('claude_code');
+    expect(next.reads[0]!.isError).toBe(false);
+
+    // The settings say Claude Code, but the container could not be switched: it still runs Hermes.
+    const stuck = await agent();
+    vm.state.runtimeError = new Error('vm-manager is down');
+    await markClaudeConnected(stuck.id);
+    const turn = await turnReading(stuck.id, [FOUND]);
+    vm.state.runtimeError = null;
+    expect(turn.engine).toBe('hermes');
+    expect(turn.reads[0]!.text).toMatch(notSeen);
+
+    // Back on Hermes (the Claude plan is disconnected): strict again.
+    await markClaudeDisconnected(u.id);
+    const back = await turnReading(u.id, ['https://news.example.org/short']);
+    expect(back.engine).toBe('hermes');
+    expect(back.reads[0]!.text).toMatch(notSeen);
+    expect(net.requests.map((r) => r.url)).toEqual([FOUND]);
+  });
+
+  it('one user’s Claude Code turn opens nothing for another user', async () => {
+    const u = await claudeCodeAgent();
+    const other = await agent();
+    const net = internet();
+    let others: McpResult | undefined;
+    await turnReading(u.id, [], async () => {
+      others = await other.tool('read_page', { url: FOUND });
+    });
+    expect(others!.text).toMatch(notSeen);
+    expect(net.requests).toEqual([]);
+  });
+
+  it('the tool’s description does not tell an agent that only seen addresses can be read', async () => {
+    const u = await agent();
+    const res = await call('/mcp', {
+      method: 'POST',
+      token: vm.tokens.get(u.id)!,
+      headers: { accept: 'application/json, text/event-stream' },
+      body: { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+    });
+    const { result } = (await res.json()) as {
+      result: { tools: Array<{ name: string; description: string }> };
+    };
+    const description = result.tools.find((t) => t.name === 'read_page')!.description;
+    expect(description).toMatch(/^Read one public web page/);
+    expect(description).toMatch(/On some engines it only opens an address that was already seen/);
+    expect(description).not.toMatch(/It only opens/);
   });
 });
 

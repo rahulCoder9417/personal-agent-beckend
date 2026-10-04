@@ -111,6 +111,7 @@ export const PLANS: Record<PlanId, PlanDef> = {
       'Priority when things get busy',
       `All ${ALL_APPS} apps + your own MCP servers`,
       '50 automations',
+      "Scout's web search: 1 credit per search",
       'Browser use: 2 credits per minute',
       'Top-ups: $10 = 800 credits',
       'Bring your own key',
@@ -132,6 +133,16 @@ export const TOP_UPS: TopUpPack[] = [
 
 export function planLimits(plan: PlanId): PlanLimits {
   return { ...PLANS[plan].limits };
+}
+
+/**
+ * Scout's web search through Textcrew (the `web_search` tool, backed by Brave) is a Max feature,
+ * like the browser (HLD 7.1, decided 2026-10-04). The search built into a user's own engine is
+ * not the platform's and needs no plan. Kept out of `limits`, which is the API's shape.
+ */
+const WEB_SEARCH_PLANS: readonly PlanId[] = ['max'];
+export function planHasWebSearch(plan: PlanId): boolean {
+  return WEB_SEARCH_PLANS.includes(plan);
 }
 
 export function getTopUp(id: string): TopUpPack | undefined {

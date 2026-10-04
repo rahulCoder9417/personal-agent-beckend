@@ -1,6 +1,7 @@
-// Paid tools (HLD 7.2, 7.4): pay-per-use APIs such as Scout's web search, charged at their real
-// cost × 2.5 when they run. Each successful call is its own ledger row (`meta.kind = paid_tool`)
-// that also records what the call cost us, so the running total needs no counter of its own.
+// Paid tools (HLD 7.2, 7.4): pay-per-use APIs such as Scout's web search, charged at their
+// configured cost × 2.5 when they run. Each successful call is its own ledger row
+// (`meta.kind = paid_tool`) that also records the cost it was charged for, so the running total
+// needs no counter of its own.
 import { and, eq, sql } from 'drizzle-orm';
 import { db, type Tx } from '../../shared/db/client.ts';
 import { getBalance, ledgerKeyExists, lockUserCredits, spendInTx } from './credits.ts';
@@ -45,7 +46,10 @@ async function runningTotals(
  * Charges one successful paid-tool call, once per `ref`. The price is the cost × 2.5. Credits are
  * whole numbers, so fractions carry over (like awake time): the charge is what the user's total
  * cost has reached in whole credits, minus what was charged before, and never less than 1.
- * At $0.005 a search that is 1, 1, 1, 2: 5 credits for 4 searches.
+ * At $0.005 a call that is 1, 1, 1, 2: 5 credits for 4 calls.
+ * A cost of exactly one credit ($0.004, which is what a web search is set to) is always charged
+ * exactly 1, whatever was charged before: the total reached goes up by exactly 1, and what was
+ * charged so far is never less than what was reached so far.
  * Only normal grants pay (HLD 7.7). A cost of 0 is not charged. Returns what was charged (0 if
  * this `ref` was charged before).
  */

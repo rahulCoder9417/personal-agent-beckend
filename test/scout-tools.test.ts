@@ -1,7 +1,8 @@
 // Scout's platform tools (HLD 5.1). read_page opens public web pages only, and only an address
 // already seen for the user (their own messages, a search result, a link on a page already read):
-// the address comes from an agent, so every refusal here is a security check. web_search is a
-// paid tool charged at its cost × 2.5 through the ledger (HLD 7.2).
+// the address comes from an agent, so every refusal here is a security check. web_search is part
+// of the Max plan and costs 1 credit a search, charged through the ledger's paid-tool path
+// (HLD 7.1, 7.2). read_page is free on every plan: its tests run as Free users.
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -10,10 +11,16 @@ import type { Worker } from 'bullmq';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { auditLog } from '../src/modules/admin/schema.ts';
+import { setPlan, type PlanId } from '../src/modules/auth/users.ts';
 import { saveInbound, saveWebMessage } from '../src/modules/channels/messages.ts';
 import { messages } from '../src/modules/channels/schema.ts';
 import { createGrant, getBalance } from '../src/modules/billing/credits.ts';
 import { chargePaidTool } from '../src/modules/billing/paid-tools.ts';
+import {
+  MICRO_USD_PER_CREDIT,
+  planHasWebSearch,
+  usdToMicro,
+} from '../src/modules/billing/plans.ts';
 import { reverseTurn, syncUsageForUser } from '../src/modules/billing/usage.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
 import {
@@ -48,7 +55,11 @@ import {
   urlKey,
   urlsInText,
 } from '../src/modules/platform-mcp/seen-urls.ts';
-import { PAGES_PER_MINUTE, SEARCHES_PER_MINUTE } from '../src/modules/platform-mcp/tools/web.ts';
+import {
+  PAGES_PER_MINUTE,
+  SEARCHES_PER_MINUTE,
+  WEB_SEARCH_NEEDS_MAX,
+} from '../src/modules/platform-mcp/tools/web.ts';
 import { loadConfig, resetConfig } from '../src/shared/config.ts';
 import { db } from '../src/shared/db/client.ts';
 import { newId } from '../src/shared/ids.ts';
@@ -133,14 +144,17 @@ function fakeInternet(hosts: Record<string, string[]>, pages: Record<string, Sit
 
 const refusal = /only opens public web pages; this address is not allowed/;
 
-/** A user with credits and a container token for /mcp. */
-async function agent(opts: { credits?: number } = {}) {
-  const user = opts.credits === 0 ? await createUser() : await chatUser(opts);
+/** A user with credits and a container token for /mcp. On the Free plan unless `plan` says so. */
+async function agent(opts: { credits?: number; plan?: PlanId } = {}) {
+  const plan = opts.plan ? { plan: opts.plan } : {};
+  const user = opts.credits === 0 ? await createUser(plan) : await chatUser(opts);
   await ensureSandbox(user.id);
   const token = vm.tokens.get(user.id)!;
   const tool = (name: string, args: Record<string, unknown>) => mcpCall(token, name, args);
   return { ...user, tool };
 }
+/** The same on Max: the only plan with web search through Textcrew (HLD 7.1). */
+const maxAgent = (opts: { credits?: number } = {}) => agent({ ...opts, plan: 'max' });
 
 /** The user writes this in web chat (their own words: an address in it may be read). */
 const says = (userId: string, text: string) =>
@@ -709,7 +723,7 @@ describe('read_page: only an address already seen for the user', () => {
   });
 
   it('a web_search result is allowed; a link on a page that was read is allowed; others are not', async () => {
-    const u = await agent();
+    const u = await maxAgent();
     fakeSearch();
     const net = fakeInternet(
       { 'hono.dev': [PUBLIC], 'other.example.org': ['1.1.1.1'] },
@@ -963,13 +977,133 @@ function fakeSearch() {
 const paidToolRows = async (userId: string) =>
   (await ledgerOf(userId)).filter((r) => r.meta?.kind === 'paid_tool');
 
+describe('web_search: part of the Max plan', () => {
+  it('only Max has it', () => {
+    expect((['free', 'pro', 'max'] as const).map((p) => planHasWebSearch(p))).toEqual([
+      false,
+      false,
+      true,
+    ]);
+  });
+
+  it('on Free and Pro it is refused with a message the agent can read; nothing is searched or charged', async () => {
+    expect(WEB_SEARCH_NEEDS_MAX).toBe(
+      'Web search through Textcrew is part of the Max plan, and your user is not on Max: nothing was ' +
+        'searched and nothing was charged. If your engine has its own web search, use that instead. ' +
+        'Otherwise tell your user that web search needs the Max plan; they can upgrade in the Textcrew ' +
+        'web app. Do not send a link. read_page still opens an address they give you.',
+    );
+    expect(WEB_SEARCH_NEEDS_MAX).not.toMatch(/https?:\/\//); // no purchase link (HLD 7.6)
+    const search = fakeSearch();
+    for (const plan of ['free', 'pro'] as const) {
+      const u = await agent({ plan });
+      const res = await u.tool('web_search', { query: `best web framework for ${plan}` });
+      expect(res.isError, plan).toBe(true); // a tool error: the agent reads it, the turn goes on
+      expect(res.text, plan).toBe(WEB_SEARCH_NEEDS_MAX);
+      expect(await getBalance(u.id), plan).toBe(1000);
+      expect(await paidToolRows(u.id), plan).toEqual([]);
+      // Not a search in the activity log, but a refusal the user can see, at no cost.
+      expect(await auditsOf(u.id, 'web_search'), plan).toEqual([]);
+      const refusals = await auditsOf(u.id, 'web_search_refused');
+      expect(refusals).toHaveLength(1);
+      expect(refusals[0]).toMatchObject({
+        actor: 'agent',
+        summary: `Web search needs the Max plan (asked: best web framework for ${plan})`,
+        details: { reason: 'not_on_plan', plan },
+        creditsCharged: 0,
+      });
+      // Nothing it would have found is an address read_page may open.
+      expect((await seenUrls(u.id)).size, plan).toBe(0);
+
+      const activity = await expectContract<{
+        items: Array<{ action: string; creditsCharged: number | null }>;
+      }>('listActivity', await call('/v1/activity', { token: u.token }), 200);
+      expect(activity.items.filter((a) => a.action.startsWith('web_search'))).toMatchObject([
+        { action: 'web_search_refused', creditsCharged: 0 },
+      ]);
+    }
+    expect(search.queries).toEqual([]); // the provider was never asked
+  });
+
+  it('the plan comes first: without a provider key a Free user is told about Max, not about setup', async () => {
+    expect(webSearchProvider()).toBeNull();
+    const u = await agent();
+    const res = await u.tool('web_search', { query: 'q' });
+    expect(res.isError).toBe(true);
+    expect(res.text).toBe(WEB_SEARCH_NEEDS_MAX);
+  });
+
+  it('a refused search does not fail the turn: the agent goes on and the user gets an answer', async () => {
+    const search = fakeSearch();
+    let refusal = '';
+    vm = installFakeVm(async (d, mcp) => {
+      const res = await mcp('web_search', { query: d.text });
+      refusal = res.isError ? res.text : '';
+      await mcp('send_message', {
+        text: 'I can only search the web on the Max plan.',
+        session_key: d.sessionKey,
+      });
+    });
+    const u = await agent({ plan: 'pro' });
+    await expectContract(
+      'sendMessage',
+      await call('/v1/messages', {
+        method: 'POST',
+        token: u.token,
+        body: { text: 'what is hono', clientMessageId: randomUUID() },
+      }),
+      202,
+    );
+    await waitFor(async () => (await auditsOf(u.id, 'send_message')).length === 1);
+    expect(refusal).toBe(WEB_SEARCH_NEEDS_MAX);
+    expect(search.queries).toEqual([]);
+    expect(await auditsOf(u.id, 'web_search_refused')).toHaveLength(1);
+    expect(await getBalance(u.id)).toBe(1000);
+  });
+
+  it('the plan is read at every call: a user who leaves Max is refused, one who joins it can search', async () => {
+    const search = fakeSearch();
+    const u = await maxAgent();
+    expect(JSON.parse((await u.tool('web_search', { query: 'on max' })).text)).toMatchObject({
+      ok: true,
+      credits_charged: 1,
+    });
+    await setPlan(u.id, 'pro');
+    expect((await u.tool('web_search', { query: 'on pro' })).text).toBe(WEB_SEARCH_NEEDS_MAX);
+    await setPlan(u.id, 'max');
+    expect((await u.tool('web_search', { query: 'on max again' })).isError).toBe(false);
+    expect(search.queries.map((q) => q.query)).toEqual(['on max', 'on max again']);
+    expect(await getBalance(u.id)).toBe(998); // two searches, 1 credit each; the refusal cost nothing
+  });
+
+  it('refused calls count against the rate limit, so they can’t fill the activity log', async () => {
+    const u = await agent();
+    for (let i = 0; i < SEARCHES_PER_MINUTE; i++)
+      expect((await u.tool('web_search', { query: 'q' })).text, `${i}`).toBe(WEB_SEARCH_NEEDS_MAX);
+    expect((await u.tool('web_search', { query: 'q' })).text).toMatch(
+      /Too many searches: at most 20 a minute/,
+    );
+    expect(await auditsOf(u.id, 'web_search_refused')).toHaveLength(SEARCHES_PER_MINUTE);
+  });
+
+  it('read_page is not part of it: a Free user reads a page they named, for free', async () => {
+    const u = await agent();
+    fakeInternet({ 'example.com': [PUBLIC] }, { 'https://example.com/': { body: '<p>hi</p>' } });
+    await says(u.id, 'read example.com');
+    const res = await u.tool('read_page', { url: 'https://example.com/' });
+    expect(res.isError).toBe(false);
+    expect(JSON.parse(res.text)).toMatchObject({ text: 'hi' });
+    expect(await getBalance(u.id)).toBe(1000);
+  });
+});
+
 describe('web_search: not set up', () => {
   it('with no provider key the tool says so as a normal answer; nothing is charged', async () => {
     expect(
       loadConfig({ ...process.env, BRAVE_SEARCH_API_KEY: '' }).BRAVE_SEARCH_API_KEY,
     ).toBeUndefined();
     expect(webSearchProvider()).toBeNull();
-    const u = await agent();
+    const u = await maxAgent();
     const res = await u.tool('web_search', { query: 'best web framework' });
     expect(res.isError).toBe(false); // not an error: the turn goes on
     expect(JSON.parse(res.text)).toEqual({
@@ -985,13 +1119,15 @@ describe('web_search: not set up', () => {
     expect(entry!.summary).toMatch(/isn't set up/);
   });
 
-  it('the settings: brave by default, a cost of $0.005, and nothing unknown', () => {
+  it('the settings: brave by default, a cost of $0.004 (× 2.5 = 1 credit), and nothing unknown', () => {
     const base = { ...process.env };
     expect(loadConfig(base)).toMatchObject({
       WEB_SEARCH_PROVIDER: 'brave',
-      WEB_SEARCH_COST_USD: 0.005,
+      WEB_SEARCH_COST_USD: 0.004,
       BRAVE_SEARCH_API_URL: 'https://api.search.brave.com',
     });
+    // The default is exactly one credit: $0.004 of cost × 2.5 = $0.01.
+    expect(usdToMicro(loadConfig(base).WEB_SEARCH_COST_USD)).toBe(MICRO_USD_PER_CREDIT);
     expect(loadConfig({ ...base, WEB_SEARCH_COST_USD: '0.003' }).WEB_SEARCH_COST_USD).toBe(0.003);
     expect(() => loadConfig({ ...base, WEB_SEARCH_PROVIDER: 'altavista' })).toThrow(
       /WEB_SEARCH_PROVIDER/,
@@ -1059,7 +1195,7 @@ describe('web_search: the Brave provider', () => {
   });
 
   it('a refusal by the provider is an error for the agent, and nothing is charged', async () => {
-    const u = await agent();
+    const u = await maxAgent();
     answer = { status: 429, body: { error: { code: 'RATE_LIMITED' } } };
     const res = await u.tool('web_search', { query: 'anything' });
     expect(res.isError).toBe(true);
@@ -1082,9 +1218,9 @@ describe('web_search: the Brave provider', () => {
   });
 });
 
-describe('web_search: charging (cost × 2.5)', () => {
-  it('four searches at $0.005 cost 1, 1, 1 and 2 credits: 5 in all, each charged once', async () => {
-    const u = await agent();
+describe('web_search: charging (1 credit per search)', () => {
+  it('every successful search costs exactly 1 credit, charged once', async () => {
+    const u = await maxAgent();
     const search = fakeSearch();
     const charged: number[] = [];
     for (let i = 0; i < 4; i++) {
@@ -1098,21 +1234,23 @@ describe('web_search: charging (cost × 2.5)', () => {
       expect(body).toMatchObject({ ok: true, results: RESULTS });
       charged.push(body.credits_charged);
     }
-    expect(charged).toEqual([1, 1, 1, 2]);
+    // No fourth search at 2 credits any more: the price is flat.
+    expect(charged).toEqual([1, 1, 1, 1]);
     expect(search.queries[0]).toEqual({ query: 'question 0', count: 2 });
-    expect(await getBalance(u.id)).toBe(995);
-    // Eight searches: 10 credits, exactly × 2.5 of $0.04.
+    expect(await getBalance(u.id)).toBe(996);
     for (let i = 0; i < 4; i++) await u.tool('web_search', { query: 'more' });
-    expect(await getBalance(u.id)).toBe(990);
+    expect(await getBalance(u.id)).toBe(992); // eight searches, eight credits
     expect(search.queries.at(-1)!.count).toBe(5); // the default
 
     const rows = await paidToolRows(u.id);
     expect(rows).toHaveLength(8);
     expect(rows.every((r) => r.description === 'Web search' && r.reason === 'charge')).toBe(true);
+    expect(rows.map((r) => r.delta)).toEqual(Array(8).fill(-1));
+    // The cost the charge was worked out from: $0.004, which × 2.5 is one credit.
     expect(rows[0]!.meta).toMatchObject({
       kind: 'paid_tool',
       tool: 'web_search',
-      costMicroUsd: 5000,
+      costMicroUsd: 4000,
     });
     expect(new Set(rows.map((r) => r.idempotencyKey)).size).toBe(8);
     expect(await ledgerMatchesGrants(u.id)).toBe(true);
@@ -1122,12 +1260,35 @@ describe('web_search: charging (cost × 2.5)', () => {
     expect(
       await chargePaidTool(u.id, {
         tool: 'web_search',
-        costMicroUsd: 5000,
+        costMicroUsd: 4000,
         ref,
         description: 'Web search',
       }),
-    ).toEqual({ charged: 0, balance: 990 });
+    ).toEqual({ charged: 0, balance: 992 });
     expect(await paidToolRows(u.id)).toHaveLength(8);
+  });
+
+  it('a search is 1 credit whatever was charged before; other costs still carry their fractions', async () => {
+    const u = await maxAgent();
+    fakeSearch();
+    const pay = async (costMicroUsd: number) =>
+      (await chargePaidTool(u.id, { tool: 'x', costMicroUsd, ref: randomUUID(), description: 'T' }))
+        .charged;
+    const searchOnce = async () =>
+      (JSON.parse((await u.tool('web_search', { query: 'q' })).text) as { credits_charged: number })
+        .credits_charged;
+    // The paid-tool path itself is unchanged: $0.005 a call is 1.25 credits, so 1, 1, 1, 2.
+    expect([await pay(5000), await pay(5000), await pay(5000)]).toEqual([1, 1, 1]);
+    // A search between them is still exactly 1, with three quarters of a credit carried.
+    expect(await searchOnce()).toBe(1);
+    expect(await pay(5000)).toBe(2);
+    // And after every kind of history: a fraction owed, a call that cost several credits, and
+    // cheap calls that were rounded up to 1.
+    for (const cost of [9000, 1000, 1000, 6000, 3999, 4001]) {
+      await pay(cost);
+      expect(await searchOnce(), `after ${cost}`).toBe(1);
+    }
+    expect(await ledgerMatchesGrants(u.id)).toBe(true);
   });
 
   it('a cheaper tool still costs 1 credit a call; a cost of 0 is free; a split charge counts its cost once', async () => {
@@ -1161,7 +1322,7 @@ describe('web_search: charging (cost × 2.5)', () => {
 
   it('at zero credits the search does not run; a cheap-model-only coupon does not pay for it', async () => {
     const search = fakeSearch();
-    const broke = await agent({ credits: 0 });
+    const broke = await maxAgent({ credits: 0 });
     const refused = await broke.tool('web_search', { query: 'anything' });
     expect(refused.isError).toBe(true);
     expect(refused.text).toMatch(/out of credits, so web search can't run/);
@@ -1170,7 +1331,7 @@ describe('web_search: charging (cost × 2.5)', () => {
     expect(await getBalance(broke.id)).toBe(0);
 
     // HLD 7.7: only normal grants pay a paid tool. The coupon is untouched; the normal grant pays.
-    const u = await agent({ credits: 0 });
+    const u = await maxAgent({ credits: 0 });
     for (const [source, cheapModelOnly] of [
       ['coupon', true],
       ['signup', false],
@@ -1191,7 +1352,7 @@ describe('web_search: charging (cost × 2.5)', () => {
   });
 
   it('a failed search is not charged', async () => {
-    const u = await agent();
+    const u = await maxAgent();
     const search = fakeSearch();
     search.error = new Error('provider is down');
     const res = await u.tool('web_search', { query: 'q' });
@@ -1203,7 +1364,7 @@ describe('web_search: charging (cost × 2.5)', () => {
   });
 
   it('shows in the activity log, the credit history and usage (toolCredits, apart from browser time)', async () => {
-    const u = await agent();
+    const u = await maxAgent();
     fakeSearch();
     vm.state.usage.set(u.id, { awakeSeconds: 600n, browserSeconds: 60n });
     for (let i = 0; i < 4; i++) await u.tool('web_search', { query: `q${i}` });
@@ -1217,7 +1378,7 @@ describe('web_search: charging (cost × 2.5)', () => {
         .filter((a) => a.action === 'web_search')
         .map((a) => [a.summary, a.creditsCharged]),
     ).toEqual([
-      ['Searched the web: q3', 2],
+      ['Searched the web: q3', 1],
       ['Searched the web: q2', 1],
       ['Searched the web: q1', 1],
       ['Searched the web: q0', 1],
@@ -1229,7 +1390,7 @@ describe('web_search: charging (cost × 2.5)', () => {
       200,
     );
     expect(ledger.items.filter((l) => l.description === 'Web search').map((l) => l.delta)).toEqual([
-      -2, -1, -1, -1,
+      -1, -1, -1, -1,
     ]);
 
     const from = new Date(Date.now() - 3600_000).toISOString();
@@ -1243,15 +1404,15 @@ describe('web_search: charging (cost × 2.5)', () => {
       awakeCredits: 1,
       appActionCredits: 0,
       browserCredits: 2,
-      toolCredits: 5,
-      totalCredits: 8,
+      toolCredits: 4, // four searches, 1 credit each
+      totalCredits: 7,
     });
-    expect(usage.items[0]).toMatchObject({ browserSeconds: 60, browserCredits: 2, toolCredits: 5 });
-    expect(await getBalance(u.id)).toBe(1000 - 8);
+    expect(usage.items[0]).toMatchObject({ browserSeconds: 60, browserCredits: 2, toolCredits: 4 });
+    expect(await getBalance(u.id)).toBe(1000 - 7);
   });
 
   it('is rate limited per user', async () => {
-    const u = await agent();
+    const u = await maxAgent();
     const search = fakeSearch();
     for (let i = 0; i < SEARCHES_PER_MINUTE; i++)
       expect((await u.tool('web_search', { query: 'q' })).isError, `${i}`).toBe(false);
@@ -1259,19 +1420,19 @@ describe('web_search: charging (cost × 2.5)', () => {
     expect(over.isError).toBe(true);
     expect(over.text).toMatch(/Too many searches: at most 20 a minute/);
     expect(search.queries).toHaveLength(SEARCHES_PER_MINUTE);
-    expect(await getBalance(u.id)).toBe(1000 - 25); // 20 searches at $0.005 × 2.5
+    expect(await getBalance(u.id)).toBe(1000 - SEARCHES_PER_MINUTE); // 1 credit each
   });
 
   it('a turn reversed as our fault gives the search credits back', async () => {
-    const u = await agent();
+    const u = await maxAgent();
     fakeSearch();
     await u.tool('web_search', { query: 'before the turn' }); // stays charged
     await new Promise((r) => setTimeout(r, 20));
     const startedAt = new Date();
     for (let i = 0; i < 3; i++) await u.tool('web_search', { query: 'in the turn' });
     const turn = { startedAt, endedAt: new Date(), idempotencyKey: `fault:${randomUUID()}` };
-    expect(await getBalance(u.id)).toBe(995);
-    expect(await reverseTurn(u.id, turn)).toEqual({ restored: 4 });
+    expect(await getBalance(u.id)).toBe(996);
+    expect(await reverseTurn(u.id, turn)).toEqual({ restored: 3 });
     expect(await getBalance(u.id)).toBe(999);
     expect(await reverseTurn(u.id, turn)).toEqual({ restored: 0 });
     expect(
@@ -1280,7 +1441,7 @@ describe('web_search: charging (cost × 2.5)', () => {
     expect(await ledgerMatchesGrants(u.id)).toBe(true);
   });
 
-  it('end to end: Scout searches and reads in a turn; the user gets the answer', async () => {
+  it('end to end on Max: Scout searches and reads in a turn; the user gets the answer', async () => {
     fakeSearch();
     fakeInternet(
       { 'hono.dev': [PUBLIC] },
@@ -1296,7 +1457,7 @@ describe('web_search: charging (cost × 2.5)', () => {
       };
       await mcp('send_message', { text: `Found: ${page.text}`, session_key: d.sessionKey });
     });
-    const u = await agent();
+    const u = await maxAgent();
     await expectContract(
       'sendMessage',
       await call('/v1/messages', {

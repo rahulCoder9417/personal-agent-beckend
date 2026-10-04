@@ -182,10 +182,12 @@ export const AWAKE_SECONDS_PER_CREDIT = 600; // 1 credit per 10 minutes awake
 export const BROWSER_SECONDS_PER_CREDIT = 30; // 2 credits per minute
 
 /** Real AI cost (micro-USD) → credits, rounded up. */
+/** Real cost that makes one credit: 4,000 micro-USD ($0.004 × 2.5 = $0.01). */
+export const MICRO_USD_PER_CREDIT = 1_000_000 / CREDITS_PER_USD;
 export function aiCostToCredits(microUsd: number): number {
   if (microUsd <= 0) return 0;
   // micro-USD × 250 / 1e6 = micro-USD / 4000, done in integers to avoid float drift.
-  return Math.ceil(microUsd / (1_000_000 / CREDITS_PER_USD));
+  return Math.ceil(microUsd / MICRO_USD_PER_CREDIT);
 }
 
 /** Credits → dollars of real cost (the LiteLLM budget unit): credits ÷ 2.5 ÷ 100. */

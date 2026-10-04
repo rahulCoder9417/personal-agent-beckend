@@ -268,6 +268,7 @@ All of these only showed up on a real server. Each fix is committed and on `main
 | 8 | GitHub and Gmail stayed "pending" after you approved them | Only the web app's app list refreshed the status, and there is no web app | Set to active by hand on the server. **The code fix is still open** (section 14) |
 | 9 | After the first stop and start, the bot didn't answer | A hard stop left Squid's PID file behind. It said "PID 1", which is Squid's own PID on the next start, so Squid refused to start | The stale file is removed at start (`2998ad4`). Tested by killing and restarting the container |
 | 10 | The nightly backup failed | `pg_dump` wasn't in the api/worker image | `pg_dump` 16 is installed in the image (`73e76b0`). The backup job has not run since, so it is not yet proven |
+| 11 | After the second stop and start (2026-10-04), the egress proxy again did not come back, so the agent could reach nothing | The vm-manager reloads Squid with `docker kill -s HUP`. Docker marks a container that was sent any signal that way as stopped by hand (`HasBeenManuallyStopped` was `true` on the proxy and `false` on every other container), and a container with `restart: unless-stopped` that was stopped by hand is not started when Docker starts | The proxy uses `restart: always` and an explicit `stop_signal`. To prove: stop and start the server once more and check the proxy is up without help |
 
 ---
 
@@ -277,9 +278,13 @@ All of these only showed up on a real server. Each fix is committed and on `main
 
 **Started on 2026-10-01 at about 04:41 UTC** by you, from the EC2 console. The AWS console session had expired overnight, and Claude can't enter your password.
 
+**Stopped on 2026-10-01 at about 15:45 UTC** the same way, and left off for three days.
+
+**Started on 2026-10-04 at about 06:22 UTC** from CloudShell, after you signed in to AWS: `aws ec2 start-instances --instance-ids i-0283ac551a5204d47`. Your home internet address had changed since the firewall rule was made, so SSH timed out until the port 22 rule was replaced with the new address (you ran the two commands in section 13 yourself; Claude doesn't change firewall rules). The website itself answered straight away, because ports 80 and 443 are open to everyone.
+
 **To stop it:** EC2 console → Instances → `textcrew-test` → Instance state → **Stop instance**. Never choose **Terminate**: that deletes the server and its disk.
 
-**To start it:** the same menu → **Start instance**. The services come back on their own in about a minute, at the same address.
+**To start it:** the same menu → **Start instance**, or in CloudShell (Mumbai) `aws ec2 start-instances --instance-ids i-0283ac551a5204d47`. The services come back on their own in about a minute, at the same address. Then check SSH: if it times out, your home address changed and the port 22 rule needs replacing (section 13).
 
 While it is stopped the bot does not answer, and Telegram messages sent then are not delivered later with any guarantee.
 
@@ -322,7 +327,13 @@ sudo docker ps --filter name=pa-sbx            # awake user containers
 ./dc --profile app exec -T api node --import tsx scripts/dev-user.ts status --user usr_01m3sk0g2wwgm7wj60822scjtp
 ```
 
-**If SSH stops working because your IP changed,** in CloudShell (Mumbai):
+**If SSH stops working because your IP changed,** in CloudShell (Mumbai). Your home address changes from time to time, so expect this after the server has been off for a few days. The first command shows the address the rule allows now; your current one is at https://checkip.amazonaws.com:
+
+```sh
+aws ec2 describe-security-groups --group-ids sg-0a41006d88aefe928 --query 'SecurityGroups[0].IpPermissions[?FromPort==`22`].IpRanges[].CidrIp' --output text
+```
+
+Then replace it:
 
 ```sh
 aws ec2 revoke-security-group-ingress    --group-id sg-0a41006d88aefe928 --protocol tcp --port 22 --cidr <old IP>/32
@@ -377,3 +388,5 @@ All times UTC.
 | 04:43 | Egress proxy found down (problem 9), restarted by hand |
 | about 04:50 | Fixes for problems 9 and 10 pushed and deployed |
 | about 05:00 | Git gateway built, pushed and deployed |
+| 15:45 | Server stopped |
+| 2026-10-04 06:22 | Server started from CloudShell. SSH rule replaced by the founder (home address had changed). Egress proxy found down again (problem 11) |

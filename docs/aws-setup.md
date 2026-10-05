@@ -175,6 +175,7 @@ Everything is under `/opt/textcrew`, owned by the `ubuntu` user.
 
 - **Set:** the database and Redis URLs, `PUBLIC_API_URL` and `WEB_APP_URL` (both `https://3-111-132-222.sslip.io`), the encryption key, `CLERK_SECRET_KEY`, the vm-manager URL and shared secret, the LiteLLM URL, master key and model names, the Telegram bot token, bot name and webhook secret, `COMPOSIO_API_KEY` and `COMPOSIO_AUTH_CONFIGS`, `METRICS_TOKEN`, `NODE_ENV=production`, `TRUST_PROXY=true`, `AI_ACCESS_MODE=platform`.
 - **Empty:** the model provider keys (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`), `COMPOSIO_WEBHOOK_SECRET`, `CLERK_WEBHOOK_SECRET`, `CLERK_JWT_KEY`, everything for WhatsApp, Sendblue, Jev and Polar, `BACKUP_UPLOAD_CMD`, `ALERT_WEBHOOK_URL`.
+- **Changed on 2026-10-05:** `CLERK_WEBHOOK_SECRET`, `COMPOSIO_WEBHOOK_SECRET` and `BRAVE_SEARCH_API_KEY` are set (supplied by you that day; the laptop's copies are in `.env.deploy` and in a local `.env`), and `BROWSER_AVAILABLE=true` was added once the agent image with the browser was deployed. `beckend/.env.bak` on the server is the file as it was before. Still empty: the three model provider keys (the MiniMax key you supplied has no balance and nothing reads it), `CLERK_JWT_KEY`, Polar, `ALERT_WEBHOOK_URL`. `WEB_APP_URL` and `CLERK_AUTHORIZED_PARTIES` still name the server itself; they wait for the web app's Vercel address.
 
 **SSH on the server** (`~/.ssh/`): two deploy keys, `deploy_beckend` and `deploy_vmm`, and a config with two host aliases, `gh-beckend` and `gh-vmm`, that point at `github.com` with the matching key.
 
@@ -269,6 +270,8 @@ All of these only showed up on a real server. Each fix is committed and on `main
 | 9 | After the first stop and start, the bot didn't answer | A hard stop left Squid's PID file behind. It said "PID 1", which is Squid's own PID on the next start, so Squid refused to start | The stale file is removed at start (`2998ad4`). Tested by killing and restarting the container |
 | 10 | The nightly backup failed | `pg_dump` wasn't in the api/worker image | `pg_dump` 16 is installed in the image (`73e76b0`). The backup job has not run since, so it is not yet proven |
 | 11 | After the second stop and start (2026-10-04), the egress proxy again did not come back, so the agent could reach nothing | The vm-manager reloads Squid with `docker kill -s HUP`. Docker marks a container that was sent any signal that way as stopped by hand (`HasBeenManuallyStopped` was `true` on the proxy and `false` on every other container), and a container with `restart: unless-stopped` that was stopped by hand is not started when Docker starts | The proxy uses `restart: always` and an explicit `stop_signal`. To prove: stop and start the server once more and check the proxy is up without help |
+| 12 | After the stop and start of 2026-10-05 the site did not answer (ports 80 and 443 refused), though AWS showed the server as healthy | The deploy of 2026-10-04 13:02 UTC was cut off when its SSH session ended: it had pulled the new code and built three images, but not the agent image, and it never recreated the containers. Caddy kept running with its old settings until the restart, then read the new `Caddyfile`, which has a block for `{$WEB_DOMAIN}`; its container had no such variable, so the block had no name and Caddy stopped with "server block without any key is global configuration" in a restart loop | A complete deploy recreates Caddy with the variable. **A deploy is now started in the background on the server** (section 13), so a lost connection can't cut it off |
+| 13 | The first build of the agent image with the browser failed at its last step, the browser's self-check: `Browser "chromium" is not installed` | The image has only the full Chromium, and the Bridge's settings made Playwright look for its separate headless shell | One setting in the Bridge, `launchOptions.channel: chromium` (`vm-manager` `530b67c`). Tried first on the server in an image built without the self-check; then the deploy passed |
 
 ---
 
@@ -311,8 +314,10 @@ From the laptop:
 # Log in
 ssh -i ~/.ssh/textcrew_aws ubuntu@3.111.132.222
 
-# Deploy the latest main
-ssh -i ~/.ssh/textcrew_aws ubuntu@3.111.132.222 /opt/textcrew/deploy.sh
+# Deploy the latest main. In the background on the server, so a lost connection can't cut it off
+# (problem 12); the output goes to deploy.log and the exit code to deploy.exit
+ssh -i ~/.ssh/textcrew_aws ubuntu@3.111.132.222 'cd /opt/textcrew && rm -f deploy.exit && (nohup sh -c "./deploy.sh > deploy.log 2>&1; echo \$? > deploy.exit" > /dev/null 2>&1 < /dev/null &)'
+ssh -i ~/.ssh/textcrew_aws ubuntu@3.111.132.222 'cat /opt/textcrew/deploy.exit; tail -n 20 /opt/textcrew/deploy.log'
 ```
 
 On the server, from `/opt/textcrew`:
@@ -323,7 +328,8 @@ On the server, from `/opt/textcrew`:
 ./dc --profile app logs -f vm-manager          # follow the container manager
 sudo docker ps --filter name=pa-sbx            # awake user containers
 
-# The test user (create, link-code, claude-login, claude-complete, connect-app, status)
+# The test user (create, link-code, claude-login, claude-complete, connect-app, status, browser,
+# send, messages, activity, approve, pr-review, memories)
 ./dc --profile app exec -T api node --import tsx scripts/dev-user.ts status --user usr_01m3sk0g2wwgm7wj60822scjtp
 ```
 
@@ -347,14 +353,16 @@ aws ec2 authorize-security-group-ingress --group-id sg-0a41006d88aefe928 --proto
 **Security**
 
 - **The root user is used for everything.** Create an IAM user with MFA for daily work and turn on MFA for root.
-- **`/mcp` and `/git` are reachable from the internet.** Both require the container token, but only the user containers need them. They can be blocked at Caddy. **Fixed in code on 2026-10-03** (Caddy answers 404 for both); it takes effect at the next deploy and has not been tried on the server.
+- **`/mcp` and `/git` are reachable from the internet.** Both require the container token, but only the user containers need them. They can be blocked at Caddy. **Fixed in code on 2026-10-03** (Caddy answers 404 for both) **and seen on the server on 2026-10-05:** from outside, `/mcp` and `/git/…` both answer 404, while the containers still reach them through the egress proxy.
 - **No off-server backups.** `BACKUP_UPLOAD_CMD` is empty, so backups stay on the same disk as the data. There is also no EBS snapshot.
 
 **Not proven yet**
 
 - **The git gateway against real GitHub:** a real clone, a branch push, and the refusal of a push to the default branch. It also depends on Composio returning the GitHub token to the api, which has not been confirmed.
 - **The nightly backup** after the `pg_dump` fix, and a restore from it.
-- **RAM during a real turn** and with several users awake.
+- **RAM with several users awake.** One user's container with the browser used 625 to 661 MiB of its 2 GiB limit after a turn (2026-10-05); the peak with a heavy page open was not measured.
+- **Composio's webhook reaching the server.** The secret is set (2026-10-05); no delivery from Composio has been seen yet, so pull-request review's trigger is unproven.
+- **Clerk's webhook reaching the server.** The secret is set (2026-10-05); it is used once the web app has an address and someone signs in there.
 
 **Known gaps**
 
@@ -363,7 +371,7 @@ aws ec2 authorize-security-group-ingress --group-id sg-0a41006d88aefe928 --proto
 - **No alert channel.** `ALERT_WEBHOOK_URL` is empty, so failures such as the nightly backup are only in the logs.
 - **No web app, no Polar,** and no WhatsApp or iMessage.
 - **Leftovers on the server:** `/opt/textcrew/old/`, `/opt/textcrew/it.sh`, and a few LiteLLM test keys with a $1 budget.
-- **Disk is 63% full.** Image rebuilds add to it; prune the Docker build cache when it grows.
+- **Disk is 63% full** (18 of 29 GB on 2026-10-05, with the 2.78 GB agent image). Image rebuilds add to it; prune the Docker build cache when it grows. A user whose container has the browser adds about 0.5 GB to their volume, because Hermes downloads its own tools there (the vm-manager's build report, section 9), and there is no `/data` quota.
 - **The domain** is still `sslip.io`. Moving to `textcrew.in` means a DNS record, `API_DOMAIN` in `compose.env`, `PUBLIC_API_URL` in `beckend/.env`, and setting the Telegram webhook again.
 - **No automatic deploy.** A push to `main` needs `deploy.sh` to be run by hand.
 
@@ -390,3 +398,11 @@ All times UTC.
 | about 05:00 | Git gateway built, pushed and deployed |
 | 15:45 | Server stopped |
 | 2026-10-04 06:22 | Server started from CloudShell. SSH rule replaced by the founder (home address had changed). Egress proxy found down again (problem 11) |
+| 2026-10-05 06:36 | Server stopped from CloudShell (`aws ec2 stop-instances`), at your request; SSH was locked out by a changed home address |
+| 10:47 | Server started from CloudShell. The site did not answer (problem 12) |
+| about 11:00 | SSH rule replaced by you. The two webhook secrets put into `beckend/.env` |
+| 11:10 | Deploy: the agent image's browser self-check failed (problem 13) |
+| 11:21–11:26 | Fix pushed, deploy passed: the site answers, `/mcp` and `/git` are closed from outside, migrations applied, the agent image has the browser (2.78 GB) |
+| 11:27 | `BROWSER_AVAILABLE=true`, the browser switched on for the test user; the proxy rule checked on Squid 6.13 before the first wake |
+| 11:28–11:34 | The browser's self-check passed inside the user's container; three turns in which Scout used the browser; browser time charged (1 credit at 33 seconds) |
+| 11:30–11:46 | The lead refuses to use the browser itself; the platform's `remember` works when named, but the lead prefers Claude Code's own memory; idle stop after 3 min 58 s; a second start downloads nothing again |

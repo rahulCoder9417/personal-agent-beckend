@@ -406,3 +406,4 @@ All times UTC.
 | 11:27 | `BROWSER_AVAILABLE=true`, the browser switched on for the test user; the proxy rule checked on Squid 6.13 before the first wake |
 | 11:28–11:34 | The browser's self-check passed inside the user's container; three turns in which Scout used the browser; browser time charged (1 credit at 33 seconds) |
 | 11:30–11:46 | The lead refuses to use the browser itself; the platform's `remember` works when named, but the lead prefers Claude Code's own memory; idle stop after 3 min 58 s; a second start downloads nothing again |
+| 12:05 | Server stopped (`sudo shutdown -h now`), at your request |

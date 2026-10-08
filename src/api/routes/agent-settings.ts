@@ -1,5 +1,7 @@
 // Agent settings + connecting the user's own Claude plan (openapi tag `agent`).
 import {
+  CLAUDE_EFFORTS,
+  CLAUDE_MODELS,
   getAgentSettings,
   updateAgentSettings,
   type AgentSettingsView,
@@ -22,6 +24,12 @@ function toAgentSettings(s: AgentSettingsView): Schemas['AgentSettings'] {
     platformAvailable: s.platformAvailable,
     claude: { connected: s.claude.connected, connectedAt: iso(s.claude.connectedAt) },
     ownKeyProviders: s.ownKeyProviders,
+    claudeModel: s.claudeModel,
+    claudeEffort: s.claudeEffort,
+    claudeChoices: {
+      models: CLAUDE_MODELS.map((m) => ({ id: m.id, label: m.label })),
+      efforts: [...CLAUDE_EFFORTS],
+    },
   };
 }
 

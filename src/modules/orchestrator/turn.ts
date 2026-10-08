@@ -14,6 +14,7 @@ import type { MediaRef } from '../channels/schema.ts';
 import { publish } from '../channels/stream.ts';
 import type { Channel } from '../channels/types.ts';
 import {
+  claudeTurnOptions,
   fallBackIfClaudeSignedOut,
   syncRuntimeAfterWake,
   type RuntimeName,
@@ -223,11 +224,15 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
   await syncBrowserAfterWake(userId, user.plan, woke.sandbox);
   // What is known about the user, and a recap of the chat if the engine changed (HLD 0.9).
   const text = await turnText(input, engine);
+  // What the platform adds to the delivery's metadata. On Claude Code: the model and the effort
+  // the user chose (each left out when it is Claude Code's own default).
+  const metadata: Record<string, unknown> =
+    engine === 'claude_code' ? { claude: await claudeTurnOptions(userId) } : {};
 
   // From here until the turn ends, read_page knows which engine is calling it (HLD 5.1).
   await recordTurnEngine(userId, engine);
-  const outcome = await deliverTurn(input, { text, apps: decision.apps, log }).finally(() =>
-    clearTurnEngine(userId),
+  const outcome = await deliverTurn(input, { text, apps: decision.apps, metadata, log }).finally(
+    () => clearTurnEngine(userId),
   );
 
   if (!outcome) throw new RetryableTurnError('deliver stream ended without turn_done');
@@ -264,10 +269,18 @@ async function refundFailedTurn(
   }
 }
 
-/** Delivers the turn and follows its stream to the end. Null: the stream ended with no result. */
+/**
+ * Delivers the turn and follows its stream to the end. Null: the stream ended with no result.
+ * `metadata` is what the platform adds to the delivery's metadata; it wins over the input's own.
+ */
 async function deliverTurn(
   input: TurnInput,
-  turn: { text: string; apps: string[] | undefined; log: ReturnType<typeof logger> },
+  turn: {
+    text: string;
+    apps: string[] | undefined;
+    metadata: Record<string, unknown>;
+    log: ReturnType<typeof logger>;
+  },
 ): Promise<TurnOutcome | null> {
   const { userId } = input;
   const { text, log } = turn;
@@ -289,6 +302,7 @@ async function deliverTurn(
     metadataJson: JSON.stringify({
       ...input.metadata,
       ...(turn.apps?.length ? { apps: turn.apps } : {}),
+      ...turn.metadata,
     }),
   });
 

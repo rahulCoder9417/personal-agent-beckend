@@ -466,6 +466,10 @@ export interface paths {
          *     offer. When it is, a user with their own key or Claude plan can still choose it with
          *     `aiPreference: platform`, and go back with `aiPreference: auto`. `aiAccess` always says
          *     what pays for the AI right now.
+         *
+         *     `claudeModel` and `claudeEffort` are the Claude model and the thinking effort Claude Code
+         *     uses (null: Claude Code's own default). They apply to turns that run on Claude Code, and
+         *     can be set whatever the engine is now. `claudeChoices` lists what may be chosen.
          */
         get: operations["getAgentSettings"];
         put?: never;
@@ -474,10 +478,15 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Choose the agent runtime, or choose Textcrew AI
+         * Choose the agent runtime, Textcrew AI, or Claude Code's model and effort
          * @description Send `runtime`, `aiPreference` or both. A screen with three choices sends:
          *     own API key → `{ runtime: hermes, aiPreference: auto }`; Claude plan →
          *     `{ runtime: claude_code, aiPreference: auto }`; Textcrew AI → `{ aiPreference: platform }`.
+         *
+         *     `claudeModel` and `claudeEffort` may be sent too, alone or with the others. Null goes back
+         *     to Claude Code's own default. They can be set whatever the engine is now; they take effect
+         *     on turns that run on Claude Code. A model id that isn't in `claudeChoices.models` is
+         *     400 `invalid_request`. Example: `{ claudeModel: claude-opus-5-5, claudeEffort: xhigh }`.
          */
         patch: operations["updateAgentSettings"];
         trace?: never;
@@ -1676,6 +1685,37 @@ export interface components {
                 connectedAt?: string | null;
             };
             ownKeyProviders: components["schemas"]["ByokProvider"][];
+            /**
+             * @description The Claude model Claude Code uses, one of `claudeChoices.models`. Null: Claude Code's
+             *     own default. Applies when Claude Code is the engine.
+             * @example claude-opus-5-5
+             */
+            claudeModel: string | null;
+            /**
+             * @description How hard Claude Code thinks. Null: Claude Code's own default. Applies when Claude Code
+             *     is the engine.
+             * @enum {string|null}
+             */
+            claudeEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+            /** @description What may be chosen for `claudeModel` and `claudeEffort`, in display order. */
+            claudeChoices: {
+                models: {
+                    /** @example claude-opus-5-5 */
+                    id: string;
+                    /** @example Opus 5.5 */
+                    label: string;
+                }[];
+                /**
+                 * @example [
+                 *       "low",
+                 *       "medium",
+                 *       "high",
+                 *       "xhigh",
+                 *       "max"
+                 *     ]
+                 */
+                efforts: ("low" | "medium" | "high" | "xhigh" | "max")[];
+            };
         };
         ClaudeLoginStart: {
             loginId: string;
@@ -2726,6 +2766,16 @@ export interface operations {
                 "application/json": {
                     runtime?: components["schemas"]["AgentRuntime"];
                     aiPreference?: components["schemas"]["AiPreference"];
+                    /**
+                     * @description One of the ids in `claudeChoices.models`, or null for the default.
+                     * @example claude-opus-5-5
+                     */
+                    claudeModel?: string | null;
+                    /**
+                     * @description Null for the default.
+                     * @enum {string|null}
+                     */
+                    claudeEffort?: "low" | "medium" | "high" | "xhigh" | "max" | null;
                 };
             };
         };
@@ -2739,7 +2789,15 @@ export interface operations {
                     "application/json": components["schemas"]["AgentSettings"];
                 };
             };
-            400: components["responses"]["BadRequest"];
+            /** @description Invalid input, or a Claude model id that isn't on the list */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             401: components["responses"]["Unauthorized"];
             /**
              * @description Claude Code needs a connected Claude plan first, or Textcrew AI was chosen while it

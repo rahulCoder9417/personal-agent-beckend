@@ -51,10 +51,15 @@ export async function recordEngineTurn(
     });
 }
 
+/** The later of two times (null when both are). */
+const later = (a: Date | null | undefined, b: Date | null | undefined): Date | null =>
+  a && b ? (a > b ? a : b) : (a ?? b ?? null);
+
 /**
  * The recap a turn gets when its engine is not the one that handled the chat's previous turn (or
  * no engine has finished a turn in this chat yet): the stored messages this engine hasn't had,
- * the newest kept within the budget. Null: the engine hasn't changed, or there is nothing to tell.
+ * the newest kept within the budget. Nothing from before the chat's latest new start is in it.
+ * Null: the engine hasn't changed, or there is nothing to tell.
  */
 export async function chatRecap(input: {
   userId: string;
@@ -62,6 +67,8 @@ export async function chatRecap(input: {
   engine: RuntimeName;
   /** This turn's own message, which is delivered as the turn's text. */
   skipMessageId?: string;
+  /** When the user last started a new chat here (null: never). */
+  chatStartedAt?: Date | null;
 }): Promise<string | null> {
   const rows = await enginesOf(input.userId, input.sessionKey);
   const previous = rows.reduce<(typeof rows)[number] | undefined>(
@@ -75,7 +82,7 @@ export async function chatRecap(input: {
       input.userId,
       input.sessionKey,
       RECAP_MAX_MESSAGES + 1,
-      mine?.lastTurnAt,
+      later(mine?.lastTurnAt, input.chatStartedAt),
     )
   ).filter((m) => m.id !== input.skipMessageId && m.text.trim());
   // No engine has run in this chat and the user hasn't said anything before: there is no
@@ -103,7 +110,14 @@ export async function chatRecap(input: {
  * history can't be read, that part is left out.
  */
 export async function turnText(
-  input: { userId: string; sessionKey: string; text: string; inboundMessageId?: string },
+  input: {
+    userId: string;
+    sessionKey: string;
+    text: string;
+    inboundMessageId?: string;
+    /** When the user last started a new chat here: the recap starts no earlier. */
+    chatStartedAt?: Date | null;
+  },
   engine: RuntimeName,
 ): Promise<string> {
   const log = logger().child({ userId: input.userId });
@@ -121,6 +135,7 @@ export async function turnText(
       userId: input.userId,
       sessionKey: input.sessionKey,
       engine,
+      chatStartedAt: input.chatStartedAt ?? null,
       ...(input.inboundMessageId ? { skipMessageId: input.inboundMessageId } : {}),
     }),
   );

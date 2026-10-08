@@ -103,3 +103,22 @@ export const chatEngines = pgTable(
   },
   (t) => [primaryKey({ columns: [t.userId, t.sessionKey, t.runtime] })],
 );
+
+/**
+ * The chat epoch: a number per chat (session key), 0 until the user first starts a new chat.
+ * Starting one adds 1 and records when. Every delivery carries the number, so the engine starts a
+ * fresh conversation for that chat; the recap leaves out what was said before `startedAt`.
+ * No row means epoch 0, never started.
+ */
+export const chatEpochs = pgTable(
+  'chat_epochs',
+  {
+    userId: text().notNull(),
+    sessionKey: text().notNull(),
+    epoch: integer().notNull(),
+    startedAt: timestamp({ withTimezone: true }).notNull(),
+    /** What started the latest one (a Telegram event id): the same event never starts two. */
+    startKey: text(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.sessionKey] })],
+);

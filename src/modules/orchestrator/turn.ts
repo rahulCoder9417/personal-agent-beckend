@@ -20,6 +20,7 @@ import {
   type RuntimeName,
 } from './agent-settings.ts';
 import { syncBrowserAfterWake } from './browser.ts';
+import { chatEpoch } from './chats.ts';
 import { crewOfProgress } from './crew.ts';
 import { ensureSandbox } from './sandbox.ts';
 import { recordEngineTurn, turnText } from './turn-context.ts';
@@ -222,12 +223,17 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
   const engine = await syncRuntimeAfterWake(userId, woke.sandbox);
   // Scout's browser is on for this container only if the plan says so (HLD 11.3).
   await syncBrowserAfterWake(userId, user.plan, woke.sandbox);
-  // What is known about the user, and a recap of the chat if the engine changed (HLD 0.9).
-  const text = await turnText(input, engine);
-  // What the platform adds to the delivery's metadata. On Claude Code: the model and the effort
-  // the user chose (each left out when it is Claude Code's own default).
-  const metadata: Record<string, unknown> =
-    engine === 'claude_code' ? { claude: await claudeTurnOptions(userId) } : {};
+  // The chat's epoch: when the user started a new chat, the engine starts a fresh conversation.
+  const chat = await chatEpoch(userId, input.sessionKey);
+  // What is known about the user, and a recap of the chat if the engine changed (HLD 0.9). The
+  // recap holds nothing from before the chat's latest new start.
+  const text = await turnText({ ...input, chatStartedAt: chat.startedAt }, engine);
+  // What the platform adds to the delivery's metadata: the chat's epoch, always. On Claude Code
+  // also the model and the effort the user chose (each left out when it is Claude Code's default).
+  const metadata: Record<string, unknown> = {
+    chat_epoch: chat.epoch,
+    ...(engine === 'claude_code' ? { claude: await claudeTurnOptions(userId) } : {}),
+  };
 
   // From here until the turn ends, read_page knows which engine is calling it (HLD 5.1).
   await recordTurnEngine(userId, engine);

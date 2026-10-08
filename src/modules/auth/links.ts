@@ -141,6 +141,24 @@ export async function linkWithCode(input: {
     });
 }
 
+/** The user a valid, unused code belongs to, without using it up. Null for any other text. */
+export async function linkCodeOwner(code: string, channel: LinkChannel): Promise<string | null> {
+  const normalized = normalizeLinkCode(code);
+  if (!normalized) return null;
+  const [row] = await db()
+    .select({ userId: linkCodes.userId })
+    .from(linkCodes)
+    .where(
+      and(
+        eq(linkCodes.codeHash, sha256Hex(normalized)),
+        eq(linkCodes.channel, channel),
+        isNull(linkCodes.usedAt),
+        gt(linkCodes.expiresAt, new Date()),
+      ),
+    );
+  return row?.userId ?? null;
+}
+
 export async function findLink(
   channel: LinkChannel,
   externalId: string,

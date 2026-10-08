@@ -750,6 +750,10 @@ paths:
         offer. When it is, a user with their own key or Claude plan can still choose it with
         `aiPreference: platform`, and go back with `aiPreference: auto`. `aiAccess` always says
         what pays for the AI right now.
+
+        `claudeModel` and `claudeEffort` are the Claude model and the thinking effort Claude Code
+        uses (null: Claude Code's own default). They apply to turns that run on Claude Code, and
+        can be set whatever the engine is now. `claudeChoices` lists what may be chosen.
       responses:
         "200":
           description: OK
@@ -760,11 +764,16 @@ paths:
     patch:
       operationId: updateAgentSettings
       tags: [agent]
-      summary: Choose the agent runtime, or choose Textcrew AI
+      summary: Choose the agent runtime, Textcrew AI, or Claude Code's model and effort
       description: |
         Send `runtime`, `aiPreference` or both. A screen with three choices sends:
         own API key → `{ runtime: hermes, aiPreference: auto }`; Claude plan →
         `{ runtime: claude_code, aiPreference: auto }`; Textcrew AI → `{ aiPreference: platform }`.
+
+        `claudeModel` and `claudeEffort` may be sent too, alone or with the others. Null goes back
+        to Claude Code's own default. They can be set whatever the engine is now; they take effect
+        on turns that run on Claude Code. A model id that isn't in `claudeChoices.models` is
+        400 `invalid_request`. Example: `{ claudeModel: claude-opus-5-5, claudeEffort: xhigh }`.
       requestBody:
         required: true
         content:
@@ -776,13 +785,26 @@ paths:
               properties:
                 runtime: { $ref: "#/components/schemas/AgentRuntime" }
                 aiPreference: { $ref: "#/components/schemas/AiPreference" }
+                claudeModel:
+                  type: [string, "null"]
+                  maxLength: 100
+                  description: One of the ids in `claudeChoices.models`, or null for the default.
+                  examples: [claude-opus-5-5]
+                claudeEffort:
+                  type: [string, "null"]
+                  enum: [low, medium, high, xhigh, max, null]
+                  description: Null for the default.
       responses:
         "200":
           description: Updated
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AgentSettings" }
-        "400": { $ref: "#/components/responses/BadRequest" }
+        "400":
+          description: Invalid input, or a Claude model id that isn't on the list
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "409":
           description: |
@@ -2263,7 +2285,7 @@ components:
 
     AgentSettings:
       type: object
-      required: [runtime, effectiveRuntime, aiAccess, aiPreference, platformAvailable, claude, ownKeyProviders]
+      required: [runtime, effectiveRuntime, aiAccess, aiPreference, platformAvailable, claude, ownKeyProviders, claudeModel, claudeEffort, claudeChoices]
       properties:
         runtime:
           $ref: "#/components/schemas/AgentRuntime"
@@ -2290,6 +2312,35 @@ components:
         ownKeyProviders:
           type: array
           items: { $ref: "#/components/schemas/ByokProvider" }
+        claudeModel:
+          type: [string, "null"]
+          description: |
+            The Claude model Claude Code uses, one of `claudeChoices.models`. Null: Claude Code's
+            own default. Applies when Claude Code is the engine.
+          examples: [claude-opus-5-5]
+        claudeEffort:
+          type: [string, "null"]
+          enum: [low, medium, high, xhigh, max, null]
+          description: |
+            How hard Claude Code thinks. Null: Claude Code's own default. Applies when Claude Code
+            is the engine.
+        claudeChoices:
+          type: object
+          description: What may be chosen for `claudeModel` and `claudeEffort`, in display order.
+          required: [models, efforts]
+          properties:
+            models:
+              type: array
+              items:
+                type: object
+                required: [id, label]
+                properties:
+                  id: { type: string, examples: [claude-opus-5-5] }
+                  label: { type: string, examples: [Opus 5.5] }
+            efforts:
+              type: array
+              items: { type: string, enum: [low, medium, high, xhigh, max] }
+              examples: [[low, medium, high, xhigh, max]]
 
     ClaudeLoginStart:
       type: object

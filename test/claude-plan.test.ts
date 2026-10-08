@@ -29,6 +29,20 @@ type Settings = {
   aiAccess: string;
   claude: { connected: boolean; connectedAt: string | null };
   ownKeyProviders: string[];
+  claudeModel: string | null;
+  claudeEffort: string | null;
+  claudeChoices: { models: Array<{ id: string; label: string }>; efforts: string[] };
+};
+
+/** The list the web app shows, exactly as the shared spec names it. */
+const CLAUDE_CHOICES = {
+  models: [
+    { id: 'claude-opus-5-5', label: 'Opus 5.5' },
+    { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
+    { id: 'claude-haiku-4-5', label: 'Haiku 4.5' },
+    { id: 'claude-fable-5-1', label: 'Fable 5.1' },
+  ],
+  efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
 };
 type Fake = ReturnType<typeof installFakeVm>;
 
@@ -138,6 +152,9 @@ describe('who runs and who pays (effectiveRuntime / aiAccess)', () => {
       platformAvailable: true,
       claude: { connected: false, connectedAt: null },
       ownKeyProviders: [],
+      claudeModel: null,
+      claudeEffort: null,
+      claudeChoices: CLAUDE_CHOICES,
     });
 
     setAiAccessMode('own_only');
@@ -493,5 +510,145 @@ describe('turns', () => {
     fake.state.turnError = { message: 'the website timed out', platformFault: false };
     expect(await webTurn(u.id)).toBe('error');
     expect((await getAgentSettings(u.id)).effectiveRuntime).toBe('claude_code');
+  });
+});
+
+describe('Claude Code model and effort', () => {
+  const patch = (token: string, body: unknown) =>
+    call('/v1/agent/settings', { method: 'PATCH', token, body });
+  /** The delivery's `metadata_json`, read back. */
+  const metadataOf = (i = -1) =>
+    JSON.parse((fake.deliveries.at(i) as unknown as { metadataJson: string }).metadataJson) as {
+      claude?: { model?: string; effort?: string };
+    };
+
+  it('PATCH sets and clears them, with or without a Claude plan; GET lists the choices', async () => {
+    const u = await createUser();
+    // Saved while Hermes runs: they wait for the turns that run on Claude Code.
+    const set = await expectContract<Settings>(
+      'updateAgentSettings',
+      await patch(u.token, { claudeModel: 'claude-opus-5-5', claudeEffort: 'xhigh' }),
+      200,
+    );
+    expect(set).toMatchObject({
+      effectiveRuntime: 'hermes',
+      claudeModel: 'claude-opus-5-5',
+      claudeEffort: 'xhigh',
+      claudeChoices: CLAUDE_CHOICES,
+    });
+    expect(await settingsOf(u.token)).toMatchObject({
+      claudeModel: 'claude-opus-5-5',
+      claudeEffort: 'xhigh',
+    });
+
+    // One at a time; the other stays.
+    expect(
+      await expectContract<Settings>(
+        'updateAgentSettings',
+        await patch(u.token, { claudeEffort: 'low' }),
+        200,
+      ),
+    ).toMatchObject({ claudeModel: 'claude-opus-5-5', claudeEffort: 'low' });
+    // Null goes back to Claude Code's own default.
+    expect(
+      await expectContract<Settings>(
+        'updateAgentSettings',
+        await patch(u.token, { claudeModel: null, claudeEffort: null }),
+        200,
+      ),
+    ).toMatchObject({ claudeModel: null, claudeEffort: null });
+
+    // Together with the runtime, once a plan is connected.
+    await connectClaude(u);
+    expect(
+      await expectContract<Settings>(
+        'updateAgentSettings',
+        await patch(u.token, {
+          runtime: 'claude_code',
+          claudeModel: 'claude-fable-5-1',
+          claudeEffort: 'max',
+        }),
+        200,
+      ),
+    ).toMatchObject({
+      effectiveRuntime: 'claude_code',
+      claudeModel: 'claude-fable-5-1',
+      claudeEffort: 'max',
+    });
+  });
+
+  it('a model or an effort that is not on the list → 400 invalid_request, nothing saved', async () => {
+    const u = await createUser();
+    await expectContract(
+      'updateAgentSettings',
+      await patch(u.token, { claudeEffort: 'high' }),
+      200,
+    );
+    for (const body of [
+      { claudeModel: 'claude-opus-4' },
+      { claudeModel: 'opus' },
+      { claudeModel: '' },
+      { claudeModel: 'claude-opus-5-5', claudeEffort: 'ultra' },
+      { claudeEffort: 3 },
+    ]) {
+      const err = await expectContract<{ error: { code: string } }>(
+        'updateAgentSettings',
+        await patch(u.token, body),
+        400,
+      );
+      expect(err.error.code, JSON.stringify(body)).toBe('invalid_request');
+    }
+    expect(await settingsOf(u.token)).toMatchObject({ claudeModel: null, claudeEffort: 'high' });
+  });
+
+  it('a Claude Code turn carries them in metadata_json; Hermes turns do not', async () => {
+    const u = await chatUser();
+    await connectClaude(u);
+    // Nothing chosen: the `claude` field is there, empty (the CLI's defaults).
+    expect(await webTurn(u.id, 'first')).toBe('done');
+    expect(metadataOf().claude).toEqual({});
+
+    await patch(u.token, { claudeModel: 'claude-opus-5-5', claudeEffort: 'xhigh' });
+    expect(await webTurn(u.id, 'second')).toBe('done');
+    expect(metadataOf().claude).toEqual({ model: 'claude-opus-5-5', effort: 'xhigh' });
+
+    await patch(u.token, { claudeModel: null });
+    expect(await webTurn(u.id, 'third')).toBe('done');
+    expect(metadataOf().claude).toEqual({ effort: 'xhigh' });
+
+    // Hermes runs: the choice is kept but not sent.
+    await patch(u.token, { runtime: 'hermes' });
+    expect(await webTurn(u.id, 'fourth')).toBe('done');
+    expect(metadataOf()).not.toHaveProperty('claude');
+    expect(await settingsOf(u.token)).toMatchObject({ claudeEffort: 'xhigh' });
+  });
+
+  it('a model taken off the list is treated as the default', async () => {
+    const u = await chatUser();
+    await connectClaude(u);
+    await db()
+      .update(agentSettings)
+      .set({ claudeModel: 'claude-retired-1', claudeEffort: 'medium' })
+      .where(eq(agentSettings.userId, u.id));
+    expect(await settingsOf(u.token)).toMatchObject({ claudeModel: null, claudeEffort: 'medium' });
+    expect(await webTurn(u.id)).toBe('done');
+    expect(metadataOf().claude).toEqual({ effort: 'medium' });
+  });
+
+  it('the plan refuses the model: the turn ends with the CLI message, not our fault, settings kept', async () => {
+    const u = await chatUser();
+    await connectClaude(u);
+    await patch(u.token, { claudeModel: 'claude-fable-5-1' });
+    fake.state.turnError = {
+      message: 'Claude Fable 5.1 is not available on your plan',
+      platformFault: false,
+    };
+    expect(await webTurn(u.id)).toBe('error');
+    const out = await outgoing(u.id);
+    expect(out).toEqual(["I couldn't finish that: Claude Fable 5.1 is not available on your plan"]);
+    expect(await settingsOf(u.token)).toMatchObject({
+      effectiveRuntime: 'claude_code',
+      claudeModel: 'claude-fable-5-1',
+    });
   });
 });

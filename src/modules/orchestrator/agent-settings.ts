@@ -4,17 +4,37 @@ import { Code, ConnectError } from '@connectrpc/connect';
 import { eq } from 'drizzle-orm';
 import { config } from '../../shared/config.ts';
 import { db, type Tx } from '../../shared/db/client.ts';
-import { conflict } from '../../shared/errors.ts';
+import { badRequest, conflict } from '../../shared/errors.ts';
 import { logger } from '../../shared/logger.ts';
 import { audit } from '../admin/audit.ts';
 import { hasByokKey, listByokKeys, type ByokProvider } from '../integrations/byok.ts';
-import { agentSettings } from './schema.ts';
+import { agentSettings, CLAUDE_EFFORTS } from './schema.ts';
 import { AgentRuntime, vm } from './vm.ts';
 
 export type RuntimeName = (typeof agentSettings.$inferSelect)['runtime'];
 export type AiPreference = (typeof agentSettings.$inferSelect)['aiPreference'];
 export type AiAccess = 'claude_plan' | 'own_key' | 'platform' | 'none';
 export type AiAccessMode = 'platform' | 'own_only';
+export type ClaudeEffort = (typeof CLAUDE_EFFORTS)[number];
+export { CLAUDE_EFFORTS };
+
+/**
+ * The Claude models a user may choose for Claude Code, in display order. Each id is a full model
+ * name Claude Code's `--model` flag takes (checked against the CLI, 2.1.291 to 2.1.294). Whether
+ * the user's own Claude plan allows a model is Anthropic's call: a refusal ends the turn with the
+ * CLI's message.
+ */
+export const CLAUDE_MODELS = [
+  { id: 'claude-opus-5-5', label: 'Opus 5.5' },
+  { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
+  { id: 'claude-haiku-4-5', label: 'Haiku 4.5' },
+  { id: 'claude-fable-5-1', label: 'Fable 5.1' },
+] as const;
+
+const isClaudeModel = (id: string | null | undefined): id is string =>
+  CLAUDE_MODELS.some((m) => m.id === id);
+const isClaudeEffort = (e: string | null | undefined): e is ClaudeEffort =>
+  (CLAUDE_EFFORTS as readonly string[]).includes(e ?? '');
 
 export interface AgentSettingsView {
   /** What the user chose. */
@@ -28,6 +48,9 @@ export interface AgentSettingsView {
   platformAvailable: boolean;
   claude: { connected: boolean; connectedAt: Date | null };
   ownKeyProviders: ByokProvider[];
+  /** Claude Code's model and effort (null: its own default). Used only on Claude Code turns. */
+  claudeModel: string | null;
+  claudeEffort: ClaudeEffort | null;
 }
 
 /**
@@ -83,6 +106,31 @@ export async function getAgentSettings(userId: string): Promise<AgentSettingsVie
     platformAvailable: mode === 'platform',
     claude: { connected: connectedAt !== null, connectedAt },
     ownKeyProviders,
+    ...claudeChoiceOf(row),
+  };
+}
+
+/** The stored choice, if it is still on the list (an id taken off the list means the default). */
+function claudeChoiceOf(
+  row: { claudeModel: string | null; claudeEffort: string | null } | undefined,
+) {
+  return {
+    claudeModel: isClaudeModel(row?.claudeModel) ? row.claudeModel : null,
+    claudeEffort: isClaudeEffort(row?.claudeEffort) ? row.claudeEffort : null,
+  };
+}
+
+/**
+ * What a Claude Code turn is told about the model and the effort (the delivery's `claude` field).
+ * A value left out means Claude Code's own default.
+ */
+export async function claudeTurnOptions(
+  userId: string,
+): Promise<{ model?: string; effort?: ClaudeEffort }> {
+  const { claudeModel, claudeEffort } = claudeChoiceOf(await settingsRow(userId));
+  return {
+    ...(claudeModel ? { model: claudeModel } : {}),
+    ...(claudeEffort ? { effort: claudeEffort } : {}),
   };
 }
 
@@ -126,7 +174,13 @@ async function aiSourceChanged(userId: string): Promise<void> {
 
 async function saveSettings(
   userId: string,
-  values: { runtime?: RuntimeName; aiPreference?: AiPreference; claudeConnectedAt?: Date | null },
+  values: {
+    runtime?: RuntimeName;
+    aiPreference?: AiPreference;
+    claudeConnectedAt?: Date | null;
+    claudeModel?: string | null;
+    claudeEffort?: ClaudeEffort | null;
+  },
 ): Promise<void> {
   const set = { ...values, updatedAt: new Date() };
   await db()
@@ -186,13 +240,24 @@ export async function syncRuntimeAfterWake(
 }
 
 /**
- * PATCH /v1/agent/settings: the runtime, the AI preference, or both. Claude Code needs a connected
- * Claude plan, and Textcrew AI can only be chosen while it is on offer (409 otherwise).
+ * PATCH /v1/agent/settings: the runtime, the AI preference, Claude Code's model and effort, or
+ * any of them together. Claude Code needs a connected Claude plan, and Textcrew AI can only be
+ * chosen while it is on offer (409 otherwise). A model that isn't on the list is 400. The model
+ * and the effort can be set whatever the engine is: they apply to Claude Code turns.
  */
 export async function updateAgentSettings(
   userId: string,
-  patch: { runtime?: RuntimeName; aiPreference?: AiPreference },
+  patch: {
+    runtime?: RuntimeName;
+    aiPreference?: AiPreference;
+    claudeModel?: string | null;
+    claudeEffort?: ClaudeEffort | null;
+  },
 ): Promise<AgentSettingsView> {
+  if (patch.claudeModel != null && !isClaudeModel(patch.claudeModel))
+    throw badRequest('Unknown Claude model', { claudeModel: patch.claudeModel });
+  if (patch.claudeEffort != null && !isClaudeEffort(patch.claudeEffort))
+    throw badRequest('Unknown thinking effort', { claudeEffort: patch.claudeEffort });
   const current = await getAgentSettings(userId);
   if (patch.runtime === 'claude_code' && !current.claude.connected)
     throw conflict('Connect your Claude plan first');
@@ -201,10 +266,14 @@ export async function updateAgentSettings(
   const runtime = patch.runtime !== undefined && patch.runtime !== current.runtime;
   const preference =
     patch.aiPreference !== undefined && patch.aiPreference !== current.aiPreference;
-  if (runtime || preference) {
+  const model = patch.claudeModel !== undefined && patch.claudeModel !== current.claudeModel;
+  const effort = patch.claudeEffort !== undefined && patch.claudeEffort !== current.claudeEffort;
+  if (runtime || preference || model || effort) {
     await saveSettings(userId, {
       ...(runtime ? { runtime: patch.runtime } : {}),
       ...(preference ? { aiPreference: patch.aiPreference } : {}),
+      ...(model ? { claudeModel: patch.claudeModel } : {}),
+      ...(effort ? { claudeEffort: patch.claudeEffort } : {}),
     });
   }
   if (runtime) {

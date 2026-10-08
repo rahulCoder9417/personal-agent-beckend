@@ -36,6 +36,9 @@ export const approvals = pgTable(
   (t) => [index().on(t.userId, t.id), index().on(t.status, t.expiresAt)],
 );
 
+/** Claude Code's thinking effort levels (its `--effort` flag), lowest first. */
+export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+
 /**
  * Which agent runs for the user: Hermes (API key / platform credits) or Claude Code (the user's
  * own Claude plan). We only store WHEN a Claude plan was connected: never a credential or token.
@@ -54,6 +57,10 @@ export const agentSettings = pgTable('agent_settings', {
     .default('auto'),
   /** Set when the in-container Claude Code sign-in succeeded; null = not connected. */
   claudeConnectedAt: timestamp({ withTimezone: true }),
+  /** The Claude model Claude Code uses (an id from CLAUDE_MODELS); null = Claude Code's default. */
+  claudeModel: text(),
+  /** Claude Code's thinking effort; null = Claude Code's default. */
+  claudeEffort: text({ enum: CLAUDE_EFFORTS }),
   updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
 });
 

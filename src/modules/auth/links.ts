@@ -178,12 +178,13 @@ export async function listLinks(userId: string): Promise<ChannelLink[]> {
     .orderBy(desc(channelLinks.createdAt));
 }
 
-export async function unlink(userId: string, linkId: string): Promise<boolean> {
-  const rows = await db()
+/** Removes one of the user's links. Returns the removed link, or undefined if there was none. */
+export async function unlink(userId: string, linkId: string): Promise<ChannelLink | undefined> {
+  const [row] = await db()
     .delete(channelLinks)
     .where(and(eq(channelLinks.userId, userId), eq(channelLinks.id, linkId)))
-    .returning({ id: channelLinks.id });
-  return rows.length > 0;
+    .returning();
+  return row;
 }
 
 export async function touchInbound(linkId: string): Promise<void> {

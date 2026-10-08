@@ -228,7 +228,7 @@ describe('Phase 3: Telegram end to end', () => {
     expect(res.status).toBe(401);
   });
 
-  it('unlink removes the link; the chat then gets the link message again', async () => {
+  it('unlink removes the link, records it in the activity log; the chat then gets the link message again', async () => {
     const user = await chatUser();
     const chatId = chat();
     await linkTelegram(user.token, chatId);
@@ -243,6 +243,18 @@ describe('Phase 3: Telegram end to end', () => {
       await call(`/v1/channels/${link!.id}`, { method: 'DELETE', token: user.token }),
       404,
     );
+    // The activity log records it like the link: the same name, never the chat id.
+    const activity = await expectContract<{
+      items: Array<{ actor: string; action: string; summary: string }>;
+    }>('listActivity', await call('/v1/activity', { token: user.token }), 200);
+    const linked = activity.items.filter((a) => a.action === 'channel_linked');
+    const unlinked = activity.items.filter((a) => a.action === 'channel_unlinked');
+    expect(linked).toHaveLength(1);
+    expect(unlinked).toEqual([
+      expect.objectContaining({ actor: 'user', summary: 'Unlinked telegram @someone' }),
+    ]);
+    expect(linked[0]!.summary).toBe('Linked telegram @someone');
+    expect(JSON.stringify(unlinked)).not.toContain(String(chatId));
     await sendTelegram(telegramUpdate(chatId, 'still there?'));
     await waitFor(async () =>
       tg.sent.find((m) => m.chatId === String(chatId) && m.text.includes("isn't linked")),

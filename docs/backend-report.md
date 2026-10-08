@@ -2195,8 +2195,8 @@ The backend has 436 automated tests. They use a real database and real queues, a
 | The isolation tests (no way out except the proxy) | Yes, 5 of 5 |
 | The agent's tool paths closed from the internet | Yes |
 | The memory save tool | Partly: works when named, not used by default |
-| A real sign-up through Clerk | No |
-| The web app against this backend | No |
+| A real sign-up through Clerk | Yes |
+| The web app against this backend | Partly: sign-up, connecting a Claude plan and web chat. Not yet: apps, billing, the other screens |
 | Textcrew AI on the Hermes engine | No. There is no working model key |
 | The user's own API key | Not finished. The key is saved, but the engine does not use it |
 | Payments through Polar, coupons | No |

@@ -50,6 +50,7 @@ Five files make up the docs:
 ## 2. What a user can do
 
 - **Chat with their own agent.** On Telegram or in the web app. Example: "What is on my calendar today?"
+- **Start a new chat.** The "New chat" button in the web app, or the message `/new` on Telegram. The agent then does not see what was said before in that chat. Its saved notes about the user stay. It costs nothing.
 - **Get real work done in apps.** The agent can act in about 25 apps. Example: "Email Priya the meeting notes."
 - **Stay in control.** Before the agent sends something to another person, deletes something or pays, it asks first.
 - **Set reminders and automations.** Once, on a schedule, or when something happens in an app. Example: "Every Monday at 9, send me my open pull requests."
@@ -58,6 +59,7 @@ Five files make up the docs:
 - **Research on the web.** Scout searches and reads pages. On the Max plan Scout can also drive a real browser.
 - **Be remembered.** The agent keeps short notes about you, and you can see and delete them.
 - **Bring their own AI.** A Claude plan or an API key. Then the AI part costs no credits.
+- **Choose Claude's model and effort.** With a Claude plan, the user picks the Claude model and how hard it thinks, called the effort. Example: Opus 5.5 at effort "xhigh". Left at "Default", Claude Code chooses.
 
 ---
 

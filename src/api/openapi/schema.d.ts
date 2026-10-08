@@ -320,10 +320,20 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Set or replace the user's own API key for a provider */
+        /**
+         * Set or replace the user's own API key for a provider
+         * @description The key is test-called with the provider, saved encrypted, and then put in use: when the
+         *     user's own key is what pays for their AI, every model call from their agent goes to this
+         *     provider with this key. If the AI gateway cannot be switched to the key, nothing is saved
+         *     and the answer is 503. When several keys are saved, the one saved last pays.
+         */
         put: operations["setByokKey"];
         post?: never;
-        /** Remove the user's key for a provider */
+        /**
+         * Remove the user's key for a provider
+         * @description The agent stops using the key first. If the AI gateway cannot be switched away from it,
+         *     nothing is removed, the key stays in use, and the answer is 503.
+         */
         delete: operations["deleteByokKey"];
         options?: never;
         head?: never;
@@ -1061,6 +1071,7 @@ export interface components {
                  * @example channel_disabled
                  * @example invalid_or_expired_code
                  * @example conflict
+                 * @example unavailable
                  * @example internal
                  */
                 code: string;
@@ -1232,7 +1243,16 @@ export interface components {
             provider: components["schemas"]["ByokProvider"];
             set: boolean;
             last4?: string | null;
+            /** @description The model the user chose (null = the provider's default) */
             model?: string | null;
+            /** @description The model that runs with this key, the user's choice or the provider's default */
+            effectiveModel: string;
+            /**
+             * @description True when the agent's model calls go to this provider with this key right now. False
+             *     when no key is set, when another source pays (Textcrew AI chosen, a Claude plan in
+             *     charge, or a key saved later), or while the switch to this key is still pending.
+             */
+            inUse: boolean;
             /** Format: date-time */
             updatedAt?: string | null;
         };
@@ -2415,7 +2435,11 @@ export interface operations {
             content: {
                 "application/json": {
                     apiKey: string;
-                    /** @description Preferred model id for this provider */
+                    /**
+                     * @description The provider's model id to use with this key (e.g. `claude-opus-5-5`, or
+                     *     `openai/gpt-6.1-sol` on OpenRouter). Left out: the provider's default, shown
+                     *     in `effectiveModel`.
+                     */
                     model?: string;
                 };
             };
@@ -2432,6 +2456,15 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            /** @description The AI gateway could not be switched to this key; nothing was saved. Retry */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     deleteByokKey: {
@@ -2453,6 +2486,15 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["Unauthorized"];
+            /** @description The AI gateway could not be switched away from this key; it was not removed. Retry */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     listAutomations: {

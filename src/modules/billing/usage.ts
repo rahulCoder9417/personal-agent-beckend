@@ -10,14 +10,13 @@ import { db } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import { logger } from '../../shared/logger.ts';
 import { getUser } from '../auth/users.ts';
-import { ownKeyPaysForAi } from '../orchestrator/agent-settings.ts';
 import { vm } from '../orchestrator/vm.ts';
 import { restoreAppActionChargesInTx } from './app-actions.ts';
 import { restorePaidToolChargesInTx } from './paid-tools.ts';
 import { chargeInTx, getBalance, lockUserCredits, restoreChargesInTx } from './credits.ts';
 import { afterCreditsAdded } from './enforce.ts';
 import { fireBalanceDepleted } from './hooks.ts';
-import { litellm, refreshBudget } from './litellm.ts';
+import { litellm, routesToOwnKey, syncLiteLLMKey } from './litellm.ts';
 import {
   AWAKE_SECONDS_PER_CREDIT,
   BROWSER_SECONDS_PER_CREDIT,
@@ -98,9 +97,9 @@ export async function syncUsageForUser(userId: string, now = new Date()): Promis
     // Nothing happened: write nothing; the next sync simply covers a longer window.
     if (aiMicro === 0 && awakeSeconds === 0 && browserSeconds === 0) return null;
 
-    // Bring-your-own-key: AI isn't charged in credits (HLD 7.1); awake time still is.
-    // Not so for a user who chose Textcrew AI over their key.
-    const byok = await ownKeyPaysForAi(userId, tx);
+    // Bring-your-own-key: AI isn't charged in credits (HLD 7.1); awake time still is. What
+    // counts is where the key really sent the AI (switches settle usage first: switchAiRouting).
+    const byok = keyRow ? routesToOwnKey(keyRow) : false;
     const aiCredits = byok ? 0 : aiCostToCredits(aiMicro);
     const otherAi = byok ? 0 : Math.min(aiCredits, aiCostToCredits(otherMicro));
     const [prev] = await tx
@@ -163,17 +162,41 @@ export async function syncUsageForUser(userId: string, now = new Date()): Promis
     return { charged, periodStart: since, periodEnd: now };
   });
 
+  // Enforce (HLD 7.5): budget = balance; at zero the budget is 0 and listeners are told. Also
+  // when nothing was charged: this is where a LiteLLM update that failed earlier is applied.
+  try {
+    await syncLiteLLMKey(userId, spendUsd === undefined ? {} : { spendUsd });
+  } catch (err) {
+    logger().warn({ userId, err: (err as Error).message }, 'LiteLLM key update failed');
+  }
   if (!out)
     return { charged: 0, periodStart: null, periodEnd: null, balance: await getBalance(userId) };
-  // Enforce (HLD 7.5): budget = balance; at zero the budget is 0 and listeners are told.
   const balance = await getBalance(userId);
-  try {
-    await refreshBudget(userId, spendUsd === undefined ? {} : { spendUsd });
-  } catch (err) {
-    logger().warn({ userId, err: (err as Error).message }, 'LiteLLM budget update failed');
-  }
   if (out.charged > 0 && balance <= 0) await fireBalanceDepleted(userId);
   return { ...out, balance };
+}
+
+/**
+ * What pays for the user's AI may have changed (an own key saved or deleted, another AI chosen, a
+ * Claude plan connected or gone). First charges the usage so far under the routing that ran,
+ * then points the LiteLLM key at the new source. Throws if LiteLLM can't be switched.
+ */
+export async function switchAiRouting(userId: string): Promise<void> {
+  try {
+    await syncUsageForUser(userId);
+  } catch (err) {
+    logger().warn({ userId, err: (err as Error).message }, 'usage sync before an AI switch failed');
+  }
+  await syncLiteLLMKey(userId);
+}
+
+/** Best effort: a failure is logged; the 5-minute usage sync switches it later. */
+export async function switchAiRoutingQuietly(userId: string): Promise<void> {
+  try {
+    await switchAiRouting(userId);
+  } catch (err) {
+    logger().warn({ userId, err: (err as Error).message }, 'AI switch failed; retried by the sync');
+  }
 }
 
 function describe(ai: number, awake: number, browser: number): string {
@@ -225,7 +248,7 @@ export async function reverseTurn(
     .from(litellmKeys)
     .where(and(eq(litellmKeys.userId, userId), isNull(litellmKeys.revokedAt)));
   let ai = 0;
-  if (keyRow && !(await ownKeyPaysForAi(userId))) {
+  if (keyRow && !routesToOwnKey(keyRow)) {
     const spend = await litellm().getSpendBetween(
       decryptSecret(keyRow.keyEncrypted),
       turn.startedAt,

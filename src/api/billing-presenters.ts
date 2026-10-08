@@ -111,12 +111,15 @@ export function toRedemption(r: RedeemResult): Schemas['CouponRedemption'] {
   };
 }
 
-export function toByokKey(v: ByokKeyView): Schemas['ByokKey'] {
+/** `inUse`: the agent's model calls go to this provider with this key right now. */
+export function toByokKey(v: ByokKeyView, inUse: boolean): Schemas['ByokKey'] {
   return {
     provider: v.provider,
     set: v.set,
     last4: v.last4,
     model: v.model,
+    effectiveModel: v.effectiveModel,
+    inUse: v.set && inUse,
     updatedAt: iso(v.updatedAt),
   };
 }

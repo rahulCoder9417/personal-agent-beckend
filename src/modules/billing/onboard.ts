@@ -6,7 +6,7 @@ import { getActiveUser } from '../auth/users.ts';
 import { createGrantInTx, ledgerKeyExists } from './credits.ts';
 import { polar } from './polar.ts';
 import { freeCapAllows } from './free-credits.ts';
-import { ensureLiteLLMKey, refreshBudget, revokeLiteLLMKey } from './litellm.ts';
+import { ensureLiteLLMKey, revokeLiteLLMKey, syncLiteLLMKey } from './litellm.ts';
 import { SIGNUP_CREDITS, creditExpiry } from './plans.ts';
 import { getRenewingSubscription } from './subscriptions.ts';
 
@@ -43,11 +43,11 @@ export async function onboardBilling(userId: string): Promise<{ signupGranted: b
     return created;
   });
   await ensureLiteLLMKey(userId);
-  await refreshBudget(userId);
+  await syncLiteLLMKey(userId);
   return { signupGranted };
 }
 
-/** Account deletion: revoke the LiteLLM key and stop the subscription renewing. */
+/** Account deletion: revoke the LiteLLM key (and the own key LiteLLM holds), stop renewals. */
 export async function offboardBilling(userId: string): Promise<void> {
   await revokeLiteLLMKey(userId);
   const sub = await getRenewingSubscription(userId);

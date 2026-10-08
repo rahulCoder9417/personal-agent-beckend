@@ -4,12 +4,22 @@
 // Budget note: LiteLLM compares a key's `max_budget` with its *cumulative* `spend`, so "budget =
 // balance" is set as `max_budget = spend so far + balance in real dollars`, and "budget 0" as
 // `max_budget = spend so far` (no room left).
+//
+// Bring your own key (HLD 7.1): while the user's own provider key pays, LiteLLM holds that key in
+// a model of its own (stored encrypted in LiteLLM's database, never shown by its API), the user's
+// LiteLLM key may call only that model, and the names the container and the quick replies ask for
+// both mean it. So every model call is made with the user's key, and the provider key still never
+// enters the container. When the own key stops paying, the key goes back to the plan and the
+// model is deleted.
+import { randomUUID } from 'node:crypto';
 import { eq, isNotNull } from 'drizzle-orm';
 import { config } from '../../shared/config.ts';
-import { decryptSecret, encryptSecret } from '../../shared/crypto.ts';
+import { decryptSecret, encryptSecret, keyedHashHex } from '../../shared/crypto.ts';
 import { db } from '../../shared/db/client.ts';
 import { logger } from '../../shared/logger.ts';
+import { redis } from '../../shared/redis.ts';
 import { getUser } from '../auth/users.ts';
+import { byokFingerprints, ownKeyForAi, type ByokProvider } from '../integrations/byok.ts';
 import { ownKeyPaysForAi } from '../orchestrator/agent-settings.ts';
 import { getBalance } from './credits.ts';
 import {
@@ -34,6 +44,16 @@ export interface KeyPatch {
   maxBudget?: number | null;
 }
 
+/** A model in LiteLLM that carries a provider key (the user's own key). */
+export interface OwnModel {
+  /** Model name = model id in LiteLLM. */
+  id: string;
+  /** LiteLLM's `<provider>/<provider's model id>`, e.g. `anthropic/claude-sonnet-5-5`. */
+  model: string;
+  /** The provider key. Never log it. */
+  apiKey: string;
+}
+
 export interface LiteLLMClient {
   generateKey(input: {
     alias: string;
@@ -48,6 +68,20 @@ export interface LiteLLMClient {
   getKeySpend(key: string): Promise<KeySpend>;
   /** Spend of one key in [start, end) (used to reverse a failed turn). */
   getSpendBetween(key: string, start: Date, end: Date): Promise<KeySpend>;
+  /** Creates the model, or replaces it in place. `exists`: we believe LiteLLM has it already. */
+  saveModel(model: OwnModel, opts: { exists: boolean }): Promise<void>;
+  /** Deletes the model. One that is already gone counts as deleted. */
+  deleteModel(id: string): Promise<void>;
+}
+
+/** A LiteLLM answer that wasn't 2xx. Carries only the status: the body can echo a key. */
+export class LiteLLMHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 class HttpLiteLLM implements LiteLLMClient {
@@ -64,7 +98,12 @@ class HttpLiteLLM implements LiteLLMClient {
       signal: AbortSignal.timeout(15_000),
     });
     // Never include the response body: it can echo the key.
-    if (!res.ok) throw new Error(`LiteLLM ${method} ${path.split('?')[0]} failed: ${res.status}`);
+    if (!res.ok) {
+      throw new LiteLLMHttpError(
+        res.status,
+        `LiteLLM ${method} ${path.split('?')[0]} failed: ${res.status}`,
+      );
+    }
     const text = await res.text();
     return (text ? JSON.parse(text) : {}) as T;
   }
@@ -121,6 +160,44 @@ class HttpLiteLLM implements LiteLLMClient {
     }
     return out;
   }
+
+  // LiteLLM (checked on 1.104.2): /model/update on a missing id answers 400; /model/new on an id
+  // it already has answers 500; /model/delete on a missing id answers 400. Needs
+  // STORE_MODEL_IN_DB=True. The key is stored encrypted with LITELLM_SALT_KEY, or the master key
+  // when that isn't set.
+  async saveModel(m: OwnModel, opts: { exists: boolean }) {
+    const body = {
+      model_name: m.id,
+      litellm_params: { model: m.model, api_key: m.apiKey },
+      model_info: { id: m.id },
+    };
+    const update = () => this.request('POST', '/model/update', body);
+    const create = () => this.request('POST', '/model/new', body);
+    if (opts.exists) {
+      // Replace in place: the model stays callable throughout.
+      try {
+        await update();
+      } catch (err) {
+        if (!(err instanceof LiteLLMHttpError && err.status === 400)) throw err;
+        await create(); // it was gone after all
+      }
+      return;
+    }
+    try {
+      await create();
+    } catch (err) {
+      if (!(err instanceof LiteLLMHttpError)) throw err;
+      await update(); // it was there after all
+    }
+  }
+
+  async deleteModel(id: string) {
+    try {
+      await this.request('POST', '/model/delete', { id });
+    } catch (err) {
+      if (!(err instanceof LiteLLMHttpError && err.status === 400)) throw err;
+    }
+  }
 }
 
 let client: LiteLLMClient | undefined;
@@ -144,24 +221,34 @@ export async function getKeyRow(userId: string): Promise<LiteLLMKeyRow | undefin
   return row && !row.revokedAt ? row : undefined;
 }
 
-/** The dollars of real cost the user may still spend (null = no cap, for bring-your-own-key). */
-async function remainingBudgetUsd(userId: string): Promise<number | null> {
-  const balance = await getBalance(userId);
-  if (balance <= 0) return 0;
-  // BYOK: AI isn't paid in credits, so it isn't capped by the balance (awake time still is).
-  // A user who chose Textcrew AI pays in credits again, key or no key.
-  if (await ownKeyPaysForAi(userId)) return null;
-  return creditsToRealUsd(balance);
+/**
+ * The name of the model that holds this user's own key. Stable per user, and not guessable from
+ * the user id: any key may list the model names in LiteLLM (never the provider keys).
+ */
+export function ownModelName(userId: string): string {
+  return `own-${keyedHashHex(`litellm-own-model:${userId}`).slice(0, 24)}`;
 }
 
-/** Creates the user's key if they don't have one (idempotent). */
+/** Does this key send the user's AI to their own provider key right now? */
+export function routesToOwnKey(row: Pick<LiteLLMKeyRow, 'models' | 'ownModelId'>): boolean {
+  return row.ownModelId !== null && row.models.includes(row.ownModelId);
+}
+
+/** While the own key pays: the agent's fixed name and the quick-reply model both mean it. */
+function ownKeyAliases(modelId: string): Record<string, string> {
+  const c = config();
+  return { [c.LITELLM_AGENT_MODEL]: modelId, [c.LITELLM_CHEAP_MODEL]: modelId };
+}
+
+/** Creates the user's key if they don't have one (idempotent). It starts on the plan. */
 export async function ensureLiteLLMKey(userId: string): Promise<LiteLLMKeyRow> {
   const existing = await getKeyRow(userId);
   if (existing) return existing;
   const user = await getUser(userId);
   if (!user) throw new Error(`user ${userId} not found`);
   const models = keyModelsForPlan(user.plan);
-  const remaining = await remainingBudgetUsd(userId);
+  const balance = await getBalance(userId);
+  const remaining = balance <= 0 ? 0 : creditsToRealUsd(balance);
   const alias = `user-${userId}`;
   const { key } = await litellm().generateKey({
     alias,
@@ -175,9 +262,11 @@ export async function ensureLiteLLMKey(userId: string): Promise<LiteLLMKeyRow> {
     keyEncrypted: encryptSecret(key),
     keyAlias: alias,
     models,
-    maxBudgetMicroUsd: remaining === null ? null : usdToMicro(remaining),
+    maxBudgetMicroUsd: usdToMicro(remaining),
     syncedSpendMicroUsd: 0,
     syncedModelSpend: {},
+    ownModelId: null,
+    ownModelFingerprint: null,
     revokedAt: null,
     updatedAt: new Date(),
   };
@@ -205,46 +294,143 @@ export async function getLiteLLMKey(userId: string): Promise<string> {
   return decryptSecret(row.keyEncrypted);
 }
 
+/** Account deletion: the stored own key first (so a retry still finds it), then the key. */
 export async function revokeLiteLLMKey(userId: string): Promise<void> {
   const row = await getKeyRow(userId);
   if (!row) return;
+  if (row.ownModelId) await litellm().deleteModel(row.ownModelId);
   await litellm().deleteKey(decryptSecret(row.keyEncrypted));
   await db()
     .update(litellmKeys)
-    .set({ revokedAt: new Date(), updatedAt: new Date() })
+    .set({
+      revokedAt: new Date(),
+      ownModelId: null,
+      ownModelFingerprint: null,
+      updatedAt: new Date(),
+    })
     .where(eq(litellmKeys.userId, userId));
 }
 
+// One sync per user at a time, so two of them can't leave our record and LiteLLM disagreeing.
+const SYNC_LOCK_TTL_MS = 90_000;
+const SYNC_LOCK_WAIT_MS = 30_000;
+const syncLockKey = (userId: string) => `lock:litellm-key:${userId}`;
+const RELEASE = `if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end`;
+
+async function withSyncLock<T>(userId: string, fn: () => Promise<T>): Promise<T> {
+  const token = randomUUID();
+  const deadline = Date.now() + SYNC_LOCK_WAIT_MS;
+  while ((await redis().set(syncLockKey(userId), token, 'PX', SYNC_LOCK_TTL_MS, 'NX')) !== 'OK') {
+    if (Date.now() > deadline) throw new Error('LiteLLM key sync is busy');
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  try {
+    return await fn();
+  } finally {
+    await redis()
+      .eval(RELEASE, 1, syncLockKey(userId), token)
+      .catch(() => {});
+  }
+}
+
 /**
- * Sets the key's models + agent alias (by plan) and budget (by balance). Pass `spendUsd` when
- * the caller has just read the key's spend, to save a round trip. Safe to call any time.
+ * Brings the user's LiteLLM key in line with what pays for their AI. Safe to call any time and
+ * twice: LiteLLM is called only for what differs from the state last applied.
+ *
+ * 1. The own key pays: LiteLLM gets (or keeps) a model holding the key that pays, before the key
+ *    is pointed at it.
+ * 2. The key: with the own key, only the agent name and that model, both names aliased to it, and
+ *    no AI budget; otherwise the plan's models and alias with budget = balance. At a balance of 0
+ *    the budget is 0 either way (awake time is still paid in credits).
+ * 3. The own key doesn't pay: the model holding it is deleted, after the key stopped using it.
+ *    If only this step fails, the key is no longer used and the next sync deletes the model.
+ *
+ * Pass `spendUsd` when the caller has just read the key's spend. Throws if LiteLLM can't be
+ * updated in steps 1 or 2.
  */
-export async function refreshBudget(userId: string, opts: { spendUsd?: number } = {}) {
+export async function syncLiteLLMKey(
+  userId: string,
+  opts: { spendUsd?: number } = {},
+): Promise<void> {
+  await withSyncLock(userId, () => applyKeyState(userId, opts));
+}
+
+async function applyKeyState(userId: string, opts: { spendUsd?: number }): Promise<void> {
   const row = await getKeyRow(userId);
   if (!row) return;
   const user = await getUser(userId);
   if (!user) return;
   const key = decryptSecret(row.keyEncrypted);
-  const models = keyModelsForPlan(user.plan);
-  const remaining = await remainingBudgetUsd(userId);
+  const own = (await ownKeyPaysForAi(userId)) ? await ownKeyForAi(userId) : undefined;
+  const setRow = (values: Partial<LiteLLMKeyRow>) =>
+    db()
+      .update(litellmKeys)
+      .set({ ...values, updatedAt: new Date() })
+      .where(eq(litellmKeys.userId, userId));
+
+  // 1. The own key, stored in LiteLLM.
+  let ownModelId = row.ownModelId;
+  if (own && row.ownModelFingerprint !== own.fingerprint) {
+    const id = row.ownModelId ?? ownModelName(userId);
+    await litellm().saveModel(
+      { id, model: `${own.provider}/${own.model}`, apiKey: own.apiKey },
+      { exists: row.ownModelId !== null },
+    );
+    ownModelId = id;
+    await setRow({ ownModelId: id, ownModelFingerprint: own.fingerprint });
+  }
+
+  // 2. The key's models, aliases and budget.
+  const balance = await getBalance(userId);
   const spend = opts.spendUsd ?? (await litellm().getKeySpend(key)).spend;
-  const maxBudget = remaining === null ? null : microToUsd(usdToMicro(spend + remaining));
+  const target =
+    own && ownModelId
+      ? {
+          models: [config().LITELLM_AGENT_MODEL, ownModelId],
+          aliases: ownKeyAliases(ownModelId),
+          remaining: balance <= 0 ? 0 : null,
+        }
+      : {
+          models: keyModelsForPlan(user.plan),
+          aliases: aliasesForPlan(user.plan),
+          remaining: balance <= 0 ? 0 : creditsToRealUsd(balance),
+        };
+  const maxBudget =
+    target.remaining === null ? null : microToUsd(usdToMicro(spend + target.remaining));
   const maxMicro = maxBudget === null ? null : usdToMicro(maxBudget);
-  const sameModels = JSON.stringify(row.models) === JSON.stringify(models);
-  if (sameModels && row.maxBudgetMicroUsd === maxMicro) return;
-  // Models and the agent alias change together with the plan.
-  await litellm().updateKey(key, { models, aliases: aliasesForPlan(user.plan), maxBudget });
-  await db()
-    .update(litellmKeys)
-    .set({ models, maxBudgetMicroUsd: maxMicro, updatedAt: new Date() })
-    .where(eq(litellmKeys.userId, userId));
+  const sameModels = JSON.stringify(row.models) === JSON.stringify(target.models);
+  if (!sameModels || row.maxBudgetMicroUsd !== maxMicro) {
+    await litellm().updateKey(key, { models: target.models, aliases: target.aliases, maxBudget });
+    await setRow({ models: target.models, maxBudgetMicroUsd: maxMicro });
+  }
+
+  // 3. No own key pays: delete the copy LiteLLM holds.
+  if (!own && row.ownModelId) {
+    try {
+      await litellm().deleteModel(row.ownModelId);
+      await setRow({ ownModelId: null, ownModelFingerprint: null });
+    } catch (err) {
+      logger().warn(
+        { userId, err: (err as Error).message },
+        'LiteLLM: deleting the own-key model failed; the next sync retries',
+      );
+    }
+  }
 }
 
-/** Best effort: a failure is logged and fixed by the next usage sync. */
-export async function refreshBudgetQuietly(userId: string): Promise<void> {
+/** Best effort: a failure is logged; the 5-minute usage sync applies the state again. */
+export async function syncLiteLLMKeyQuietly(userId: string): Promise<void> {
   try {
-    await refreshBudget(userId);
+    await syncLiteLLMKey(userId);
   } catch (err) {
-    logger().warn({ userId, err: (err as Error).message }, 'LiteLLM budget update failed');
+    logger().warn({ userId, err: (err as Error).message }, 'LiteLLM key update failed');
   }
+}
+
+/** Which saved key the agent's model calls use right now (null: none, the platform's AI). */
+export async function ownKeyInUse(userId: string): Promise<ByokProvider | null> {
+  const row = await getKeyRow(userId);
+  if (!row || !routesToOwnKey(row)) return null;
+  const keys = await byokFingerprints(userId);
+  return keys.find((k) => k.fingerprint === row.ownModelFingerprint)?.provider ?? null;
 }

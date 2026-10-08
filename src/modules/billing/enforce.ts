@@ -2,17 +2,17 @@
 // balance and tell listeners (e.g. automations) when a user hits zero or gets credits back.
 import { getBalance } from './credits.ts';
 import { fireBalanceDepleted, fireCreditsAdded } from './hooks.ts';
-import { refreshBudgetQuietly } from './litellm.ts';
+import { syncLiteLLMKeyQuietly } from './litellm.ts';
 
 /** After credits were added (payment, coupon, monthly grant, admin, reversal). */
 export async function afterCreditsAdded(userId: string): Promise<void> {
-  await refreshBudgetQuietly(userId);
+  await syncLiteLLMKeyQuietly(userId);
   if ((await getBalance(userId)) > 0) await fireCreditsAdded(userId);
   else await fireBalanceDepleted(userId);
 }
 
 /** After credits were removed (charge, expiry, refund, revoke). */
 export async function afterCreditsRemoved(userId: string): Promise<void> {
-  await refreshBudgetQuietly(userId);
+  await syncLiteLLMKeyQuietly(userId);
   if ((await getBalance(userId)) <= 0) await fireBalanceDepleted(userId);
 }

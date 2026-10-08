@@ -532,6 +532,11 @@ paths:
       operationId: setByokKey
       tags: [byok]
       summary: Set or replace the user's own API key for a provider
+      description: |
+        The key is test-called with the provider, saved encrypted, and then put in use: when the
+        user's own key is what pays for their AI, every model call from their agent goes to this
+        provider with this key. If the AI gateway cannot be switched to the key, nothing is saved
+        and the answer is 503. When several keys are saved, the one saved last pays.
       parameters:
         - $ref: "#/components/parameters/Provider"
       requestBody:
@@ -543,7 +548,14 @@ paths:
               required: [apiKey]
               properties:
                 apiKey: { type: string, minLength: 10, writeOnly: true }
-                model: { type: string, description: Preferred model id for this provider }
+                model:
+                  type: string
+                  maxLength: 128
+                  pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+                  description: |
+                    The provider's model id to use with this key (e.g. `claude-opus-5-5`, or
+                    `openai/gpt-6.1-sol` on OpenRouter). Left out: the provider's default, shown
+                    in `effectiveModel`.
       responses:
         "200":
           description: Saved (the key is test-called before saving)
@@ -552,15 +564,28 @@ paths:
               schema: { $ref: "#/components/schemas/ByokKey" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "503":
+          description: The AI gateway could not be switched to this key; nothing was saved. Retry
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
     delete:
       operationId: deleteByokKey
       tags: [byok]
       summary: Remove the user's key for a provider
+      description: |
+        The agent stops using the key first. If the AI gateway cannot be switched away from it,
+        nothing is removed, the key stays in use, and the answer is 503.
       parameters:
         - $ref: "#/components/parameters/Provider"
       responses:
         "204": { description: Removed }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "503":
+          description: The AI gateway could not be switched away from this key; it was not removed. Retry
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   # ---------------------------------------------------------------- automations
   /v1/automations:
@@ -1659,7 +1684,7 @@ components:
               type: string
               examples: [invalid_request, unauthorized, forbidden, not_found, rate_limited,
                          out_of_credits, plan_limit, channel_disabled, invalid_or_expired_code,
-                         conflict, internal]
+                         conflict, unavailable, internal]
             message: { type: string }
             details: { type: object, additionalProperties: true }
 
@@ -1824,12 +1849,23 @@ components:
 
     ByokKey:
       type: object
-      required: [provider, set]
+      required: [provider, set, effectiveModel, inUse]
       properties:
         provider: { $ref: "#/components/schemas/ByokProvider" }
         set: { type: boolean }
         last4: { type: [string, "null"] }
-        model: { type: [string, "null"] }
+        model:
+          type: [string, "null"]
+          description: The model the user chose (null = the provider's default)
+        effectiveModel:
+          type: string
+          description: The model that runs with this key, the user's choice or the provider's default
+        inUse:
+          type: boolean
+          description: |
+            True when the agent's model calls go to this provider with this key right now. False
+            when no key is set, when another source pays (Textcrew AI chosen, a Claude plan in
+            charge, or a key saved later), or while the switch to this key is still pending.
         updatedAt: { type: [string, "null"], format: date-time }
 
     Automation:

@@ -178,6 +178,13 @@ export const litellmKeys = pgTable('litellm_keys', {
   /** LiteLLM's cumulative spend for the key at the last usage sync (micro-USD). */
   syncedSpendMicroUsd: bigint({ mode: 'number' }).notNull().default(0),
   syncedModelSpend: jsonb().$type<Record<string, number>>().notNull().default({}),
+  /**
+   * The model in LiteLLM that holds this user's own provider key (null: none). The key routes to
+   * it only while `models` lists it (bring your own key, HLD 7.1).
+   */
+  ownModelId: text(),
+  /** Which saved own key that model holds (a hash of the key row; never the key itself). */
+  ownModelFingerprint: text(),
   createdAt: ts().notNull().defaultNow(),
   updatedAt: ts().notNull().defaultNow(),
   revokedAt: ts(),

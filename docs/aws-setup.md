@@ -411,3 +411,6 @@ All times UTC.
 | 2026-10-08 about 12:45 | Server started from CloudShell. DNS record `api.textcrew.in` created at Vercel |
 | 12:57 | Deploy passed on the new address: Caddy got the certificate for `api.textcrew.in`, the awake limit is 8, Textcrew AI is off. The Telegram webhook was moved. A test turn answered in 11 seconds |
 | about 13:00 | The web app went live on Vercel at `https://app.textcrew.in` (project `textcrew-app`) |
+| 14:35 | Deploy of the day's fixes: the agent image's memory and Hermes fixes, the own API key through LiteLLM, the Telegram linking fixes, `CLERK_JWT_KEY` on the api |
+| 15:44 | Deploy of the failed-turn fixes (the apology always sent, the refund as a job, failed turns not kept in the session, the idle stop). Checked on the server |
+| 15:50 | Server stopped (`sudo shutdown -h now`), at your request |

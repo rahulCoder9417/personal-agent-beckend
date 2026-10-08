@@ -8,6 +8,7 @@ import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { chargeAppAction } from '../src/modules/billing/app-actions.ts';
 import { charge, createGrant, getBalance } from '../src/modules/billing/credits.ts';
+import { setTurnRefundDelay } from '../src/modules/billing/jobs.ts';
 import { reverseTurn, syncUsageForUser } from '../src/modules/billing/usage.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
 import { appActionChangesSomething } from '../src/modules/integrations/apps.ts';
@@ -35,6 +36,7 @@ let composio: Awaited<ReturnType<typeof installFakeComposio>>;
 
 beforeAll(() => {
   wireModules();
+  setTurnRefundDelay(0); // the refund job of a failed turn runs at once
   workers = startWorkers(processors(), { retryDelaysMs: [50, 50, 50, 50] });
 });
 afterAll(async () => {

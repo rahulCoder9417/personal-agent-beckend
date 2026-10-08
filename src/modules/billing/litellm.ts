@@ -14,7 +14,7 @@
 import { randomUUID } from 'node:crypto';
 import { eq, isNotNull } from 'drizzle-orm';
 import { config } from '../../shared/config.ts';
-import { decryptSecret, encryptSecret, keyedHashHex } from '../../shared/crypto.ts';
+import { decryptSecret, encryptSecret, keyedHashHex, sha256Hex } from '../../shared/crypto.ts';
 import { db } from '../../shared/db/client.ts';
 import { logger } from '../../shared/logger.ts';
 import { redis } from '../../shared/redis.ts';
@@ -66,12 +66,33 @@ export interface LiteLLMClient {
   updateKey(key: string, patch: KeyPatch): Promise<void>;
   deleteKey(key: string): Promise<void>;
   getKeySpend(key: string): Promise<KeySpend>;
-  /** Spend of one key in [start, end) (used to reverse a failed turn). */
+  /** Spend of one key in [start, end), from LiteLLM's spend log (used to refund a failed turn). */
   getSpendBetween(key: string, start: Date, end: Date): Promise<KeySpend>;
   /** Creates the model, or replaces it in place. `exists`: we believe LiteLLM has it already. */
   saveModel(model: OwnModel, opts: { exists: boolean }): Promise<void>;
   /** Deletes the model. One that is already gone counts as deleted. */
   deleteModel(id: string): Promise<void>;
+}
+
+interface SpendLogPage {
+  data?: Array<{ spend?: number; model?: string; model_group?: string; startTime?: string }>;
+  total_pages?: number;
+  total_is_capped?: boolean;
+}
+
+const SPEND_LOG_PAGE_SIZE = 1000;
+/** 10,000 rows. One key in one turn's minutes never comes near it. */
+const SPEND_LOG_MAX_PAGES = 10;
+
+/** `YYYY-MM-DD HH:MM:SS` in UTC, rounded to the whole second outward. */
+function spendLogTime(at: Date, round: 'floor' | 'ceil'): string {
+  const ms = round === 'floor' ? Math.floor(at.getTime() / 1000) : Math.ceil(at.getTime() / 1000);
+  return new Date(ms * 1000).toISOString().slice(0, 19).replace('T', ' ');
+}
+
+/** LiteLLM's times are UTC; one written without a zone is read as UTC, not local time. */
+function parseUtc(s: string): number {
+  return new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : `${s}Z`).getTime();
 }
 
 /** A LiteLLM answer that wasn't 2xx. Carries only the status: the body can echo a key. */
@@ -140,25 +161,37 @@ class HttpLiteLLM implements LiteLLMClient {
     return { spend: out.info?.spend ?? 0, modelSpend: out.info?.model_spend ?? {} };
   }
 
+  // LiteLLM (read in the source the server runs, 1.103.1): the old `/spend/logs` takes dates only
+  // (`YYYY-MM-DD`). A full timestamp makes it answer 500, and with dates it returns one summary
+  // row per day. It is marked deprecated. `/spend/logs/v2` takes `YYYY-MM-DD HH:MM:SS` in UTC,
+  // both ends included, and filters `api_key` on the stored value: the SHA-256 of the key. It
+  // pages, at most 1,000 rows a page.
   async getSpendBetween(key: string, start: Date, end: Date): Promise<KeySpend> {
-    const q = new URLSearchParams({
-      api_key: key,
-      start_date: start.toISOString(),
-      end_date: end.toISOString(),
-    });
-    const logs = await this.request<Array<{ spend?: number; model?: string; startTime?: string }>>(
-      'GET',
-      `/spend/logs?${q}`,
-    );
     const out: KeySpend = { spend: 0, modelSpend: {} };
-    for (const l of Array.isArray(logs) ? logs : []) {
-      const at = l.startTime ? new Date(l.startTime).getTime() : NaN;
-      if (Number.isFinite(at) && (at < start.getTime() || at >= end.getTime())) continue;
-      const s = l.spend ?? 0;
-      out.spend += s;
-      if (l.model) out.modelSpend[l.model] = (out.modelSpend[l.model] ?? 0) + s;
+    for (let page = 1; ; page++) {
+      const q = new URLSearchParams({
+        api_key: sha256Hex(key),
+        start_date: spendLogTime(start, 'floor'),
+        end_date: spendLogTime(end, 'ceil'),
+        page: String(page),
+        page_size: String(SPEND_LOG_PAGE_SIZE),
+      });
+      const res = await this.request<SpendLogPage>('GET', `/spend/logs/v2?${q}`);
+      if (!Array.isArray(res.data)) throw new Error('LiteLLM GET /spend/logs/v2: no data');
+      // Rows we would not read: the sum would be too low.
+      if (res.total_is_capped || (res.total_pages ?? 0) > SPEND_LOG_MAX_PAGES)
+        throw new Error('LiteLLM GET /spend/logs/v2: too many rows');
+      for (const l of res.data) {
+        // The query is to the second; the turn's own window is to the millisecond.
+        const at = l.startTime ? parseUtc(l.startTime) : NaN;
+        if (Number.isFinite(at) && (at < start.getTime() || at >= end.getTime())) continue;
+        const s = Number(l.spend ?? 0);
+        out.spend += s;
+        const model = l.model_group || l.model; // model_group is our name for it, e.g. `cheap`
+        if (model) out.modelSpend[model] = (out.modelSpend[model] ?? 0) + s;
+      }
+      if (page >= (res.total_pages ?? 0)) return out;
     }
-    return out;
   }
 
   // LiteLLM (checked on 1.104.2): /model/update on a missing id answers 400; /model/new on an id

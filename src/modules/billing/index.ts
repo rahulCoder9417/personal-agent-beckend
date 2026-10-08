@@ -14,6 +14,7 @@ export {
   syncUsageForUser,
   type SyncResult,
 } from './usage.ts';
+export { queueTurnRefund, type FailedTurn } from './jobs.ts';
 export { canUseModel } from './models.ts';
 export { getBalance, listBalanceGrants } from './credits.ts';
 export { CHAT_COUPON_PATTERN, redeemFromChat } from './chat.ts';

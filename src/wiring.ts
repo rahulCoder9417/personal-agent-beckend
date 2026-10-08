@@ -22,8 +22,8 @@ import {
   onPlanChanged,
   planHasWebSearch,
   planLimits,
+  queueTurnRefund,
   redeemFromChat,
-  reverseTurn,
   switchAiRoutingQuietly,
   syncUsageForUser,
 } from './modules/billing/index.ts';
@@ -91,6 +91,7 @@ export function wireModules(): void {
   });
 
   // Credits (HLD 7.4, 7.5): check before a turn, quick sync after it, never charge our failures.
+  // A turn that failed on our side only adds the refund job: the user is told without waiting.
   setTurnHooks({
     hasCredits,
     afterTurn: async (userId) => {
@@ -99,9 +100,7 @@ export function wireModules(): void {
       );
       await publishCredits(userId).catch(() => {});
     },
-    onPlatformFault: async (userId, turn) => {
-      await reverseTurn(userId, turn);
-    },
+    onPlatformFault: queueTurnRefund,
   });
 
   // 1 credit for each successful app action that changes something (HLD 7.2).

@@ -72,7 +72,12 @@ async function enqueueEvent(row: EventRow, jobData?: Record<string, unknown>): P
     { ...jobData, eventId: row.id, userId: row.userId },
     { jobId: row.id, ...(priority ? { priority } : {}) },
   );
-  await db().update(events).set({ status: 'queued' }).where(eq(events.id, row.id));
+  // Only while the row is still `received`. A quick job (a link-code reply) can end before this
+  // line runs: its `done` / `ignored` must stay, or every worker start would queue it again.
+  await db()
+    .update(events)
+    .set({ status: 'queued' })
+    .where(and(eq(events.id, row.id), eq(events.status, 'received')));
 }
 
 /** Saves an event that needs no job (e.g. a duplicate-proof record). Returns false if seen before. */

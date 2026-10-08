@@ -2305,7 +2305,7 @@ components:
       properties:
         id: { type: string }
         actor: { type: string, enum: [user, agent, admin, system] }
-        action: { type: string, examples: [run_app_action, send_message, approval_requested, approval_decided, coupon_redeemed, channel_linked, web_search, web_search_refused, read_page, read_page_refused, crew_progress, browser_enabled, browser_disabled, pr_review_requested, remember, recall, forget, memory_refused, memory_deleted, memories_cleared] }
+        action: { type: string, examples: [run_app_action, send_message, approval_requested, approval_decided, coupon_redeemed, channel_linked, channel_unlinked, web_search, web_search_refused, read_page, read_page_refused, crew_progress, browser_enabled, browser_disabled, pr_review_requested, remember, recall, forget, memory_refused, memory_deleted, memories_cleared] }
         summary: { type: string }
         crew:
           type: [string, "null"]

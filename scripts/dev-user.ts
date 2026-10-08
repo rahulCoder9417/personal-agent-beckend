@@ -4,6 +4,9 @@
 // Run inside the api container:  node --import tsx scripts/dev-user.ts <command> [--flags]
 //
 //   create          --email <e> --name <n> [--plan free|pro|max] [--credits 2000]
+//                   (the 100 sign-up credits are given anyway; `credits` takes them away)
+//   credits         --user <id> --adjust <signed whole number> --reason <text> [--key <k>]
+//                   (the admin adjustment, once per key; e.g. --adjust -100 for an out-of-credits test)
 //   link-code       --user <id> [--channel telegram|whatsapp|imessage]
 //   claude-login    --user <id>
 //   claude-complete --user <id> --login <loginId> --code <code>   (the code is never printed or logged)
@@ -70,6 +73,7 @@ import { wireModules } from '../src/wiring.ts';
 const ADMIN_ID = 'dev-user-script';
 const USAGE = `usage: node --import tsx scripts/dev-user.ts <command> [flags]
   create          --email <e> --name <n> [--plan free|pro|max] [--credits 2000]
+  credits         --user <id> --adjust <signed whole number> --reason <text> [--key <k>]
   link-code       --user <id> [--channel telegram|whatsapp|imessage]
   claude-login    --user <id>
   claude-complete --user <id> --login <loginId> --code <code>
@@ -251,6 +255,28 @@ export async function devUser(argv: string[]): Promise<string[]> {
         `balance ${await getBalance(user.id)} credits`,
         `sandbox ${(await getAgentStatus(user.id)).state}`,
         browserLine(await browserStatus(user.id, plan)),
+      ];
+    }
+    case 'credits': {
+      // The admin endpoint's adjustment: + adds a grant (90 days), - takes from the grants (an
+      // overrun becomes debt). One adjustment per --key; without it, each run is a new one.
+      const user = await activeUser(flags);
+      const amount = Number(need(flags, 'adjust'));
+      if (!Number.isInteger(amount) || amount === 0)
+        throw new UsageError('--adjust must be a whole number other than 0, e.g. -100 or 500');
+      const reason = need(flags, 'reason');
+      const key = flags.key ?? `dev-credits-${randomUUID()}`;
+      await adjustCredits({
+        userId: user.id,
+        amount,
+        reason,
+        expiresAt: creditExpiry(),
+        idempotencyKey: key,
+        adminId: ADMIN_ID,
+      });
+      return [
+        `adjusted ${amount > 0 ? '+' : ''}${amount} credits (key ${key})`,
+        `balance ${await getBalance(user.id)} credits`,
       ];
     }
     case 'link-code': {

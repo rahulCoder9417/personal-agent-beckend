@@ -7,6 +7,10 @@
 //                   (the 100 sign-up credits are given anyway; `credits` takes them away)
 //   credits         --user <id> --adjust <signed whole number> --reason <text> [--key <k>]
 //                   (the admin adjustment, once per key; e.g. --adjust -100 for an out-of-credits test)
+//   plan            --user <id> --plan free|pro|max
+//                   (moves the user to that plan the way a paid change does: the plan, the LiteLLM
+//                   key's models and budget, Scout's browser switch, the priority. No payment, no
+//                   credits granted)
 //   link-code       --user <id> [--channel telegram|whatsapp|imessage]
 //   claude-login    --user <id>
 //   claude-complete --user <id> --login <loginId> --code <code>   (the code is never printed or logged)
@@ -36,8 +40,12 @@ import {
   toApiPrReview,
 } from '../src/modules/automations/pr-review.ts';
 import { adjustCredits } from '../src/modules/billing/admin.ts';
+import { afterCreditsAdded, afterCreditsRemoved } from '../src/modules/billing/enforce.ts';
+import { firePlanChanged } from '../src/modules/billing/hooks.ts';
 import { getBalance } from '../src/modules/billing/index.ts';
-import { creditExpiry, PLAN_IDS, type PlanId } from '../src/modules/billing/plans.ts';
+import { getKeyRow } from '../src/modules/billing/litellm.ts';
+import { creditExpiry, PLAN_IDS, PLANS, type PlanId } from '../src/modules/billing/plans.ts';
+import { getCurrentSubscription } from '../src/modules/billing/subscriptions.ts';
 import {
   getMessageById,
   listMessages,
@@ -66,6 +74,7 @@ import {
 import { hideSecrets } from '../src/modules/orchestrator/memory-secrets.ts';
 import { sendWebMessage } from '../src/modules/orchestrator/process-message.ts';
 import { getAgentStatus } from '../src/modules/orchestrator/sandbox.ts';
+import { planPriority, Priority } from '../src/modules/orchestrator/vm.ts';
 import { closeDb } from '../src/shared/db/client.ts';
 import { closeRedis } from '../src/shared/redis.ts';
 import { wireModules } from '../src/wiring.ts';
@@ -74,6 +83,7 @@ const ADMIN_ID = 'dev-user-script';
 const USAGE = `usage: node --import tsx scripts/dev-user.ts <command> [flags]
   create          --email <e> --name <n> [--plan free|pro|max] [--credits 2000]
   credits         --user <id> --adjust <signed whole number> --reason <text> [--key <k>]
+  plan            --user <id> --plan free|pro|max
   link-code       --user <id> [--channel telegram|whatsapp|imessage]
   claude-login    --user <id>
   claude-complete --user <id> --login <loginId> --code <code>
@@ -277,6 +287,49 @@ export async function devUser(argv: string[]): Promise<string[]> {
       return [
         `adjusted ${amount > 0 ? '+' : ''}${amount} credits (key ${key})`,
         `balance ${await getBalance(user.id)} credits`,
+      ];
+    }
+    case 'plan': {
+      // The steps a paid change of plan takes (billing/polar-events.ts, subscriptions.ts), with no
+      // payment and no monthly grant: the plan, then the LiteLLM key's models and budget (and the
+      // balance listeners), then Scout's browser switch, a system job the worker runs. The
+      // priority needs no step: each wake and each queued message reads it from the plan.
+      const user = await activeUser(flags);
+      const plan = need(flags, 'plan') as PlanId;
+      if (!PLAN_IDS.includes(plan))
+        throw new UsageError(`--plan must be one of ${PLAN_IDS.join(', ')}`);
+      const changed = await setPlan(user.id, plan);
+      // Free comes from a subscription that ended; a paid plan from a new period or a change.
+      if (plan === 'free') await afterCreditsRemoved(user.id);
+      else await afterCreditsAdded(user.id);
+      if (changed) {
+        await firePlanChanged(user.id);
+        await audit({
+          userId: user.id,
+          actor: 'admin',
+          action: 'plan_changed',
+          summary: `Plan set to ${PLANS[plan].name} by hand (no payment)`,
+          details: { from: user.plan, to: plan, adminId: ADMIN_ID },
+        });
+      }
+      const [key, sub, balance] = await Promise.all([
+        getKeyRow(user.id),
+        getCurrentSubscription(user.id),
+        getBalance(user.id),
+      ]);
+      const budget =
+        key?.maxBudgetMicroUsd == null ? 'no cap' : `$${(key.maxBudgetMicroUsd / 1e6).toFixed(2)}`;
+      return [
+        changed ? `plan ${plan} (was ${user.plan})` : `plan ${plan} (no change)`,
+        key ? `models ${key.models.join(', ')} (budget ${budget})` : 'models (no LiteLLM key yet)',
+        `priority ${Priority[planPriority(plan)].toLowerCase()} (from the next wake and the next message)`,
+        changed
+          ? "browser switch queued: the worker sends it, and it applies from the agent's next start"
+          : 'browser switch not sent (same plan); `browser` sends it',
+        `balance ${balance} credits (no payment, nothing granted)`,
+        ...(sub && !sub.endedAt && sub.plan !== plan
+          ? [`note: a Polar subscription (${sub.plan}, ${sub.status}) can set its plan again`]
+          : []),
       ];
     }
     case 'link-code': {

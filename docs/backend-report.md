@@ -243,7 +243,7 @@ Every error looks the same: an `error` object with a `code`, a `message` and som
 
 ### Rate limits
 
-A rate limit is a cap on how often something may be done. The counters live in Redis and start again when their time window ends. Any request: 600 a minute per IP address (`RATE_LIMIT_PER_IP_PER_MIN`). Web chat messages: 30 a minute per user. New link codes: 10 an hour per user. Tool calls from one user's container: 240 a minute.
+A rate limit is a cap on how often something may be done. The counters live in Redis and start again when their time window ends. Any request: 600 a minute per IP address (`RATE_LIMIT_PER_IP_PER_MIN`). Web chat messages: 30 a minute per user. New web chats: 30 an hour per user. New link codes: 10 an hour per user. Tool calls from one user's container: 240 a minute.
 
 ### Logging without secrets
 
@@ -388,6 +388,31 @@ The setting is `ENABLED_CHANNELS`: a list of channel names with commas between t
 
 With web chat off, sending from the web app is refused with 403 `channel_disabled`. The rest of the web app works. `GET /v1/channels` returns the channels that are on, as `available`. The web app offers only those.
 
+### Starting a new chat
+
+A user can start a new chat with their agent. The agent then does not see what was said before in that chat. The saved memories stay, because they are not part of a chat (section 22). A chat here is one place to talk: web chat is one chat, and each linked Telegram chat is another.
+
+| Where | How the user starts one | What they see |
+|---|---|---|
+| Web chat | The "New chat" button | A "New chat" line in the history, before the first message after it |
+| Telegram | The message `/new`. `/clear` and `/reset` work too | The bot answers: "Started a new chat. I won't use what we talked about before here. Your saved memories stay." |
+
+What happens, in order:
+
+1. The backend keeps a number for each chat, called the chat epoch. It starts at 0.
+2. Starting a new chat adds 1 to that chat's number and records the time. Other chats keep their number.
+3. Every message the agent gets carries its chat's number.
+4. The Bridge, our small program in the container, remembers the last number it saw for each chat. When a message comes with a higher number, the engine starts a fresh conversation for that chat, then answers. A lower number changes nothing.
+5. The recap the backend adds when the engine changes leaves out everything said before the new start (section 22).
+6. The activity log gets "Started a new chat on Telegram" or "Started a new chat in web chat". It never holds the text of a message.
+
+- **No turn and no charge.** Starting a new chat wakes no container and costs no credits. It works at zero credits too.
+- **Web chat:** at most 30 new chats an hour per user. The old messages stay in the history. With the history, the web app gets the time of the latest new chat, and draws its line there.
+- **Telegram:** the command must be the whole message. "/new please" goes to the agent as a normal message. The command and the bot's answer are not saved as chat messages. A Telegram message that arrives twice starts only one new chat and gets one answer.
+- **A chat that is not linked** and sends `/new` only gets the "please link" reply.
+
+Example: Rahul planned a trip to Goa with his agent on Telegram. He sends `/new`, then asks "what is a good laptop?". The agent answers about laptops and says nothing about Goa. It still knows he is vegetarian, because that is a saved memory.
+
 ## 9. One message from start to end
 
 This section follows one message through the whole system. Example: Rahul texts "email Priya the notes" on Telegram.
@@ -403,6 +428,7 @@ This section follows one message through the whole system. Example: Rahul texts 
    - The chat is not linked: the link flow runs.
    - A button was tapped: it is an approval answer.
    - The text is a link code: the reply says the chat is already linked, to this account or to another one. The code is not used (section 7).
+   - The text is `/new`, `/clear` or `/reset` on Telegram: a new chat starts in this chat (section 8).
    - The text is "yes" or "no" and an approval waits in this chat: it is an approval answer.
    - The text is a coupon code: it is redeemed, and the reply shows the new balance.
 7. It downloads any files and turns voice into text.
@@ -428,8 +454,8 @@ Every message is a task when the router has no key (`JEV_API_KEY` is empty), is 
 
 11. The worker makes sure the container exists. Then it asks the vm-manager to wake it, with the plan's priority.
 12. It checks the container against the account: which engine runs, and if the browser is on. The engine is the agent program, Hermes or Claude Code.
-13. It builds the text: what the agent has saved about the user, a short recap if the engine changed, then the message.
-14. It sends the delivery to the vm-manager and keeps the connection open. The delivery carries the event id, the chat it came from, the text and signed links to the files.
+13. It builds the text: what the agent has saved about the user, a short recap if the engine changed, then the message. The recap never reaches back before the chat's latest new start.
+14. It sends the delivery to the vm-manager and keeps the connection open. The delivery carries the event id, the chat it came from, the text and signed links to the files. It also carries the chat's number, the chat epoch (section 8). On Claude Code it also carries the Claude model and the thinking effort the user chose (section 30).
 15. The vm-manager reports back while the turn runs:
     - **Accepted.** The message becomes `processing`. The web app shows the agent as busy.
     - **Working.** A progress line. It is shown live in the web app only.
@@ -1024,6 +1050,7 @@ A memory is one short fact about the user, on one line of at most 300 characters
 - Each engine keeps its own copy of a chat. A new engine would not know what was said. So the platform records which engine last finished a turn in each chat, in the table `chat_engines`.
 - When a turn runs on a different engine, the backend adds a recap after the memory block. The same engine gets no recap.
 - The recap holds the messages this engine has not seen: at most 12 messages and 3,000 characters. It is framed as a record, not as new requests.
+- Nothing from before the chat's latest new start is in the recap (section 8). If the user started a new chat just before the engine changed, there is no recap at all.
 
 ### Limits and refused secrets
 
@@ -1318,7 +1345,7 @@ A plan decides how many credits a user gets each month and what they may use. Th
 
 ### Moving between plans
 
-A plan changes only when Polar's webhook arrives. A webhook is a call that Polar makes to our server (next section). Then this follows:
+A plan changes when Polar's webhook arrives. A webhook is a call that Polar makes to our server (next section). For tests there is one other way, by hand (the last point below). Then this follows:
 
 | Thing | What happens |
 |---|---|
@@ -1336,6 +1363,7 @@ The ways to move:
 - **Free to Pro or Max:** a checkout. The first month's credits arrive with the plan.
 - **Pro to Max, or Max to Pro:** the checkout refuses a second plan while one is set to renew. The user cancels first and then buys the other plan. If the plan is changed on Polar's side instead, it applies at once. The new amount of credits comes with the next paid month.
 - **Paid to Free:** the user cancels. The plan stays until the paid month ends. Then the user is on Free.
+- **By hand, for tests:** the founder's command-line script, run inside the api container, moves a user to any plan. It takes the same steps as a paid change: the plan, the LiteLLM key's models and budget, and the browser switch. The priority follows by itself. There is no payment and no credits are given. The activity log says the plan was set by hand. Example: to test Scout's browser, the founder moves his test user to Max, and the browser is on from the agent's next start.
 
 ## 28. Payments with Polar
 
@@ -1556,6 +1584,27 @@ Where the sign-in lives: only in the user's own volume, the container's disk tha
 - **A lost sign-in:** when a Claude Code turn fails and the sign-in is gone, the connection is cleared. The next turn runs on Hermes. The user is told to reconnect.
 - **No AI charge:** Claude Code does not call LiteLLM, so there is no AI cost to charge.
 - **No quick replies:** every message goes to Claude Code.
+
+### The Claude model and the thinking effort
+
+With a Claude plan, the user also picks which Claude model Claude Code uses, and how hard it thinks. How hard it thinks is called the effort: a higher effort thinks longer before it answers.
+
+| Setting | Choices | "Default" means |
+|---|---|---|
+| Model | Opus 5.5, Sonnet 5.5, Haiku 4.5, Fable 5.1 | Claude Code's own choice |
+| Thinking effort | low, medium, high, xhigh, max | Claude Code's own choice |
+
+1. The user picks them in the web app's AI settings, in the Claude plan's part. They can do this whatever engine runs now.
+2. The backend saves them with the other agent settings. A model that is not in the list is refused.
+3. Every turn that runs on Claude Code carries both to the container. A choice left at "Default" is left out. A turn on Hermes carries neither.
+4. The Bridge starts Claude Code with that model and effort for the turn.
+
+- **No credits change.** The Claude plan pays for the AI, so the choice changes no price.
+- **The plan refuses the model or the effort.** The turn ends with Claude Code's own message. It is not our fault, so there is no refund. The choice is kept, and the user changes it in the settings.
+- **A model taken off the list later** counts as "Default" until the user picks again.
+- The list was checked against recent versions of the Claude Code program: each model name and each effort level is one it takes.
+
+Example: Rahul picks Opus 5.5 and the effort xhigh. His next Telegram message runs on Claude Code with Opus 5.5, thinking at xhigh. He switches to Hermes for a day, and the choice waits for his return.
 
 ### Textcrew AI
 
@@ -1987,6 +2036,7 @@ A failing job is tried 5 times, with waits of 5 seconds, 30 seconds, 2 minutes a
 |---|---|
 | Every endpoint, per visitor address | 600 a minute (`RATE_LIMIT_PER_IP_PER_MIN`) |
 | Messages from the web app, per user | 30 a minute |
+| New web chats, per user | 30 an hour |
 | Link codes, per user | 10 an hour |
 | Link code tries from one chat, linked or not | 10 an hour |
 | Waitlist | 10 an hour per address, 5 an hour per email |
@@ -2061,10 +2111,11 @@ This section lists every table of the backend's database, grouped by the module 
 | channels | `messages` | Every message in and out, with its channel and status |
 | channels | `attachments` | Files uploaded in the web app or received in a chat |
 | orchestrator | `sandbox_tokens` | The hash of each container's token and the user it belongs to |
-| orchestrator | `agent_settings` | The chosen engine, the AI choice, and when Claude was connected |
+| orchestrator | `agent_settings` | The chosen engine, the AI choice, when Claude was connected, and Claude Code's model and thinking effort |
 | orchestrator | `approvals` | Risky actions waiting for a yes or no, with their exact details |
 | orchestrator | `memories` | Short facts about the user that every engine gets |
 | orchestrator | `chat_engines` | Which engine last finished a turn in each chat |
+| orchestrator | `chat_epochs` | Each chat's number (the chat epoch) and when its latest new chat started. No row means 0, never started |
 | integrations | `connections` | A user's connected app accounts and their status |
 | integrations | `user_mcp_servers` | The user's own MCP servers, with the secret encrypted |
 | integrations | `composio_triggers` | Made for app triggers. No code reads or writes it today |
@@ -2092,14 +2143,14 @@ This section says what the web app can do through the api, group by group. Almos
 |---|---|
 | Profile | Read the user's name, plan and credit summary. Change the name and time zone |
 | Channels and linking | See linked chat apps and which channels are on. Get a one-time code to link Telegram. Unlink a chat |
-| Chat and the live stream | Read the chat history, send a message, upload a file up to 10 MB. Keep a live stream open |
+| Chat and the live stream | Read the chat history, with the time of the latest new web chat. Send a message, upload a file up to 10 MB. Start a new web chat. Keep a live stream open |
 | Approvals | List approvals, the waiting ones by default. Approve or reject one |
 | Apps | See the app list with status and plan. Start connecting an app. Disconnect one |
 | MCP servers | List the user's own MCP servers. Add one (Max plan), rename it, switch it on or off, remove it |
 | Own AI keys | See which providers have a key and which one is in use, never the key itself. Set, replace or remove one |
 | Automations | List reminders and automations. Pause, resume or delete one |
 | Pull-request review | List the repositories with review on. Turn review on or off for one |
-| Agent settings and the Claude sign-in | See the container's state and which engine runs. Choose the engine. Start, finish or undo the Claude sign-in |
+| Agent settings and the Claude sign-in | See the container's state and which engine runs. Choose the engine, and Claude Code's model and thinking effort. Start, finish or undo the Claude sign-in |
 | The crew | See the four members, which are available, and the state of Scout's browser |
 | Memory | See what the agent saved about the user. Delete one memory or all. Nothing can be added by hand |
 | Billing | See plans and top-up packs and the current subscription. Open a Polar checkout. Cancel at the period's end |

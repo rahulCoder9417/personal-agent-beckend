@@ -9,15 +9,17 @@ import { devClerkId, devUser, setDevUserPollMs, UsageError } from '../scripts/de
 import { audit } from '../src/modules/admin/audit.ts';
 import { auditLog } from '../src/modules/admin/schema.ts';
 import { linkWithCode } from '../src/modules/auth/links.ts';
-import { getUserByClerkId, setPlan } from '../src/modules/auth/users.ts';
+import { getActiveUser, getUserByClerkId, setPlan } from '../src/modules/auth/users.ts';
 import { setLiteLLMClient } from '../src/modules/billing/litellm.ts';
+import { keyModelsForPlan } from '../src/modules/billing/plans.ts';
+import { creditGrants, payments, subscriptions } from '../src/modules/billing/schema.ts';
 import { messages } from '../src/modules/channels/schema.ts';
-import { closeQueues } from '../src/modules/events/queues.ts';
+import { closeQueues, queue } from '../src/modules/events/queues.ts';
 import { connections } from '../src/modules/integrations/tables.ts';
 import { getApproval } from '../src/modules/orchestrator/approvals.ts';
 import { saveMemory } from '../src/modules/orchestrator/memory.ts';
 import { hideSecrets } from '../src/modules/orchestrator/memory-secrets.ts';
-import { DeliverKind } from '../src/modules/orchestrator/vm.ts';
+import { DeliverKind, Priority } from '../src/modules/orchestrator/vm.ts';
 import { resetConfig } from '../src/shared/config.ts';
 import { db } from '../src/shared/db/client.ts';
 import { AppError } from '../src/shared/errors.ts';
@@ -183,6 +185,9 @@ describe('dev-user script', () => {
       ['credits', '--user', userId, '--adjust', '1.5', '--reason', 'x'],
       ['credits', '--user', userId, '--adjust', 'ten', '--reason', 'x'],
       ['credits', '--user', 'usr_missing', '--adjust', '5', '--reason', 'x'],
+      ['plan', '--user', userId],
+      ['plan', '--user', userId, '--plan', 'gold'],
+      ['plan', '--plan', 'pro'],
     ])
       await expect(devUser(bad), bad.join(' ')).rejects.toBeInstanceOf(UsageError);
   });
@@ -558,5 +563,76 @@ describe('dev-user script: approvals, pull-request review, memory, the browser',
       "switched on: it applies from the agent's next start",
     ]);
     expect((await devUser(['browser', '--user', userId]))[1]).toBe('no change needed');
+  });
+});
+
+describe('dev-user script: plan', () => {
+  it('moves the user the way a paid change does: plan, key, browser, priority; no payment, no grant', async () => {
+    process.env.BROWSER_AVAILABLE = 'true';
+    resetConfig();
+    const litellm = new FakeLiteLLM();
+    setLiteLLMClient(litellm);
+    const userId = await devUserId('free');
+    const keyOf = () => [...litellm.keys.values()].find((k) => k.userId === userId)!;
+    expect(keyOf().models).toEqual(keyModelsForPlan('free'));
+    expect(keyModelsForPlan('max')).not.toEqual(keyModelsForPlan('free'));
+    expect(fake.browser.get(userId)).toBe(false);
+    const grants = () => db().select().from(creditGrants).where(eq(creditGrants.userId, userId));
+    const grantsBefore = await grants();
+
+    const out = await devUser(['plan', '--user', userId, '--plan', 'max']);
+    expect(out).toEqual([
+      'plan max (was free)',
+      `models ${keyModelsForPlan('max').join(', ')} (budget $8.40)`,
+      'priority high (from the next wake and the next message)',
+      "browser switch queued: the worker sends it, and it applies from the agent's next start",
+      'balance 2100 credits (no payment, nothing granted)',
+    ]);
+    expect((await getActiveUser(userId))!.plan).toBe('max');
+    // The LiteLLM key: the plan's models, and the budget still follows the balance.
+    expect(keyOf().models).toEqual(keyModelsForPlan('max'));
+    expect(keyOf().maxBudget).toBe(8.4);
+    // Scout's browser: the system job a paid change queues, run by the worker.
+    await waitFor(async () => fake.browser.get(userId) === true);
+    // No payment, no subscription, no credits.
+    expect(await grants()).toEqual(grantsBefore);
+    expect(await db().select().from(payments).where(eq(payments.userId, userId))).toEqual([]);
+    expect(await db().select().from(subscriptions).where(eq(subscriptions.userId, userId))).toEqual(
+      [],
+    );
+    const log = await db()
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.userId, userId), eq(auditLog.action, 'plan_changed')));
+    expect(log.map((e) => [e.actor, e.summary])).toEqual([
+      ['admin', 'Plan set to Max by hand (no payment)'],
+    ]);
+
+    // The priority follows the plan: first in the inbound queue, high at the wake.
+    const sent = await devUser(['send', '--user', userId, '--text', 'hello']);
+    const [inbound] = await db()
+      .select()
+      .from(messages)
+      .where(eq(messages.id, field(sent, 'sent')));
+    expect((await queue('inbound').getJob(inbound!.eventId!))!.opts.priority).toBe(1);
+    expect(fake.wakePriorities.at(-1)).toEqual({ userId, priority: Priority.HIGH });
+
+    // Back to Free: the cheap model only, the browser off, the priority low.
+    const down = await devUser(['plan', '--user', userId, '--plan', 'free']);
+    expect(down.slice(0, 3)).toEqual([
+      'plan free (was max)',
+      `models ${keyModelsForPlan('free').join(', ')} (budget $8.40)`,
+      'priority low (from the next wake and the next message)',
+    ]);
+    expect(keyOf().models).toEqual(keyModelsForPlan('free'));
+    await waitFor(async () => fake.browser.get(userId) === false);
+
+    // The same plan again changes nothing and queues nothing.
+    const calls = fake.browserCalls.length;
+    const same = await devUser(['plan', '--user', userId, '--plan', 'free']);
+    expect(same[0]).toBe('plan free (no change)');
+    expect(same[3]).toBe('browser switch not sent (same plan); `browser` sends it');
+    await new Promise((r) => setTimeout(r, 200));
+    expect(fake.browserCalls.length).toBe(calls);
   });
 });

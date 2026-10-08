@@ -67,6 +67,8 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
   const created: string[] = [];
   /** Every WakeSandbox call, by user id. */
   const wakes: string[] = [];
+  /** The priority each WakeSandbox call asked for (the plan's: HLD 7.1). */
+  const wakePriorities: Array<{ userId: string; priority: number | undefined }> = [];
   const touches: string[] = [];
   const allowlists: Array<{
     userId: string;
@@ -132,8 +134,9 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
         mcpTokenHash: sha256Hex(token),
       };
     },
-    async wakeSandbox(req: { userId: string }) {
+    async wakeSandbox(req: { userId: string; priority?: number }) {
       wakes.push(req.userId);
+      wakePriorities.push({ userId: req.userId, priority: req.priority });
       if (state.wakeError) throw state.wakeError;
       return { sandbox: sandboxView(req.userId, SandboxState.AWAKE), wasStopped: true };
     },
@@ -245,6 +248,7 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
     deliveries,
     created,
     wakes,
+    wakePriorities,
     touches,
     allowlists,
     state,

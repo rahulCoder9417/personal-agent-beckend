@@ -1678,6 +1678,7 @@ export interface components {
              * @example approval_decided
              * @example coupon_redeemed
              * @example channel_linked
+             * @example channel_unlinked
              * @example web_search
              * @example web_search_refused
              * @example read_page

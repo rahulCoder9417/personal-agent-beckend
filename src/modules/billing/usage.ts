@@ -236,25 +236,40 @@ export async function syncAllUsage(
 /**
  * HLD 7.2: a failed turn caused by us is not charged. Syncs first (so the turn is charged), works
  * out what the turn cost, and gives that back to the grants it came from, together with the
- * credits for app actions and paid tools that ran in the turn. Idempotent per key.
+ * credits for app actions and paid tools that ran in the turn. Idempotent per key: everything is
+ * given back in one transaction, so a run that fails gives nothing and the next one starts over.
+ *
+ * Throws if LiteLLM's spend log can't be read, unless `withoutAiIfUnknown` (the job's last try):
+ * then everything but the AI is given back, once, and `aiSkipped` says so.
  */
 export async function reverseTurn(
   userId: string,
   turn: { startedAt: Date; endedAt: Date; idempotencyKey: string },
-): Promise<{ restored: number }> {
+  opts: { withoutAiIfUnknown?: boolean } = {},
+): Promise<{ restored: number; aiSkipped?: true }> {
   await syncUsageForUser(userId);
   const [keyRow] = await db()
     .select()
     .from(litellmKeys)
     .where(and(eq(litellmKeys.userId, userId), isNull(litellmKeys.revokedAt)));
   let ai = 0;
+  let aiSkipped = false;
   if (keyRow && !routesToOwnKey(keyRow)) {
-    const spend = await litellm().getSpendBetween(
-      decryptSecret(keyRow.keyEncrypted),
-      turn.startedAt,
-      turn.endedAt,
-    );
-    ai = aiCostToCredits(usdToMicro(spend.spend));
+    try {
+      const spend = await litellm().getSpendBetween(
+        decryptSecret(keyRow.keyEncrypted),
+        turn.startedAt,
+        turn.endedAt,
+      );
+      ai = aiCostToCredits(usdToMicro(spend.spend));
+    } catch (err) {
+      if (!opts.withoutAiIfUnknown) throw err;
+      aiSkipped = true;
+      logger().warn(
+        { userId, key: turn.idempotencyKey, err: (err as Error).message },
+        "failed turn refunded without its AI: LiteLLM's spend log could not be read",
+      );
+    }
   }
   const res = await vm().getUsage({
     sinceUnixMs: BigInt(turn.startedAt.getTime()),
@@ -295,7 +310,7 @@ export async function reverseTurn(
     return usage.restored + appActions + paidTools;
   });
   if (restored > 0) await afterCreditsAdded(userId);
-  return { restored };
+  return aiSkipped ? { restored, aiSkipped: true } : { restored };
 }
 
 export async function listUsagePeriods(

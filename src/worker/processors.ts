@@ -1,7 +1,12 @@
 import { handleBackup } from '../modules/admin/backup.ts';
 import { handleHealthCheck } from '../modules/admin/health.ts';
 import { handleClerkEvent } from '../modules/auth/jobs.ts';
-import { handlePolarEvent, handleExpireCredits, handleSyncUsage } from '../modules/billing/jobs.ts';
+import {
+  handleExpireCredits,
+  handlePolarEvent,
+  handleRefundTurn,
+  handleSyncUsage,
+} from '../modules/billing/jobs.ts';
 import {
   handleAutomationTurn,
   handleComposioTrigger,
@@ -53,6 +58,7 @@ export function processors(): Processors {
       'health-check': handleHealthCheck,
       'polar-event': handlePolarEvent,
       'sync-usage': handleSyncUsage,
+      'refund-turn': handleRefundTurn,
       'expire-credits': handleExpireCredits,
     },
   };

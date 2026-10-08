@@ -3,6 +3,7 @@
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import {
+  LiteLLMHttpError,
   setLiteLLMClient,
   type KeyPatch,
   type KeySpend,
@@ -60,6 +61,13 @@ export class FakeLiteLLM implements LiteLLMClient {
   down = false;
   /** Only deleting a model fails. */
   modelDeleteFails = false;
+  /**
+   * Only reading the spend log fails, as it did on the server (LiteLLM answered 500): `'always'`,
+   * or a number for that many reads.
+   */
+  spendLogFailures: number | 'always' = 0;
+  /** Every spend-log read, failed ones too. */
+  spendLogReads = 0;
 
   private check(op: string) {
     if (this.down) throw new Error(`LiteLLM POST /${op} failed: 503`);
@@ -90,7 +98,12 @@ export class FakeLiteLLM implements LiteLLMClient {
     return this.sum(this.get(key), -Infinity, Infinity);
   }
   async getSpendBetween(key: string, start: Date, end: Date): Promise<KeySpend> {
-    this.check('spend/logs');
+    this.check('spend/logs/v2');
+    this.spendLogReads++;
+    if (this.spendLogFailures === 'always' || this.spendLogFailures > 0) {
+      if (this.spendLogFailures !== 'always') this.spendLogFailures--;
+      throw new LiteLLMHttpError(500, 'LiteLLM GET /spend/logs/v2 failed: 500');
+    }
     return this.sum(this.get(key), start.getTime(), end.getTime());
   }
   async saveModel(model: OwnModel) {

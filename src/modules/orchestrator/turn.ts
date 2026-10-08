@@ -3,6 +3,7 @@ import { Code, ConnectError } from '@connectrpc/connect';
 import { config } from '../../shared/config.ts';
 import { logger } from '../../shared/logger.ts';
 import { redis } from '../../shared/redis.ts';
+import { alert } from '../admin/alerts.ts';
 import { audit } from '../admin/audit.ts';
 import { getActiveUser } from '../auth/users.ts';
 import { signedFileUrl } from '../channels/files.ts';
@@ -49,6 +50,7 @@ export interface TurnHooks {
   hasCredits(userId: string): Promise<boolean>;
   route(input: TurnInput): Promise<RouteDecision>;
   afterTurn(userId: string, outcome: TurnOutcome): Promise<void>;
+  /** The turn failed on our side: queue its refund (billing). Quick; never does the refund here. */
   onPlatformFault(
     userId: string,
     turn: { startedAt: Date; endedAt: Date; idempotencyKey: string },
@@ -241,6 +243,27 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
   return outcome;
 }
 
+export const PLATFORM_FAULT_TEXT =
+  "Sorry, something went wrong on our side and I couldn't finish that. You weren't charged for it. Please try again.";
+
+/** Never fails the turn. If even adding the refund job fails, an alert says which turn it was. */
+async function refundFailedTurn(
+  userId: string,
+  turn: { startedAt: Date; endedAt: Date; idempotencyKey: string },
+): Promise<void> {
+  try {
+    await hooks.onPlatformFault(userId, turn);
+  } catch (err) {
+    await alert('Refund of a failed turn not queued', {
+      userId,
+      key: turn.idempotencyKey,
+      startedAt: turn.startedAt.toISOString(),
+      endedAt: turn.endedAt.toISOString(),
+      err: String(err),
+    }).catch(() => {});
+  }
+}
+
 /** Delivers the turn and follows its stream to the end. Null: the stream ended with no result. */
 async function deliverTurn(
   input: TurnInput,
@@ -288,15 +311,18 @@ async function deliverTurn(
         outcome = 'error';
         log.warn({ platformFault: ev.platformFault, message: ev.message }, 'turn error');
         if (ev.platformFault) {
-          await hooks.onPlatformFault(userId, {
-            startedAt,
-            endedAt: new Date(),
-            idempotencyKey: `fault:${input.deliveryId}`,
-          });
+          // The user is told first. The refund is a job of its own (retried, given once): it
+          // never holds back the reply or the message's last state.
+          const endedAt = new Date();
           await queueOutbound({
             userId,
             sessionKey: input.sessionKey,
-            text: "Sorry, something went wrong on our side and I couldn't finish that. You weren't charged for it. Please try again.",
+            text: PLATFORM_FAULT_TEXT,
+          });
+          await refundFailedTurn(userId, {
+            startedAt,
+            endedAt,
+            idempotencyKey: `fault:${input.deliveryId}`,
           });
         } else {
           await queueOutbound({

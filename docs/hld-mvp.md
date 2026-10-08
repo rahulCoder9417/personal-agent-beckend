@@ -2,7 +2,7 @@
 
 This file explains what Textcrew is, what its parts are and how they work together. It is written to be read from top to bottom.
 
-Four files make up the docs:
+Five files make up the docs:
 
 | File | What it holds |
 |---|---|
@@ -10,6 +10,7 @@ Four files make up the docs:
 | `backend-report.md` | Every piece of logic in the backend, explained in words, with no code |
 | `aws-setup.md` | The test server: what was done, the commands, the problems and their fixes |
 | `domain-setup.md` | The domain `textcrew.in`: where it was bought, who answers DNS, each name, and how to add or move one |
+| `engines-proposal.md` | A proposal, not built: adding Codex and other bring-your-own engines, with OpenAI's rules and the decisions to make |
 
 **The pictures** are in GoDraw, in the canvas named **"Textcrew MVP: high-level design"**. It has five pages. Each section below says which page shows it.
 

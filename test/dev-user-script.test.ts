@@ -119,6 +119,47 @@ describe('dev-user script', () => {
     expect(status.join('\n')).toContain('runtime claude_code');
   });
 
+  it('credits: a signed adjustment through the admin path, once per --key, down to zero', async () => {
+    const email = `${randomUUID()}@example.com`;
+    const userId = field(await devUser(['create', '--email', email, '--credits', '0']), 'user');
+    // Only the sign-up credits, which `create` cannot skip.
+    expect(field(await devUser(['status', '--user', userId]), 'balance')).toBe('100');
+
+    const args = [
+      'credits',
+      '--user',
+      userId,
+      '--adjust',
+      '-100',
+      '--reason',
+      'out of credits test',
+    ];
+    const out = await devUser([...args, '--key', 'zero-1']);
+    expect(out).toContain('adjusted -100 credits (key zero-1)');
+    expect(field(out, 'balance')).toBe('0');
+    // The same key again changes nothing; the admin log has one entry.
+    expect(field(await devUser([...args, '--key', 'zero-1']), 'balance')).toBe('0');
+    const logged = await db()
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.userId, userId), eq(auditLog.action, 'credits_adjusted')));
+    expect(logged.map((e) => e.summary)).toEqual(['-100 credits: out of credits test']);
+    // At zero the user is refused like any user out of credits.
+    await expect(devUser(['send', '--user', userId, '--text', 'hello'])).rejects.toMatchObject({
+      code: 'out_of_credits',
+    });
+
+    // Without --key, each run is its own adjustment.
+    const up = await devUser(['credits', '--user', userId, '--adjust', '+25', '--reason', 'back']);
+    expect(field(up, 'balance')).toBe('25');
+    expect(
+      field(
+        await devUser(['credits', '--user', userId, '--adjust', '25', '--reason', 'more']),
+        'balance',
+      ),
+    ).toBe('50');
+  });
+
   it('rejects bad input with a usage error', async () => {
     await expect(devUser(['create'])).rejects.toBeInstanceOf(UsageError);
     await expect(devUser(['status', '--user', 'usr_missing'])).rejects.toBeInstanceOf(UsageError);
@@ -136,6 +177,12 @@ describe('dev-user script', () => {
       ['pr-review', '--user', userId, '--repo', 'acme/api', '--state', 'sometimes'],
       ['memories', '--user', userId, '--clear', 'mem_not_theirs'],
       ['browser'],
+      ['credits', '--user', userId, '--adjust', '-5'],
+      ['credits', '--user', userId, '--reason', 'x'],
+      ['credits', '--user', userId, '--adjust', '0', '--reason', 'x'],
+      ['credits', '--user', userId, '--adjust', '1.5', '--reason', 'x'],
+      ['credits', '--user', userId, '--adjust', 'ten', '--reason', 'x'],
+      ['credits', '--user', 'usr_missing', '--adjust', '5', '--reason', 'x'],
     ])
       await expect(devUser(bad), bad.join(' ')).rejects.toBeInstanceOf(UsageError);
   });

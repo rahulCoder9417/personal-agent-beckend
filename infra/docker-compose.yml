@@ -97,6 +97,9 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # Needed for users' own API keys: the backend adds one model per such user at runtime.
+      # LiteLLM encrypts those keys with LITELLM_MASTER_KEY (no LITELLM_SALT_KEY is set; an empty
+      # one would be used as the key), so never change the master key while own keys are stored.
       STORE_MODEL_IN_DB: 'True'
     ports: ['127.0.0.1:4000:4000']
     volumes: ['./litellm/config.yaml:/app/config.yaml:ro']

@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { auditLog } from '../src/modules/admin/schema.ts';
 import { getBalance } from '../src/modules/billing/credits.ts';
+import { ownModelName } from '../src/modules/billing/litellm.ts';
 import { syncUsageForUser } from '../src/modules/billing/usage.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
 import { setByokKey } from '../src/modules/integrations/byok.ts';
@@ -112,18 +113,25 @@ describe('PATCH /v1/agent/settings { aiPreference }', () => {
 
   it('with Textcrew AI chosen the AI is charged in credits and capped by the balance again', async () => {
     const u = await member(100);
-    await setByokKey(u.id, 'anthropic', 'sk-ant-good-key-1234', null);
+    const saved = await call('/v1/byok/anthropic', {
+      method: 'PUT',
+      token: u.token,
+      body: { apiKey: 'sk-ant-good-key-1234' },
+    });
+    expect(saved.status).toBe(200);
     expect(await ownKeyPaysForAi(u.id)).toBe(true);
+    expect(llm.route(u.id, 'agent-default').provider).toBe('anthropic');
 
     // Own key: the AI part of a sync is free.
-    llm.spend(u.id, 'cheap', 0.04); // would be 10 credits
+    llm.spend(u.id, ownModelName(u.id), 0.04); // would be 10 credits
     vm.add(u.id, 600); // 1 credit of awake time
     expect((await syncUsageForUser(u.id)).charged).toBe(1);
     expect(llm.remainingBudget(u.id)).toBeNull(); // no AI cap on an own key
 
     await choose(u.token, { aiPreference: 'platform' });
     expect(await ownKeyPaysForAi(u.id)).toBe(false);
-    // The budget follows the choice at once: 99 credits of real cost.
+    // The AI goes back to Textcrew's models, and the budget follows: 99 credits of real cost.
+    expect(llm.route(u.id, 'agent-default')).toMatchObject({ provider: 'server', model: 'cheap' });
     expect(llm.remainingBudget(u.id)).toBeCloseTo(99 / 250, 6);
 
     llm.spend(u.id, 'cheap', 0.04); // 10 credits
@@ -132,6 +140,7 @@ describe('PATCH /v1/agent/settings { aiPreference }', () => {
 
     await choose(u.token, { aiPreference: 'auto' });
     expect(await ownKeyPaysForAi(u.id)).toBe(true);
+    expect(llm.route(u.id, 'agent-default').apiKey).toBe('sk-ant-good-key-1234');
     expect(llm.remainingBudget(u.id)).toBeNull();
   });
 

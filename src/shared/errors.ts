@@ -30,6 +30,7 @@ export const unauthorized = (message = 'Missing or invalid session') =>
 export const forbidden = (message = 'Not allowed') => new AppError(403, 'forbidden', message);
 export const notFound = (message = 'Not found') => new AppError(404, 'not_found', message);
 export const conflict = (message: string) => new AppError(409, 'conflict', message);
+export const unavailable = (message: string) => new AppError(503, 'unavailable', message);
 export const planLimit = (message: string, details?: Record<string, unknown>) =>
   new AppError(403, 'plan_limit', message, details);
 const CHANNEL_LABELS: Record<string, string> = {

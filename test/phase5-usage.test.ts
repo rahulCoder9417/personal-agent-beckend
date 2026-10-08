@@ -4,7 +4,7 @@ import { hasCredits } from '../src/modules/billing/balance.ts';
 import { createGrant, getBalance } from '../src/modules/billing/credits.ts';
 import { afterCreditsAdded } from '../src/modules/billing/enforce.ts';
 import { onBalanceDepleted, onCreditsAdded } from '../src/modules/billing/hooks.ts';
-import { refreshBudget } from '../src/modules/billing/litellm.ts';
+import { syncLiteLLMKey } from '../src/modules/billing/litellm.ts';
 import { usagePeriods } from '../src/modules/billing/schema.ts';
 import { reverseTurn, syncAllUsage, syncUsageForUser } from '../src/modules/billing/usage.ts';
 import { setByokKey } from '../src/modules/integrations/byok.ts';
@@ -134,7 +134,7 @@ describe('sync-usage', () => {
   it('bring-your-own-key users: AI is not charged, awake time is, and AI is not capped', async () => {
     const u = await member(100);
     expect(await setByokKey(u.id, 'openrouter', 'sk-or-good-key-1234', null)).not.toBeNull();
-    await refreshBudget(u.id);
+    await syncLiteLLMKey(u.id);
     expect(llm.remainingBudget(u.id)).toBeNull();
     llm.spend(u.id, 'cheap', 1); // $1 of AI on their own key
     vm.add(u.id, 600);

@@ -1,5 +1,4 @@
 // Agent settings + connecting the user's own Claude plan (openapi tag `agent`).
-import { refreshBudgetQuietly } from '../../modules/billing/litellm.ts';
 import {
   getAgentSettings,
   updateAgentSettings,
@@ -33,9 +32,8 @@ export const agentSettingsRoutes = [
 
   route('updateAgentSettings', async (c, { body }) => {
     const userId = c.get('user').id;
+    // What pays for the AI may have changed: billing re-routes it (wired in src/wiring.ts).
     const settings = await updateAgentSettings(userId, body);
-    // What pays for the AI may have changed: the AI budget follows it (HLD 7.5).
-    if (body.aiPreference) await refreshBudgetQuietly(userId);
     return c.json(toAgentSettings(settings), 200);
   }),
 

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ensureLiteLLMKey,
   getLiteLLMKey,
-  refreshBudget,
+  syncLiteLLMKey,
   revokeLiteLLMKey,
 } from '../src/modules/billing/litellm.ts';
 import { users } from '../src/modules/auth/schema.ts';
@@ -50,12 +50,12 @@ describe('agent model alias follows the plan', () => {
   it('Pro/Max map agent-default to the premium model; back on Free, to cheap', async () => {
     const u = await member(100);
     await db().update(users).set({ plan: 'pro' }).where(eq(users.id, u.id));
-    await refreshBudget(u.id);
+    await syncLiteLLMKey(u.id);
     const key = llm.byUser(u.id)!;
     expect(key.models).toEqual(['agent-default', 'cheap', 'claude', 'gpt']);
     expect(key.aliases).toEqual({ 'agent-default': 'claude' });
     await db().update(users).set({ plan: 'free' }).where(eq(users.id, u.id));
-    await refreshBudget(u.id);
+    await syncLiteLLMKey(u.id);
     expect(key.models).toEqual(['agent-default', 'cheap']);
     expect(key.aliases).toEqual({ 'agent-default': 'cheap' });
   });
@@ -85,10 +85,10 @@ describe('bring your own key', () => {
   it("a BYOK user's AI is not capped by credits", async () => {
     const u = await member(100);
     await setByokKey(u.id, 'openai', 'sk-openai-good-key', null);
-    await refreshBudget(u.id);
+    await syncLiteLLMKey(u.id);
     expect(llm.remainingBudget(u.id)).toBeNull();
     await deleteByokKey(u.id, 'openai');
-    await refreshBudget(u.id);
+    await syncLiteLLMKey(u.id);
     expect(llm.remainingBudget(u.id)).toBeCloseTo(0.4, 6);
   });
 });

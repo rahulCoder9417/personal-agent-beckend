@@ -440,6 +440,8 @@ export function installFakeLiteLLM() {
     async getSpendBetween() {
       return { spend: 0, modelSpend: {} };
     },
+    async saveModel() {},
+    async deleteModel() {},
   });
   return { keys };
 }

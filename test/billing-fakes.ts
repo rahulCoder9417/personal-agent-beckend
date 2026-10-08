@@ -7,6 +7,7 @@ import {
   type KeyPatch,
   type KeySpend,
   type LiteLLMClient,
+  type OwnModel,
 } from '../src/modules/billing/litellm.ts';
 import { createGrant } from '../src/modules/billing/credits.ts';
 import { ensureLiteLLMKey } from '../src/modules/billing/litellm.ts';
@@ -47,17 +48,32 @@ interface FakeKey {
   deleted: boolean;
 }
 
+/** The server's own models (infra/litellm/config.yaml), paid with the server's provider keys. */
+export const SERVER_MODELS = ['cheap', 'claude', 'gpt', 'whisper'];
+
 export class FakeLiteLLM implements LiteLLMClient {
   keys = new Map<string, FakeKey>();
+  /** Models added at runtime (own keys): id → what LiteLLM would store. */
+  models = new Map<string, OwnModel>();
   calls: string[] = [];
+  /** LiteLLM unreachable: every call fails. */
+  down = false;
+  /** Only deleting a model fails. */
+  modelDeleteFails = false;
+
+  private check(op: string) {
+    if (this.down) throw new Error(`LiteLLM POST /${op} failed: 503`);
+  }
 
   async generateKey(input: Parameters<LiteLLMClient['generateKey']>[0]) {
+    this.check('key/generate');
     const key = `sk-${randomUUID()}`;
     this.keys.set(key, { ...input, key, logs: [], deleted: false });
     this.calls.push('generate');
     return { key };
   }
   async updateKey(key: string, patch: KeyPatch) {
+    this.check('key/update');
     const k = this.get(key);
     if (patch.models) k.models = patch.models;
     if (patch.aliases) k.aliases = patch.aliases;
@@ -65,14 +81,49 @@ export class FakeLiteLLM implements LiteLLMClient {
     this.calls.push('update');
   }
   async deleteKey(key: string) {
+    this.check('key/delete');
     this.get(key).deleted = true;
     this.calls.push('delete');
   }
   async getKeySpend(key: string): Promise<KeySpend> {
+    this.check('key/info');
     return this.sum(this.get(key), -Infinity, Infinity);
   }
   async getSpendBetween(key: string, start: Date, end: Date): Promise<KeySpend> {
+    this.check('spend/logs');
     return this.sum(this.get(key), start.getTime(), end.getTime());
+  }
+  async saveModel(model: OwnModel) {
+    this.check('model/new');
+    this.models.set(model.id, { ...model });
+    this.calls.push('saveModel');
+  }
+  async deleteModel(id: string) {
+    this.check('model/delete');
+    if (this.modelDeleteFails) throw new Error('LiteLLM POST /model/delete failed: 500');
+    this.models.delete(id);
+    this.calls.push('deleteModel');
+  }
+
+  /**
+   * What LiteLLM does with a call from the user's key for `name` (as checked on 1.104.2): the
+   * key's alias applies, the result must be in the key's models, then it goes to a runtime model
+   * (with the key that model holds) or to a server model (with the server's provider key).
+   */
+  route(userId: string, name: string): { provider: string; model: string; apiKey: string } {
+    const k = this.byUser(userId);
+    if (!k) throw new Error('401: no key');
+    const target = k.aliases[name] ?? name;
+    const allowed = k.models.length === 0 || k.models.includes(target);
+    if (!allowed) throw new Error(`403: model ${name} not allowed for this key`);
+    const own = this.models.get(target);
+    if (own) {
+      const [provider, ...rest] = own.model.split('/');
+      return { provider: provider!, model: rest.join('/'), apiKey: own.apiKey };
+    }
+    if (SERVER_MODELS.includes(target))
+      return { provider: 'server', model: target, apiKey: 'SERVER-PROVIDER-KEY' };
+    throw new Error(`400: invalid model name ${target}`);
   }
 
   private sum(k: FakeKey, from: number, to: number): KeySpend {

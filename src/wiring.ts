@@ -24,6 +24,7 @@ import {
   planLimits,
   redeemFromChat,
   reverseTurn,
+  switchAiRoutingQuietly,
   syncUsageForUser,
 } from './modules/billing/index.ts';
 import { queueOutbound, setBlockedHandler } from './modules/channels/outbound.ts';
@@ -31,13 +32,14 @@ import { wireChannels } from './modules/channels/register.ts';
 import { publish } from './modules/channels/stream.ts';
 import { parseSessionKey } from './modules/channels/types.ts';
 import { activeConnections, deleteUserConnections } from './modules/integrations/apps.ts';
+import { deleteUserByokKeys } from './modules/integrations/byok.ts';
 import { setInboundPriority } from './modules/events/intake.ts';
 import { deleteUserMcpServers, sandboxMcpConfig } from './modules/integrations/mcp-servers.ts';
 import { handleApprovalReply } from './modules/orchestrator/approvals.ts';
 import { queueBrowserSync, setBrowserPlanCheck } from './modules/orchestrator/browser.ts';
 import { setLifecycleHooks } from './modules/orchestrator/lifecycle.ts';
 import { setInboundHooks } from './modules/orchestrator/process-message.ts';
-import { getAgentSettings } from './modules/orchestrator/agent-settings.ts';
+import { getAgentSettings, onAiSourceChanged } from './modules/orchestrator/agent-settings.ts';
 import {
   routeTurn,
   setRoutingAppsProvider,
@@ -73,6 +75,9 @@ export function wireModules(): void {
     (await activeConnections(userId)).map((c) => ({ slug: c.catalog.slug, name: c.catalog.name })),
   );
   setRoutingKeyProvider(async (userId) => getLiteLLMKey(userId).catch(() => null));
+  // The AI choice or the Claude plan changed: settle usage, then point the user's LiteLLM key at
+  // what pays now (their own key, or the plan). Saving or deleting a key does this in its route.
+  onAiSourceChanged((userId) => switchAiRoutingQuietly(userId));
 
   // Bring your own AI: no AI source (AI_ACCESS_MODE=own_only) → "connect your AI", no wake.
   // A Claude plan answers everything itself: no Jev, no platform-model quick replies.
@@ -166,6 +171,7 @@ export function wireModules(): void {
     },
     offboard: async (userId) => {
       await offboardBilling(userId);
+      await deleteUserByokKeys(userId); // after billing removed LiteLLM's copy
       await deleteUserConnections(userId);
       await deleteUserMcpServers(userId);
       await deleteUserAutomations(userId);

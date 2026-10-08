@@ -2,6 +2,7 @@ import {
   createCipheriv,
   createDecipheriv,
   createHash,
+  createHmac,
   randomBytes,
   randomInt,
   timingSafeEqual,
@@ -10,6 +11,11 @@ import { config } from './config.ts';
 
 export function sha256Hex(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+/** HMAC-SHA256 under the encryption key: a stable name that can't be guessed from `value`. */
+export function keyedHashHex(value: string): string {
+  return createHmac('sha256', key()).update(value).digest('hex');
 }
 
 export function safeEqual(a: string, b: string): boolean {

@@ -87,17 +87,41 @@ export async function getAgentSettings(userId: string): Promise<AgentSettingsVie
 }
 
 /**
- * Does the user's own API key pay for the AI? Billing asks this: with a key the AI isn't charged
- * in credits (HLD 7.1), unless the user chose Textcrew AI while it is on offer.
+ * Should the user's own API key pay for the AI? True exactly when the rule above picks `own_key`:
+ * not when they chose Textcrew AI while it is on offer, and not while a Claude plan is in charge.
+ * Billing then points their LiteLLM key at the own key (HLD 7.1).
  */
 export async function ownKeyPaysForAi(userId: string, tx: Tx = db()): Promise<boolean> {
   if (!(await hasByokKey(userId, tx))) return false;
-  if (config().AI_ACCESS_MODE !== 'platform') return true;
-  const [row] = await tx
-    .select({ aiPreference: agentSettings.aiPreference })
-    .from(agentSettings)
-    .where(eq(agentSettings.userId, userId));
-  return row?.aiPreference !== 'platform';
+  const [row] = await tx.select().from(agentSettings).where(eq(agentSettings.userId, userId));
+  const mode = config().AI_ACCESS_MODE;
+  return (
+    decideAccess({
+      runtime: row?.runtime ?? 'hermes',
+      claudeConnected: Boolean(row?.claudeConnectedAt),
+      hasOwnKey: true,
+      mode,
+      preferPlatform: row?.aiPreference === 'platform',
+    }).aiAccess === 'own_key'
+  );
+}
+
+/** Listeners for "what pays for this user's AI may have changed" (billing re-routes the AI). */
+type AiSourceListener = (userId: string) => Promise<void>;
+const aiSourceListeners: AiSourceListener[] = [];
+
+export function onAiSourceChanged(fn: AiSourceListener): void {
+  aiSourceListeners.push(fn);
+}
+
+async function aiSourceChanged(userId: string): Promise<void> {
+  for (const fn of aiSourceListeners) {
+    try {
+      await fn(userId);
+    } catch (err) {
+      logger().warn({ userId, err: (err as Error).message }, 'AI source listener failed');
+    }
+  }
 }
 
 async function saveSettings(
@@ -204,6 +228,7 @@ export async function updateAgentSettings(
   }
   const settings = await getAgentSettings(userId);
   await pushRuntime(userId, settings);
+  if (runtime || preference) await aiSourceChanged(userId);
   return settings;
 }
 
@@ -219,6 +244,7 @@ export async function markClaudeConnected(userId: string): Promise<AgentSettings
   });
   const settings = await getAgentSettings(userId);
   await pushRuntime(userId, settings);
+  await aiSourceChanged(userId);
   return settings;
 }
 
@@ -227,6 +253,7 @@ export async function markClaudeDisconnected(userId: string): Promise<AgentSetti
   await saveSettings(userId, { runtime: 'hermes', claudeConnectedAt: null });
   const settings = await getAgentSettings(userId);
   await pushRuntime(userId, settings);
+  await aiSourceChanged(userId);
   return settings;
 }
 

@@ -360,11 +360,11 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - Scout's browser: opening pages, clicking, reading. Browser time is charged.
 - Containers stopping after idle time and waking again.
 - The agent's tool paths being closed from the internet.
+- A real sign-up through Clerk in the web app at `https://app.textcrew.in`: the account, the 100 sign-up credits and the container were made.
+- Connecting a Claude plan in the web app, and a web chat message answered by the agent.
 
 ### Built, never run for real
 
-- The web app against the real backend. It is deployed at `https://app.textcrew.in` and reaches the backend, but nobody has signed in yet.
-- A real sign-up through Clerk.
 - Textcrew AI on the Hermes engine. There is no working model key.
 - Payments through Polar.
 - Pull-request review, and Byte pushing code through our git gateway.
@@ -420,8 +420,8 @@ The domain is `textcrew.in`. In the steps below, `yourdomain` stands for it.
 | A. Domain | Done. `api.textcrew.in` points at the AWS server. `docs/domain-setup.md` explains the DNS |
 | B. Web app on Vercel | Done. It is live at `https://app.textcrew.in`, as the Vercel project `textcrew-app`. A push to GitHub does not deploy by itself yet; Claude deploys it from the terminal |
 | C. Server | Done. It answers at `https://api.textcrew.in`, Textcrew AI is off, and 8 containers may be awake at once |
-| D. Outside services | The Telegram bot is moved. **Waiting on you:** the webhook address at Clerk and at Composio (steps 10 and 11) |
-| E. First real run | Waiting on you: sign up at `https://app.textcrew.in` (step 13 onward) |
+| D. Outside services | The Telegram bot is moved. Clerk's webhook is on the new address: the first sign-up arrived through it. Composio's webhook address is yours to change (step 11); not confirmed yet |
+| E. First real run | Started. A real sign-up made the account, gave 100 credits and created the container. The Claude plan was connected in the web app, and the first web chat message was answered in about 5 seconds. Left: link Telegram, connect an app, and the same on a phone (steps 15 to 18) |
 | F to H | Not started |
 
 ### Part A. Your domain

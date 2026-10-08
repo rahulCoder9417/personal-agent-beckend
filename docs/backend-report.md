@@ -2263,9 +2263,9 @@ The backend has 457 automated tests. They use a real database and real queues, a
 | The user's own API key | No. Built; there is no provider key with balance to test it |
 | Payments through Polar, coupons | No |
 | Pull-request review; Byte through the git gateway | No |
-| Reminders and automations | No |
+| Reminders and automations | Yes: a one-time reminder, a daily automation, the 15-minute limit |
 | Web search through Brave | No. The key answers a direct call |
-| The page reader on Claude Code | No |
+| The page reader on Claude Code | Yes |
 | Voice, images and documents | No |
 | The nightly backup and a restore | No |
 | More than one user awake at once | No |

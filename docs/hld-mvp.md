@@ -372,6 +372,8 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - The agent's tool paths being closed from the internet.
 - A real sign-up through Clerk in the web app at `https://app.textcrew.in`: the account, the 100 sign-up credits and the container were made.
 - Connecting a Claude plan in the web app, and a web chat message answered by the agent.
+- Tested on 8 October (on a test account): a reminder that fires, a daily automation created and cancelled, the 15-minute limit, a free GitHub read, an approval approved (an email sent) and one rejected, memory saved, recalled and forgotten without naming the tool, a password refused as a memory, Scout reading pages on Claude Code, the browser, out of credits, "connect your own AI first" for a user with none, the idle stop (3 minutes 11 seconds), and the isolation test (5 of 5).
+- A request Anthropic refuses gets a clear reply, is not counted as our fault and is not kept in the chat's history.
 
 ### Built, never run for real
 
@@ -385,6 +387,8 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 ### Not finished
 
 - Gaps of this kind are listed in `backend-report.md`, section 43.
+- **A chat that got a refusal before 8 October stays stuck.** Its saved Claude Code session holds the refused request, so every new message in it is refused. Only the test account is affected. New refusals and failures are no longer kept, so this cannot start again.
+- **A failed turn leaves a copy of the chat's session on the user's disk.** Small, but it adds up over time.
 
 ### Found on the browser's first test (5 October), and what was done on 8 October
 

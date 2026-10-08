@@ -24,6 +24,7 @@ import {
 import { queueOutbound, queueRawOutbound } from '../channels/outbound.ts';
 import { sessionKeyFor, type InboundMessage } from '../channels/types.ts';
 import { IGNORED } from '../../worker/ignored.ts';
+import { isNewChatCommand, NEW_CHAT_TEXT, startNewChat } from './chats.ts';
 import { runTurn, userHasCredits } from './turn.ts';
 
 /** Hooks other modules plug into the inbound path (approvals, coupons in chat). */
@@ -85,6 +86,13 @@ export async function handleProcessMessage(job: Job): Promise<unknown> {
   const code = normalizeLinkCode(bare);
   if (code && bare.length < 20) {
     await replyToCodeInLinkedChat(msg, userId, code, eventId);
+    return null;
+  }
+  // `/new` (or `/clear`, `/reset`) in Telegram: a new chat starts there. No turn, no credits. The
+  // command and the answer are not saved as messages, so they are not part of either chat.
+  if (msg.channel === 'telegram' && isNewChatCommand(msg.text)) {
+    await startNewChat(userId, sessionKey, { channel: msg.channel, key: eventId });
+    await queueRawOutbound(msg.channel, msg.externalChatId, NEW_CHAT_TEXT, eventId);
     return null;
   }
   if (await inboundHooks.handleButton(userId, msg, eventId)) return null;

@@ -99,6 +99,13 @@
       "when": 1791476194733,
       "tag": "0013_claude_model_effort",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1791476415254,
+      "tag": "0014_chat_epochs",
+      "breakpoints": true
     }
   ]
 }

@@ -4,23 +4,43 @@ import { streamSSE } from 'hono/streaming';
 import { listMessages, toApiMessage } from '../../modules/channels/messages.ts';
 import { attachments } from '../../modules/channels/schema.ts';
 import { subscribe } from '../../modules/channels/stream.ts';
+import { chatEpoch, startNewWebChat } from '../../modules/orchestrator/chats.ts';
 import { sendWebMessage } from '../../modules/orchestrator/process-message.ts';
 import { config } from '../../shared/config.ts';
 import { db } from '../../shared/db/client.ts';
 import { AppError, badRequest } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
+import { iso } from '../presenters.ts';
 import { route } from '../router.ts';
 
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 export const chatRoutes = [
   route('listMessages', async (c, { query }) => {
-    const page = await listMessages(c.get('user').id, {
-      limit: query.limit ?? 30,
-      ...(query.cursor ? { cursor: query.cursor } : {}),
-      ...(query.channel ? { channel: query.channel } : {}),
-    });
-    return c.json({ items: page.items.map(toApiMessage), nextCursor: page.nextCursor }, 200);
+    const userId = c.get('user').id;
+    const [page, web] = await Promise.all([
+      listMessages(userId, {
+        limit: query.limit ?? 30,
+        ...(query.cursor ? { cursor: query.cursor } : {}),
+        ...(query.channel ? { channel: query.channel } : {}),
+      }),
+      chatEpoch(userId, 'web'),
+    ]);
+    // The web app draws a "New chat" divider before the first web message after this time.
+    return c.json(
+      {
+        items: page.items.map(toApiMessage),
+        nextCursor: page.nextCursor,
+        chatStartedAt: iso(web.startedAt),
+      },
+      200,
+    );
+  }),
+
+  // A new web chat: the agent starts a fresh conversation there; saved memories stay.
+  route('startNewChat', async (c) => {
+    const startedAt = await startNewWebChat(c.get('user').id);
+    return c.json({ chatStartedAt: startedAt.toISOString() }, 200);
   }),
 
   // The checks, the save and the job are one function, shared with the dev script's `send`.

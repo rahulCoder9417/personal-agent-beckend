@@ -175,6 +175,11 @@ paths:
       operationId: listMessages
       tags: [chat]
       summary: Chat history (all channels, newest first)
+      description: |
+        `chatStartedAt` is when the web chat's latest new chat started (`POST /v1/chats/new`), or
+        null if the user never started one. The list itself is unchanged: older messages are still
+        returned. The web app draws a "New chat" divider before the first web message after that
+        time.
       parameters:
         - $ref: "#/components/parameters/Cursor"
         - $ref: "#/components/parameters/Limit"
@@ -189,12 +194,16 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items, nextCursor]
+                required: [items, nextCursor, chatStartedAt]
                 properties:
                   items:
                     type: array
                     items: { $ref: "#/components/schemas/Message" }
                   nextCursor: { type: [string, "null"] }
+                  chatStartedAt:
+                    type: [string, "null"]
+                    format: date-time
+                    description: When the web chat's latest new chat started. Null if never.
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
     post:
@@ -232,6 +241,31 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "402": { $ref: "#/components/responses/OutOfCredits" }
         "403": { $ref: "#/components/responses/ChannelDisabled" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/chats/new:
+    post:
+      operationId: startNewChat
+      tags: [chat]
+      summary: Start a new web chat
+      description: |
+        The agent starts a fresh conversation in web chat: it no longer sees what was said there
+        before. Saved memories (`/v1/memories`) are kept; they are not part of a chat. No body.
+        Applies to web chat only (a Telegram chat starts a new one with the message `/new`).
+        No turn runs and no credits are charged. Rate limited to 30 an hour per user.
+
+        The answer's `chatStartedAt` is the same value `GET /v1/messages` returns from now on.
+      responses:
+        "200":
+          description: Started
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [chatStartedAt]
+                properties:
+                  chatStartedAt: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "429": { $ref: "#/components/responses/RateLimited" }
 
   /v1/attachments:
@@ -2356,7 +2390,7 @@ components:
       properties:
         id: { type: string }
         actor: { type: string, enum: [user, agent, admin, system] }
-        action: { type: string, examples: [run_app_action, send_message, approval_requested, approval_decided, coupon_redeemed, channel_linked, channel_unlinked, web_search, web_search_refused, read_page, read_page_refused, crew_progress, browser_enabled, browser_disabled, pr_review_requested, remember, recall, forget, memory_refused, memory_deleted, memories_cleared] }
+        action: { type: string, examples: [run_app_action, send_message, approval_requested, approval_decided, coupon_redeemed, channel_linked, channel_unlinked, web_search, web_search_refused, read_page, read_page_refused, crew_progress, browser_enabled, browser_disabled, pr_review_requested, remember, recall, forget, memory_refused, memory_deleted, memories_cleared, chat_started] }
         summary: { type: string }
         crew:
           type: [string, "null"]

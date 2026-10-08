@@ -109,7 +109,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Chat history (all channels, newest first) */
+        /**
+         * Chat history (all channels, newest first)
+         * @description `chatStartedAt` is when the web chat's latest new chat started (`POST /v1/chats/new`), or
+         *     null if the user never started one. The list itself is unchanged: older messages are still
+         *     returned. The web app draws a "New chat" divider before the first web message after that
+         *     time.
+         */
         get: operations["listMessages"];
         put?: never;
         /**
@@ -119,6 +125,31 @@ export interface paths {
          *     off (`web` is not in `available`, see `GET /v1/channels`).
          */
         post: operations["sendMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/chats/new": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a new web chat
+         * @description The agent starts a fresh conversation in web chat: it no longer sees what was said there
+         *     before. Saved memories (`/v1/memories`) are kept; they are not part of a chat. No body.
+         *     Applies to web chat only (a Telegram chat starts a new one with the message `/new`).
+         *     No turn runs and no credits are charged. Rate limited to 30 an hour per user.
+         *
+         *     The answer's `chatStartedAt` is the same value `GET /v1/messages` returns from now on.
+         */
+        post: operations["startNewChat"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1753,6 +1784,7 @@ export interface components {
              * @example memory_refused
              * @example memory_deleted
              * @example memories_cleared
+             * @example chat_started
              */
             action: string;
             summary: string;
@@ -2072,6 +2104,11 @@ export interface operations {
                     "application/json": {
                         items: components["schemas"]["Message"][];
                         nextCursor: string | null;
+                        /**
+                         * Format: date-time
+                         * @description When the web chat's latest new chat started. Null if never.
+                         */
+                        chatStartedAt: string | null;
                     };
                 };
             };
@@ -2113,6 +2150,31 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             402: components["responses"]["OutOfCredits"];
             403: components["responses"]["ChannelDisabled"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    startNewChat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Started */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: date-time */
+                        chatStartedAt: string;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
             429: components["responses"]["RateLimited"];
         };
     };

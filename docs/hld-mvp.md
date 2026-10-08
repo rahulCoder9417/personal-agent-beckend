@@ -2,13 +2,14 @@
 
 This file explains what Textcrew is, what its parts are and how they work together. It is written to be read from top to bottom.
 
-Three files make up the docs:
+Four files make up the docs:
 
 | File | What it holds |
 |---|---|
 | `hld-mvp.md` (this file) | The product, the parts, the main flows, the decisions, and the steps to launch the beta |
 | `backend-report.md` | Every piece of logic in the backend, explained in words, with no code |
 | `aws-setup.md` | The test server: what was done, the commands, the problems and their fixes |
+| `domain-setup.md` | The domain `textcrew.in`: where it was bought, who answers DNS, each name, and how to add or move one |
 
 **The pictures** are in GoDraw, in the canvas named **"Textcrew MVP: high-level design"**. It has five pages. Each section below says which page shows it.
 
@@ -362,7 +363,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 
 ### Built, never run for real
 
-- The web app against the real backend. It has only run in demo mode.
+- The web app against the real backend. It is deployed at `https://app.textcrew.in` and reaches the backend, but nobody has signed in yet.
 - A real sign-up through Clerk.
 - Textcrew AI on the Hermes engine. There is no working model key.
 - Payments through Polar.
@@ -410,7 +411,18 @@ Picture: GoDraw, page 5, "The path to the beta".
 
 The beta runs on the AWS server and on Vercel. Beta users connect their own Claude plan, so payments and a model key are not needed yet. After the beta is tested, the server moves to the VPS.
 
-In the steps below, `yourdomain` stands for the domain you choose.
+The domain is `textcrew.in`. In the steps below, `yourdomain` stands for it.
+
+**Progress on 8 October 2026**
+
+| Part | State |
+|---|---|
+| A. Domain | Done. `api.textcrew.in` points at the AWS server. `docs/domain-setup.md` explains the DNS |
+| B. Web app on Vercel | Done. It is live at `https://app.textcrew.in`, as the Vercel project `textcrew-app`. A push to GitHub does not deploy by itself yet; Claude deploys it from the terminal |
+| C. Server | Done. It answers at `https://api.textcrew.in`, Textcrew AI is off, and 8 containers may be awake at once |
+| D. Outside services | The Telegram bot is moved. **Waiting on you:** the webhook address at Clerk and at Composio (steps 10 and 11) |
+| E. First real run | Waiting on you: sign up at `https://app.textcrew.in` (step 13 onward) |
+| F to H | Not started |
 
 ### Part A. Your domain
 

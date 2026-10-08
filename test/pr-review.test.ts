@@ -533,6 +533,9 @@ describe('a pull request is opened or gets new commits', () => {
     await waitFor(async () => reviewTurns(u.id).length === 2);
     await waitFor(async () => tg.sent.filter((m) => m.text.startsWith('Verdict')).length === 2);
     expect(reviewTurns(u.id)[1]!.text).toContain(`head commit ${SHA_B}`);
+    // A review is marked done when its turn has fully ended (after the usage sync), a moment
+    // after the verdict is sent.
+    await waitFor(async () => (await reviewsOf(u.id)).every((r) => r.status === 'done'));
     expect((await reviewsOf(u.id)).map((r) => [r.prNumber, r.headSha, r.status]).sort()).toEqual([
       [12, SHA_A, 'done'],
       [12, SHA_B, 'done'],

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Restore test (HLD Phase 8 / deployment.md: monthly): restores the latest nightly backup into a
+# Restore test (docs/backend-report.md, "Operations": monthly): restores the latest nightly backup into a
 # scratch database, checks the key tables, verifies every volume archive, then cleans up.
 # Needs pg_restore/psql and the PG* env vars (PGHOST, PGUSER, PGPASSWORD) of the server.
 set -euo pipefail

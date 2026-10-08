@@ -5,7 +5,7 @@ The backend of the Personal Agent MVP: one TypeScript codebase, run as two proce
 - **api** (`src/api/main.ts`): Hono. Webhooks, REST + SSE for the web app, Platform MCP at `/mcp`, Bull Board at `/admin/queues`.
 - **worker** (`src/worker/main.ts`): BullMQ. Runs every job (4 queues: `inbound`, `outbound`, `scheduled`, `system`).
 
-Design: `docs/mvp-hld.md`. **System design (planned vs built, gRPC, container lifecycle): `docs/system-design.md`.** **System guide (requirements, architecture, tech stack, what was built, how it works): `docs/build-report.md`.** REST contract: `openapi/openapi.yaml`. gRPC contract: `../vm-manager/proto/vm/v1/vm.proto`.
+Design: `docs/hld-mvp.md` (the product, the parts, the main flows, the decisions, the beta launch steps). **How the backend works, in words: `docs/backend-report.md`.** The test server: `docs/aws-setup.md`. REST contract: `openapi/openapi.yaml`. gRPC contract: `../vm-manager/proto/vm/v1/vm.proto`.
 
 ## Run locally
 
@@ -48,4 +48,4 @@ test/           done-when tests per phase
 
 ## Not verified on the dev machine
 
-Docker isn't installed on it, so `docker compose up`, the egress test (`infra/tests/egress-test.sh`), real containers, the restore test and the load test have not been run. See `docs/security-checklist.md`.
+Docker isn't installed on it, so `docker compose up`, the egress test (`infra/tests/egress-test.sh`), real containers, the restore test and the load test have not been run. See `docs/backend-report.md`, "The security rules" and "What has run for real".

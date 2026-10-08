@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Deploy the latest `main` of the repos on the server (docs/deployment.md, "Deploying").
+# Deploy the latest `main` of the repos on the server (docs/aws-setup.md, section 8).
 #
 # Layout (ROOT, default /opt/textcrew):
 #   beckend/      git clone of personal-agent-beckend   (its .env holds the api/worker secrets)
 #   vm-manager/   git clone of personal-agent-vm-manager
 #   user-frontend-web/   optional: git clone of personal-agent-web-frontend (the `web` service);
-#                        needs web.env, clerk_secret and WEB_DOMAIN (docs/deployment.md)
+#                        needs web.env, clerk_secret and WEB_DOMAIN (the web app's README, "Running on the server")
 #   compose.env   compose variables (Postgres password, LiteLLM master key, VM_INTERNAL_SECRET, domain…)
 #   backups/      BACKUP_HOST_DIR
 #

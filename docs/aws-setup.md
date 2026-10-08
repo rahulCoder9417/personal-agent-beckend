@@ -2,7 +2,7 @@
 
 This is the record of everything set up in AWS for the test deployment of the Personal Agent platform, on 2026-09-30 and 2026-10-01. It covers the AWS account, the server, what is installed on it, how code gets there, what broke and how it was fixed, and what is still open.
 
-`docs/deployment.md` describes the intended production hosting. This file describes the test server that exists today.
+This file describes the test server that exists today. The plan for the later move to a VPS is in `docs/hld-mvp.md`, section 13.
 
 No secret values are written here. Secrets live in two files on the server (`compose.env` and `beckend/.env`) and in the gitignored `.env.deploy` on the laptop.
 

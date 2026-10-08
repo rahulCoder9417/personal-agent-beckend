@@ -6,14 +6,14 @@ This repo holds the **backend**: one TypeScript codebase run as **two processes*
 
 ## Read before doing anything
 
-1. **`docs/mvp-hld.md`** is the design and the build plan. Section 0 explains how things work; section 9 lists the build phases.
+1. **`docs/hld-mvp.md`** is the design: the product, the parts, the main flows, the decisions, where things stand (section 12) and the beta launch steps (section 13). **`docs/backend-report.md`** explains every piece of the backend's logic in words; its last section says where an old "HLD x.y" reference in a code comment lives now. The founder reads these two, so keep them in plain words, in the style of `docs/aws-setup.md`.
 2. **`openapi/openapi.yaml`** is the REST + webhook contract. It is the source of truth.
 3. **`../vm-manager/proto/vm/v1/vm.proto`** is the gRPC contract with the vm-manager. We only consume it (generated client in `proto-gen/`).
-4. `docs/deployment.md` covers hosting only; it's not needed for writing code.
+4. `docs/aws-setup.md` covers the test server only; it's not needed for writing code.
 
 ## How we work
 
-- **One phase at a time** (HLD section 9). Build only what the current phase asks for. Don't start the next phase until every "done when…" check passes.
+- **One piece of work at a time.** The build phases of the original design are all built. Build only what the current piece of work asks for, and don't start the next one until its "done when…" checks pass.
 - **Plan first:** for any non-trivial change, write a short plan (files, steps, tests) and wait for approval before coding.
 - **Contracts first:** a new or changed endpoint means editing `openapi/openapi.yaml` first, then regenerating types, then writing code. Never change the gRPC proto from this repo.
 - **Tests with every change.** Write the "done when…" checks as automated tests. Run lint, type-check and tests before saying a task is done, and report real results (paste failures; never claim a pass you didn't see).
@@ -33,7 +33,7 @@ Node 22 · TypeScript (strict) · Hono (api) · BullMQ + Redis (jobs) · Postgre
 - **Never talk to Docker or user containers directly.** Always go through the vm-manager's gRPC (`WakeSandbox`, `Deliver`, …).
 - **Platform MCP forces the user id from the container token.** Never trust a user id sent by an agent.
 - **Composio, provider and database keys never go into a container.**
-- **Credits:** grants + an append-only ledger. Never store or edit a single "balance" number. Charges use idempotency keys. Follow HLD section 7 exactly, especially the coupon rules in 7.7.
+- **Credits:** grants + an append-only ledger. Never store or edit a single "balance" number. Charges use idempotency keys. Follow `docs/backend-report.md` Part C ("Credits: the idea" to "Coupon codes") exactly, especially the coupon rules.
 - **Security:** secrets encrypted in the DB; tokens and codes stored as hashes; no secrets in logs; every user query filtered by user id.
 
 ## Conventions

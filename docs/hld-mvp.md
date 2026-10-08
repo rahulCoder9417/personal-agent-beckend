@@ -229,12 +229,21 @@ Picture: GoDraw, page 3, "The life of a container".
 | Way | Who pays for the AI | Engine | State |
 |---|---|---|---|
 | **The user's Claude plan** | The user, to Anthropic | Claude Code | Works on the test server |
-| **The user's own API key** | The user, to the model provider | Hermes | Not finished: the key is saved and checked, but the engine does not use it yet |
+| **The user's own API key** | The user, to the model provider | Hermes | Built, never run for real: no key with balance to test it |
 | **Textcrew AI** | The user, to us, in credits | Hermes | Built, never run for real: no working model key |
 
 With the first two, the AI part costs no credits. Awake time and app actions still do.
 
-So today only the Claude plan works from start to end. A server setting can turn Textcrew AI off; then a user who has not connected their own AI is told to connect it first. This is the proposed setting for the beta, because there is no working model key. It is your choice.
+How the user's own key is used:
+
+1. The user saves the key in the web app. We check it with the provider and store it encrypted.
+2. LiteLLM, the AI gateway on our server, gets a copy that only this user's agent can use.
+3. Every model call from the user's agent now goes to their provider, with their key. The key never enters the container.
+4. If the user deletes the key, chooses Textcrew AI, or connects a Claude plan, the agent stops using the key and LiteLLM's copy is deleted.
+
+Example: Asha saves an OpenAI key and names no model. Her agent now runs on `gpt-6.1-sol`, billed by OpenAI to her. She pays us credits only for awake time and app actions.
+
+So today only the Claude plan has worked from start to end. A server setting can turn Textcrew AI off; then a user who has not connected their own AI is told to connect it first. This is the proposed setting for the beta, because there is no working model key. It is your choice.
 
 ---
 
@@ -366,6 +375,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 ### Built, never run for real
 
 - Textcrew AI on the Hermes engine. There is no working model key.
+- The user's own API key. Every model call goes to the user's provider with their key, through LiteLLM on our server. There is no key with balance to test it.
 - Payments through Polar.
 - Pull-request review, and Byte pushing code through our git gateway.
 - A memory saved on one engine and used on the other.
@@ -373,8 +383,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 
 ### Not finished
 
-- **The user's own API key.** The key is saved and checked, but the engine does not use it. Until this is built, a user needs a Claude plan.
-- More gaps of this kind are listed in `backend-report.md`, section 43.
+- Gaps of this kind are listed in `backend-report.md`, section 43.
 
 ### Found on the last test, waiting for your decision
 

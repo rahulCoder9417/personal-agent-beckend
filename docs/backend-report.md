@@ -10,7 +10,7 @@ Read `hld-mvp.md` first. It gives the short version and explains the words. This
 | **What it does** | Receives messages, runs each user's agent through the vm-manager, charges credits, sends replies |
 | **What it does not do** | It does not run the AI itself. Each user's agent runs in its own container |
 | **Where it runs** | On the AWS test server (see `aws-setup.md`) |
-| **How it is tested** | 436 automated tests, with a real database and real queues |
+| **How it is tested** | 457 automated tests, with a real database and real queues |
 | **What is in this report** | The backend, and the parts it depends on: the vm-manager, the container, the proxy |
 
 ## How to read this report
@@ -1163,10 +1163,10 @@ The usage sync is a job in the worker, the process that does the slow work. It r
 2. It finds the period to charge: from the end of the last charged period until now.
 3. It asks the vm-manager, the service that starts and stops containers, for two numbers. One is the seconds the container was awake in that period. The other is the seconds the browser was in use.
 4. It asks LiteLLM for the total cost on the user's key so far. It subtracts the total it saved last time. The rest is the new AI cost.
-5. If there is no new cost and there are no seconds, it stops and writes nothing. The next sync covers a longer period.
-6. It turns the numbers into credits (next sub-section). If the user's own key pays for the AI, the AI credits are 0.
+5. If there is no new cost and there are no seconds, it writes nothing and goes to step 8. The next sync covers a longer period.
+6. It turns the numbers into credits (next sub-section). If the user's LiteLLM key pointed at their own API key, the AI credits are 0.
 7. It writes one row in `usage_periods` for this period, makes one charge for the total, and saves LiteLLM's new total. These three are one database transaction: all of them are saved, or none.
-8. It updates the user's AI budget in LiteLLM. If the balance is zero or below, it pauses the user's automations. An automation is a job the agent runs on a schedule or on an event.
+8. It brings the user's LiteLLM key up to date: the budget, and whether it points at the user's own key (section 30). This also fixes a switch that failed earlier. If the balance is zero or below, it pauses the user's automations. An automation is a job the agent runs on a schedule or on an event.
 
 ### Whole blocks and carried-over remainders
 
@@ -1465,19 +1465,47 @@ A user chooses who provides the AI for their agent. This section explains the th
 
 | Way | Engine | Who pays for the AI | AI charged in credits |
 |---|---|---|---|
-| The user's own API key | Hermes | Meant to be the user, on their key | No |
+| The user's own API key | Hermes | The user, on their key | No |
 | The user's Claude plan | Claude Code | The user, on their Claude plan | No |
 | Textcrew AI | Hermes | Textcrew; the user pays in credits | Yes, real cost × 2.5 |
 
 ### The user's own API key
 
-1. The user pastes a key in the web app. Three providers are accepted: Anthropic, OpenAI and OpenRouter. One key per provider.
+1. The user pastes a key in the web app. Three providers are accepted: Anthropic, OpenAI and OpenRouter. One key per provider. The user may also name a model. Without one, the provider's default is used (table below).
 2. The api makes a small test call to the provider with the key.
 3. If the provider refuses the key, the user gets an error and nothing is saved.
 4. Otherwise the key is saved encrypted. Only its last 4 characters are ever shown.
-5. From now on the user's AI is not charged in credits. The AI budget on their LiteLLM key is removed while the balance is above zero.
+5. The api charges the usage so far, as it ran. Then it switches the user's AI to the key in LiteLLM, the AI gateway on our server (next part).
+6. If the switch fails, the key is taken out again. The user gets an error that says the key was not saved, and tries again.
+7. From now on the user's AI is not charged in credits. Awake time and app actions still are.
 
-How it is used through LiteLLM: it is not used yet. The saved key is not passed to LiteLLM. Hermes still calls models through the user's LiteLLM key, on the provider keys the server holds. So for now Textcrew's provider account pays for this user's AI, and the user pays no credits for it.
+How the key is used through LiteLLM:
+
+- LiteLLM gets one extra model for this user. That model holds the user's key. LiteLLM stores the key encrypted and never shows it.
+- The user's LiteLLM key may call only that model. The fixed name the container asks for means that model. So does the name the quick replies use.
+- So every model call goes to the user's provider, with the user's key. A call to one of our models is refused, so our provider keys are never used for this user.
+- The container still holds only its LiteLLM key. The user's provider key never enters it.
+- The AI budget is removed while the balance is above zero. At zero it is closed, as for everyone, because awake time is still paid in credits.
+- The extra model's name does not show whose it is.
+
+Example: Asha saves an Anthropic key and names no model. LiteLLM gets a model that calls `claude-sonnet-5-5` with her key. Her agent asks for the fixed name as always, and the call goes to Anthropic on her key.
+
+| Provider | Default model |
+|---|---|
+| Anthropic | `claude-sonnet-5-5` |
+| OpenAI | `gpt-6.1-sol` |
+| OpenRouter | `anthropic/claude-sonnet-5.5` |
+
+Each default is the provider's current mid-priced model that can use tools. They were checked on 8 October 2026. OpenAI's newest models take tool calls only through OpenAI's newer interface; LiteLLM switches to it on its own.
+
+- **Several keys.** The key saved last pays. Deleting it hands over to the other one.
+- **When the key stops paying.** The user deletes the key, chooses Textcrew AI, or connects a Claude plan that takes over. The usage so far is charged as it ran. Then the LiteLLM key goes back to the plan's models and budget, and the model that holds the user's key is deleted from LiteLLM.
+- **Charging follows what really ran.** A period is free of AI credits only if the LiteLLM key pointed at the user's own key.
+- **Deleting while LiteLLM is down.** The key is not removed and stays in use. The user gets an error and tries again. If only the last step fails, deleting LiteLLM's copy, the key is no longer used and the next 5-minute sync deletes the copy.
+- **A change of AI choice while LiteLLM is down.** The choice is saved, and the switch happens at the next 5-minute sync. Until then the web app shows the key that is really in use.
+- **Deleting the account** deletes LiteLLM's copy and the saved keys.
+- **One server rule.** LiteLLM encrypts the stored keys with its master key. If `LITELLM_MASTER_KEY` changes later, those keys can no longer be read, and these users' turns fail.
+- **Not run for real yet.** It was checked against a real LiteLLM of the same version, with a stand-in for the provider. No call has gone to a real provider, because there is no key with balance.
 
 ### The user's Claude plan
 
@@ -1505,7 +1533,7 @@ Where the sign-in lives: only in the user's own volume, the container's disk tha
 - **One key per user.** At sign-up each user gets their own key in LiteLLM. It is stored encrypted. It is the only AI key their container gets. The provider keys stay on the server.
 - **Models by plan.** LiteLLM offers three chat models, named cheap, claude and gpt. The container always asks for one fixed name. The user's key decides what that name means: the cheap model on Free, the premium model (claude) on Pro and Max. A Free key may call only the cheap model. A Pro or Max key may call all three.
 - **The budget follows the balance.** LiteLLM compares a key's budget with all the key ever spent. So the budget is set to: spent so far, plus the balance ÷ 250 in dollars. Example: the key has spent $3.10 and the balance is 500 credits. 500 credits buy $2.00 of real cost. The budget is $5.10. At zero the budget equals what was spent, and no further call passes.
-- **The budget is set again** after every sync, and when credits are added or removed. It is also set again when an own key is saved or deleted, and when the AI choice changes.
+- **The budget is set again** after every sync, and when credits are added or removed. It is also set again when an own key is saved or deleted, when the AI choice changes, and when a Claude plan is connected or goes.
 - **A provider key is needed.** Textcrew AI works only if LiteLLM holds a provider key that can pay. Without one these turns fail.
 
 ### Switching Textcrew AI off for the whole server
@@ -2019,7 +2047,7 @@ This section lists every table of the backend's database, grouped by the module 
 | billing | `credit_grants` | Each batch of credits: source, amount, what is left, expiry |
 | billing | `credit_ledger` | Every change to credits. Rows are only added, never changed |
 | billing | `usage_periods` | One row per charged period: AI cost, awake time, browser time, credits |
-| billing | `litellm_keys` | Each user's gateway key, encrypted, and the spend seen so far |
+| billing | `litellm_keys` | Each user's gateway key, encrypted, the spend seen so far, and the LiteLLM model that holds their own API key, if any |
 | billing | `coupons` | Coupon campaigns: credits, limits, expiry |
 | billing | `coupon_codes` | The codes of a campaign, stored as hashes |
 | billing | `coupon_redemptions` | Who redeemed which campaign, once per user |
@@ -2039,7 +2067,7 @@ This section says what the web app can do through the api, group by group. Almos
 | Approvals | List approvals, the waiting ones by default. Approve or reject one |
 | Apps | See the app list with status and plan. Start connecting an app. Disconnect one |
 | MCP servers | List the user's own MCP servers. Add one (Max plan), rename it, switch it on or off, remove it |
-| Own AI keys | See which providers have a key, never the key itself. Set, replace or remove one |
+| Own AI keys | See which providers have a key and which one is in use, never the key itself. Set, replace or remove one |
 | Automations | List reminders and automations. Pause, resume or delete one |
 | Pull-request review | List the repositories with review on. Turn review on or off for one |
 | Agent settings and the Claude sign-in | See the container's state and which engine runs. Choose the engine. Start, finish or undo the Claude sign-in |
@@ -2159,7 +2187,8 @@ On Hermes, the page reader opens only an address already seen for that user. On 
 
 These were found by reading the code while this report was written. Each is described in its own section too.
 
-- **The user's own API key is saved but not used.** The engine still calls models on the server's own provider keys, and the user is charged no AI credits. So this way of bringing AI does not work yet (section 30).
+- **The user's own API key has not run against a real provider.** It is built: every model call of the user goes to their provider with their key, through LiteLLM. It was checked only with a stand-in provider, because there is no key with balance (section 30).
+- **LiteLLM no longer reports a key's spend per model** (checked on version 1.104.2). So on Pro and Max all Textcrew AI counts as "other models", and credits with the "cheap model only" mark never pay for it, even on the cheap model (sections 23 and 25).
 - **When the server is full, the user is told nothing.** The job tries 5 times over about 13 minutes, then fails with an alert (section 33).
 - **Users' files are not copied off the server by the nightly backup.** The upload command gets only the database dump. Old file archives are also never cleaned up (section 37).
 - **Coupon credits last 30 days when the admin gives no length,** not 90 (section 29).
@@ -2177,10 +2206,11 @@ These were found by reading the code while this report was written. Each is desc
 - Backups stay on the same disk as the data until an outside store is set.
 - With no alert channel set, failures are only in the logs.
 - A saved memory cannot be checked against what the user really said. A planted "fact" stays until the user sees and deletes it.
+- Any LiteLLM key can list the names of the models in LiteLLM and the provider model each one calls. With own keys, that shows that some user uses a given model, under a name that does not say who. The keys themselves are never shown.
 
 ## 44. What has run for real
 
-The backend has 436 automated tests. They use a real database and real queues, and stand-ins for outside services. "Run for real" below means it ran on the AWS test server against the real outside service.
+The backend has 457 automated tests. They use a real database and real queues, and stand-ins for outside services. "Run for real" below means it ran on the AWS test server against the real outside service.
 
 | Area | Run for real |
 |---|---|
@@ -2198,7 +2228,7 @@ The backend has 436 automated tests. They use a real database and real queues, a
 | A real sign-up through Clerk | Yes |
 | The web app against this backend | Partly: sign-up, connecting a Claude plan and web chat. Not yet: apps, billing, the other screens |
 | Textcrew AI on the Hermes engine | No. There is no working model key |
-| The user's own API key | Not finished. The key is saved, but the engine does not use it |
+| The user's own API key | No. Built; there is no provider key with balance to test it |
 | Payments through Polar, coupons | No |
 | Pull-request review; Byte through the git gateway | No |
 | Reminders and automations | No |

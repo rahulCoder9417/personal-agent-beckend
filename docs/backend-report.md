@@ -173,7 +173,7 @@ The api only adds jobs, and the worker runs them. This keeps the api fast. It sa
 | inbound | User messages, approval answers, fired automations, app events | 20 |
 | outbound | Replies to send, delivery receipts | 20 |
 | scheduled | Timers of reminders and automations | 5 |
-| system | Sign-up, account deletion, payments, usage sync, cleanup, backup | 5 |
+| system | Sign-up, account deletion, payments, usage sync, refunds of failed turns, cleanup, backup | 5 |
 
 There are four so slow work never blocks fast work. A long agent turn in inbound does not hold back a reply in outbound. Some system jobs repeat on their own. Usage sync and the health check run every 5 minutes. Credit expiry and approval expiry run every hour. Cleanup and backup run once a day.
 
@@ -434,7 +434,7 @@ Every message is a task when the router has no key (`JEV_API_KEY` is empty), is 
     - **Accepted.** The message becomes `processing`. The web app shows the agent as busy.
     - **Working.** A progress line. It is shown live in the web app only.
     - **Done.** The message becomes `delivered`.
-    - **Error on our side.** The turn's charge is reversed. Rahul is told he was not charged.
+    - **Error on our side.** Rahul is told at once that he was not charged, and the message becomes `failed`. A separate refund job gives the turn's credits back about 30 seconds later (section 25).
     - **Other error.** Rahul gets "I couldn't finish that" with the reason.
 16. In the container, the agent does the work. It calls the tool server at `/mcp` to use Gmail.
 17. The Bridge is our small program in the container. It sends the final answer through the tool server's send tool. The tool saves the reply and adds an outbound job.
@@ -451,7 +451,7 @@ A web message skips the webhook. The web app calls `POST /v1/messages`. The api 
 ### What can go wrong
 
 - **The server is full, or the vm-manager cannot be reached.** The job fails and is retried with the usual waits.
-- **The connection ends with no result.** The job is retried. The container remembers the event id, so the turn does not run twice.
+- **The connection ends with no result.** The job is retried. If the agent had not yet taken the message, it is delivered again. The container remembers the event id, so the turn does not run twice. If the agent had taken it, the retry stops and the user gets nothing (section 43).
 - **The turn runs too long.** The container cuts it off at 15 minutes.
 - **The Claude sign-in stopped working.** The account goes back to the standard agent, and the user is told.
 
@@ -1220,16 +1220,28 @@ Any grant can pay for an app action, also a marked one. A web search is charged 
 ### When a turn fails because of us
 
 1. The container reports the failure as a fault of the platform, for example a crash or a timeout.
-2. The worker runs a sync first, so the turn's usage is charged.
-3. It works out what the turn cost: AI from LiteLLM's log for the turn's time, awake and browser time from the vm-manager.
-4. It gives that back to the grants it came from, and never more than was charged. It also gives back the app-action and paid-tool credits charged during the turn.
-5. The user is told: "Sorry, something went wrong on our side and I couldn't finish that. You weren't charged for it. Please try again."
+2. The worker tells the user at once: "Sorry, something went wrong on our side and I couldn't finish that. You weren't charged for it. Please try again." The message is marked `failed`. Neither step waits for the refund.
+3. The worker adds a refund job, `refund-turn`, to the system queue. There is one job per turn: its id is built from the event. It runs 30 seconds later, so LiteLLM has written the turn's calls to its log by then.
+4. The job runs a sync first, so the turn's usage is charged.
+5. It works out what the turn cost. AI comes from LiteLLM's spend log for the turn's time. Awake and browser time come from the vm-manager.
+6. It gives that back to the grants it came from, and never more than was charged. It also gives back the app-action and paid-tool credits charged during the turn. All of it is one database transaction with idempotency keys, so it is given once, however often the job runs.
+7. If a step fails, nothing is given and the job is tried again: 5 tries over about 13 minutes. On the last try, if LiteLLM still cannot say what the AI cost, the job gives back everything else. The AI is then not refunded, and the log says so. If the last try fails anyway, an alert is raised.
+
+Example: Rahul's turn on Textcrew AI fails as our fault after 2 minutes. He gets the apology right away. During the turn the agent saved an email draft, an app action of 1 credit. Half a minute later the job finds $0.02 of AI in the log, which is 5 credits. It gives back the 6 credits. If the job runs again, it gives nothing more.
 
 A failure that is not our fault is not refunded. Examples: the user's Claude plan reached its limit, or the agent hit its own step limit.
+
+### How the turn's AI cost is read
+
+LiteLLM keeps one row per model call, with the key, the time and the cost. It writes these rows in batches, every 10 to 15 seconds. The job asks `/spend/logs/v2` for the rows of the user's key in the turn's time. LiteLLM stores a key only as its SHA-256, so the job sends that, never the key. The times are sent to the second, rounded outward. The job then keeps only the rows inside the turn, to the millisecond, and adds up their cost.
+
+The older `/spend/logs` is not used. It takes dates only, and it answers 500 to a time of day. It is also marked as replaced. Asking it with full times was why a refund failed on the test server on 8 October 2026. That turn's user got no reply and no refund.
 
 ### What can go wrong
 
 - **The vm-manager or LiteLLM does not answer during a sync, or the worker crashes in the middle.** Nothing is written for that user. The next sync covers the longer period. Other users are not affected.
+- **LiteLLM's spend log cannot be read when a failed turn is refunded.** The user has already been told. The refund job is tried again. On its last try it gives back everything except the AI.
+- **The refund job cannot even be added**, for example because Redis is down. The user is still told, and the message still ends. An alert names the turn, so it can be refunded by hand.
 - **The budget update in LiteLLM fails.** It is logged. The next sync sets it.
 - **The charge for an app action fails after the action ran.** The action stays done and is not charged. The error is logged. The action is not run again, so it cannot happen twice.
 
@@ -2205,6 +2217,9 @@ On Hermes, the page reader opens only an address already seen for that user. On 
 These were found by reading the code while this report was written. Each is described in its own section too.
 
 - **The user's own API key has not run against a real provider.** It is built: every model call of the user goes to their provider with their key, through LiteLLM. It was checked only with a stand-in provider, because there is no key with balance (section 30).
+- **The AI of a failed turn's last seconds may stay charged.** LiteLLM writes a key's total in batches, every 10 to 15 seconds. The sync right after the turn can miss the newest cost. A later sync charges it, in a period that starts after the turn. The refund gives back only what was charged in periods that overlap the turn, so that part is not given back. This was not seen on the server: no AI goes through LiteLLM there yet (section 25).
+- **When LiteLLM cannot say what a failed turn's AI cost on any of 5 tries, the AI is not refunded,** although the user was told they were not charged. Awake time, browser time, app actions and paid tools are still given back (section 25).
+- **A turn that breaks after the agent took the message is not run again.** The message is then `processing`. A retried job sees that it is no longer `queued` and stops, and the event is marked `done`. So the user gets no reply, and the message stays `processing`. This is what made the failed refund of 8 October silent (sections 9 and 25).
 - **LiteLLM no longer reports a key's spend per model** (checked on version 1.104.2). So on Pro and Max all Textcrew AI counts as "other models", and credits with the "cheap model only" mark never pay for it, even on the cheap model (sections 23 and 25).
 - **When the server is full, the user is told nothing.** The job tries 5 times over about 13 minutes, then fails with an alert (section 33).
 - **Users' files are not copied off the server by the nightly backup.** The upload command gets only the database dump. Old file archives are also never cleaned up (section 37).

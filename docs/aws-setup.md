@@ -32,7 +32,7 @@ No secret values are written here. Secrets live in two files on the server (`com
 |---|---|
 | **Where** | AWS, Mumbai (`ap-south-1`), one EC2 server |
 | **Server** | `m7i-flex.large`: 2 vCPU, 7.6 GB RAM, 30 GB disk, Ubuntu 24.04 |
-| **Address** | Fixed IP `3.111.132.222`, reached as `https://3-111-132-222.sslip.io` |
+| **Address** | Fixed IP `3.111.132.222`, reached as `https://api.textcrew.in` since 2026-10-08. Before that it was `https://3-111-132-222.sslip.io`, which no longer answers |
 | **What runs** | The whole platform in Docker Compose: api, worker, vm-manager, Postgres, Redis, LiteLLM, Caddy, the egress proxy, and one sandboxed container per user |
 | **Code source** | GitHub `main` of both repos, pulled with read-only deploy keys |
 | **Deploy** | One command on the server: `/opt/textcrew/deploy.sh` |
@@ -176,6 +176,7 @@ Everything is under `/opt/textcrew`, owned by the `ubuntu` user.
 - **Set:** the database and Redis URLs, `PUBLIC_API_URL` and `WEB_APP_URL` (both `https://3-111-132-222.sslip.io`), the encryption key, `CLERK_SECRET_KEY`, the vm-manager URL and shared secret, the LiteLLM URL, master key and model names, the Telegram bot token, bot name and webhook secret, `COMPOSIO_API_KEY` and `COMPOSIO_AUTH_CONFIGS`, `METRICS_TOKEN`, `NODE_ENV=production`, `TRUST_PROXY=true`, `AI_ACCESS_MODE=platform`.
 - **Empty:** the model provider keys (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`), `COMPOSIO_WEBHOOK_SECRET`, `CLERK_WEBHOOK_SECRET`, `CLERK_JWT_KEY`, everything for WhatsApp, Sendblue, Jev and Polar, `BACKUP_UPLOAD_CMD`, `ALERT_WEBHOOK_URL`.
 - **Changed on 2026-10-05:** `CLERK_WEBHOOK_SECRET`, `COMPOSIO_WEBHOOK_SECRET` and `BRAVE_SEARCH_API_KEY` are set (supplied by you that day; the laptop's copies are in `.env.deploy` and in a local `.env`), and `BROWSER_AVAILABLE=true` was added once the agent image with the browser was deployed. `beckend/.env.bak` on the server is the file as it was before. Still empty: the three model provider keys (the MiniMax key you supplied has no balance and nothing reads it), `CLERK_JWT_KEY`, Polar, `ALERT_WEBHOOK_URL`. `WEB_APP_URL` and `CLERK_AUTHORIZED_PARTIES` still name the server itself; they wait for the web app's Vercel address.
+- **Changed on 2026-10-08, for the beta:** in `compose.env`, `API_DOMAIN=api.textcrew.in` and `AWAKE_CAP=8`. In `beckend/.env`, `PUBLIC_API_URL=https://api.textcrew.in`, `WEB_APP_URL` and `CLERK_AUTHORIZED_PARTIES` are `https://app.textcrew.in` (the web app on Vercel), and `AI_ACCESS_MODE=own_only`, so a user who has not connected their own AI is told to connect it. The files as they were before are `compose.env.bak-2026-10-08` and `beckend/.env.bak-2026-10-08`.
 
 **SSH on the server** (`~/.ssh/`): two deploy keys, `deploy_beckend` and `deploy_vmm`, and a config with two host aliases, `gh-beckend` and `gh-vmm`, that point at `github.com` with the matching key.
 
@@ -189,7 +190,7 @@ Started with `./dc --profile app up -d`. All long-running services restart on th
 
 | Service | Image | Job |
 |---|---|---|
-| `caddy` | `caddy:2` | The only public entry. Gets the Let's Encrypt certificate for `3-111-132-222.sslip.io` and forwards to the api |
+| `caddy` | `caddy:2` | The only public entry. Gets the Let's Encrypt certificate for `api.textcrew.in` and forwards to the api |
 | `api` | built from `beckend/infra/Dockerfile` | REST, webhooks, the Platform MCP (`/mcp`) and the git gateway (`/git`) |
 | `worker` | same image as the api | Runs the BullMQ jobs: messages, replies, schedules, backups |
 | `vm-manager` | built from `vm-manager/` | Creates, wakes and stops the user containers. The only service with the Docker socket |
@@ -204,7 +205,7 @@ Started with `./dc --profile app up -d`. All long-running services restart on th
 
 **Checks that passed on the server:**
 
-- `https://3-111-132-222.sslip.io/healthz` returns `{"status":"ok"}` with a real Let's Encrypt certificate.
+- `https://api.textcrew.in/healthz` (first `https://3-111-132-222.sslip.io/healthz`) returns `{"status":"ok"}` with a real Let's Encrypt certificate.
 - The egress test, 5 of 5: no direct internet from a container, no direct LiteLLM, the proxy refuses a domain that isn't allowed, and allows LiteLLM.
 - gVisor works: a test container reports the kernel `4.19.0-gvisor`.
 - vm-manager integration tests against real Docker and gVisor: idle stop and wake with memory kept, the awake cap, and egress only through the allowlist all pass. One test fails as expected: a Hermes turn with no platform model key (section 14).
@@ -241,7 +242,7 @@ There is no web app yet, so the test user was made with `scripts/dev-user.ts`, r
 | | |
 |---|---|
 | **User** | `usr_01m3sk0g2wwgm7wj60822scjtp`, `rahul.test@textcrew.dev`, plan `max`, 2,100 credits (100 sign-up + 2,000 granted for testing) |
-| **Telegram** | Bot `@TestingtexBot`. Webhook set to `https://3-111-132-222.sslip.io/webhooks/telegram` with a secret token. Linked to your Telegram with a one-time link code |
+| **Telegram** | Bot `@TestingtexBot`. Webhook set to `https://api.textcrew.in/webhooks/telegram` with a secret token (moved there on 2026-10-08). Linked to your Telegram with a one-time link code |
 | **AI** | Your Claude plan, through Claude Code in the container. You opened the sign-in link, approved it, and gave back the code. The sign-in is stored only in the user's own volume |
 | **Composio** | GitHub (`ac_b8PkSZuqwhjX`) and Gmail (`ac_eWrMykXPOfRE`) auth configs. You approved both connect links. Both are `active` |
 | **Clerk** | Test keys are set. Not used by the Telegram flow |
@@ -372,7 +373,7 @@ aws ec2 authorize-security-group-ingress --group-id sg-0a41006d88aefe928 --proto
 - **No web app, no Polar,** and no WhatsApp or iMessage.
 - **Leftovers on the server:** `/opt/textcrew/old/`, `/opt/textcrew/it.sh`, and a few LiteLLM test keys with a $1 budget.
 - **Disk is 63% full** (18 of 29 GB on 2026-10-05, with the 2.78 GB agent image). Image rebuilds add to it; prune the Docker build cache when it grows. A user whose container has the browser adds about 0.5 GB to their volume, because Hermes downloads its own tools there (the vm-manager's build report, section 9), and there is no `/data` quota.
-- **The domain** is still `sslip.io`. Moving to `textcrew.in` means a DNS record, `API_DOMAIN` in `compose.env`, `PUBLIC_API_URL` in `beckend/.env`, and setting the Telegram webhook again.
+- **The domain** moved from `sslip.io` to `api.textcrew.in` on 2026-10-08 (`docs/domain-setup.md` explains the DNS). The webhooks at Clerk and Composio must name the new address; that edit is yours.
 - **No automatic deploy.** A push to `main` needs `deploy.sh` to be run by hand.
 
 ---
@@ -407,3 +408,6 @@ All times UTC.
 | 11:28–11:34 | The browser's self-check passed inside the user's container; three turns in which Scout used the browser; browser time charged (1 credit at 33 seconds) |
 | 11:30–11:46 | The lead refuses to use the browser itself; the platform's `remember` works when named, but the lead prefers Claude Code's own memory; idle stop after 3 min 58 s; a second start downloads nothing again |
 | 12:05 | Server stopped (`sudo shutdown -h now`), at your request |
+| 2026-10-08 about 12:45 | Server started from CloudShell. DNS record `api.textcrew.in` created at Vercel |
+| 12:57 | Deploy passed on the new address: Caddy got the certificate for `api.textcrew.in`, the awake limit is 8, Textcrew AI is off. The Telegram webhook was moved. A test turn answered in 11 seconds |
+| about 13:00 | The web app went live on Vercel at `https://app.textcrew.in` (project `textcrew-app`) |

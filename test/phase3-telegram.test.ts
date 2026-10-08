@@ -1,10 +1,12 @@
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import type { Worker } from 'bullmq';
-import { channelLinks } from '../src/modules/auth/schema.ts';
+import type { Job, Worker } from 'bullmq';
+import { channelLinks, linkCodes } from '../src/modules/auth/schema.ts';
 import { messages } from '../src/modules/channels/schema.ts';
 import { events } from '../src/modules/events/schema.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
+import { handleProcessMessage } from '../src/modules/orchestrator/process-message.ts';
+import { sha256Hex } from '../src/shared/crypto.ts';
 import { db } from '../src/shared/db/client.ts';
 import { wireModules } from '../src/wiring.ts';
 import { processors } from '../src/worker/processors.ts';
@@ -57,6 +59,26 @@ async function linkTelegram(token: string, chatId: number) {
 }
 
 const chat = () => Math.floor(Math.random() * 1e9);
+
+async function newCode(token: string) {
+  return expectContract<{ code: string }>(
+    'createLinkCode',
+    await call('/v1/channels/link-codes', { method: 'POST', token, body: { channel: 'telegram' } }),
+    201,
+  );
+}
+
+/** What the bot sent to this chat after the "Linked" message. */
+const repliesTo = (chatId: number) =>
+  tg.sent.filter((m) => m.chatId === String(chatId) && !m.text.startsWith('✅ Linked'));
+
+async function codeUnused(code: string): Promise<boolean> {
+  const [row] = await db()
+    .select()
+    .from(linkCodes)
+    .where(eq(linkCodes.codeHash, sha256Hex(code)));
+  return Boolean(row && row.usedAt === null);
+}
 
 describe('Phase 3: Telegram end to end', () => {
   it('rejects a webhook with the wrong secret', async () => {
@@ -206,7 +228,7 @@ describe('Phase 3: Telegram end to end', () => {
     expect(res.status).toBe(401);
   });
 
-  it('unlink removes the link; the chat then gets the link message again', async () => {
+  it('unlink removes the link, records it in the activity log; the chat then gets the link message again', async () => {
     const user = await chatUser();
     const chatId = chat();
     await linkTelegram(user.token, chatId);
@@ -221,10 +243,105 @@ describe('Phase 3: Telegram end to end', () => {
       await call(`/v1/channels/${link!.id}`, { method: 'DELETE', token: user.token }),
       404,
     );
+    // The activity log records it like the link: the same name, never the chat id.
+    const activity = await expectContract<{
+      items: Array<{ actor: string; action: string; summary: string }>;
+    }>('listActivity', await call('/v1/activity', { token: user.token }), 200);
+    const linked = activity.items.filter((a) => a.action === 'channel_linked');
+    const unlinked = activity.items.filter((a) => a.action === 'channel_unlinked');
+    expect(linked).toHaveLength(1);
+    expect(unlinked).toEqual([
+      expect.objectContaining({ actor: 'user', summary: 'Unlinked telegram @someone' }),
+    ]);
+    expect(linked[0]!.summary).toBe('Linked telegram @someone');
+    expect(JSON.stringify(unlinked)).not.toContain(String(chatId));
     await sendTelegram(telegramUpdate(chatId, 'still there?'));
     await waitFor(async () =>
       tg.sent.find((m) => m.chatId === String(chatId) && m.text.includes("isn't linked")),
     );
+  });
+
+  it('a code of the same account from a linked chat: one true reply, the code is kept, the event is done', async () => {
+    const user = await chatUser();
+    const chatId = chat();
+    await linkTelegram(user.token, chatId);
+    const lc = await newCode(user.token);
+    const update = telegramUpdate(chatId, lc.code);
+    await sendTelegram(update);
+    const reply = await waitFor(async () => repliesTo(chatId)[0]);
+    expect(reply.text).toBe('This chat is already linked to your account.');
+    const event = await waitFor(async () => {
+      const [row] = await db()
+        .select()
+        .from(events)
+        .where(eq(events.externalId, String(update.update_id)));
+      return row?.status === 'done' ? row : undefined;
+    });
+    expect(await codeUnused(lc.code)).toBe(true);
+
+    // The job run again (a worker restart in the middle of it): no second reply.
+    await handleProcessMessage({ data: { eventId: event.id } } as Job);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(repliesTo(chatId)).toHaveLength(1);
+
+    // The bot's deep link sends `/start <code>`: the same reply, and the agent never sees it.
+    await sendTelegram(telegramUpdate(chatId, `/start ${lc.code}`));
+    await waitFor(async () => repliesTo(chatId).length === 2);
+    expect(repliesTo(chatId)[1]!.text).toBe('This chat is already linked to your account.');
+    expect(vmFake.deliveries).toHaveLength(0);
+  });
+
+  it('a code of another account from a linked chat: says so, tells nothing of that account, and keeps the code', async () => {
+    const owner = await chatUser();
+    const other = await chatUser();
+    const chatId = chat();
+    await linkTelegram(owner.token, chatId);
+    const lc = await newCode(other.token);
+    await sendTelegram(telegramUpdate(chatId, lc.code));
+    const reply = await waitFor(async () => repliesTo(chatId)[0]);
+    expect(reply.text).toContain('This chat is linked to another Textcrew account');
+    expect(reply.text).toContain('Settings → Channels');
+    expect(reply.text).not.toContain('your account');
+    for (const secret of [owner.id, owner.email, other.id, other.email])
+      expect(reply.text).not.toContain(secret);
+    expect(vmFake.deliveries).toHaveLength(0);
+
+    // The chat stays with its account, and the code is not used up…
+    const [link] = await db()
+      .select()
+      .from(channelLinks)
+      .where(eq(channelLinks.externalId, String(chatId)));
+    expect(link!.userId).toBe(owner.id);
+    expect(await codeUnused(lc.code)).toBe(true);
+    // …so once the chat is unlinked there, the same code links it to the other account.
+    await call(`/v1/channels/${link!.id}`, { method: 'DELETE', token: owner.token });
+    await sendTelegram(telegramUpdate(chatId, lc.code));
+    await waitFor(
+      async () =>
+        tg.sent.filter((m) => m.chatId === String(chatId) && m.text.startsWith('✅ Linked'))
+          .length === 2,
+    );
+    const [moved] = await db()
+      .select()
+      .from(channelLinks)
+      .where(eq(channelLinks.externalId, String(chatId)));
+    expect(moved!.userId).toBe(other.id);
+  });
+
+  it('codes sent from a linked chat count against the 10 tries an hour', async () => {
+    const owner = await chatUser();
+    const other = await chatUser();
+    const chatId = chat();
+    await linkTelegram(owner.token, chatId); // the first of the 10 tries
+    for (let i = 1; i <= 9; i++) {
+      await sendTelegram(telegramUpdate(chatId, 'LINK-AAAA-BBBB'));
+      await waitFor(async () => repliesTo(chatId).length === i);
+    }
+    // The 11th is refused before the code is looked at, even a valid one.
+    await sendTelegram(telegramUpdate(chatId, (await newCode(other.token)).code));
+    await waitFor(async () => repliesTo(chatId).length === 10);
+    expect(repliesTo(chatId)[9]!.text).toContain('Too many attempts');
+    expect(repliesTo(chatId).some((m) => m.text.includes('another Textcrew account'))).toBe(false);
   });
 
   it('a user blocking the bot marks the link blocked', async () => {

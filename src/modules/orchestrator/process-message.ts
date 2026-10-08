@@ -3,7 +3,13 @@ import { config, isChannelEnabled } from '../../shared/config.ts';
 import { badRequest, channelDisabled, outOfCredits } from '../../shared/errors.ts';
 import { enforce, hit } from '../../shared/rate-limit.ts';
 import { audit } from '../admin/audit.ts';
-import { findLink, linkWithCode, normalizeLinkCode, touchInbound } from '../auth/links.ts';
+import {
+  findLink,
+  linkCodeOwner,
+  linkWithCode,
+  normalizeLinkCode,
+  touchInbound,
+} from '../auth/links.ts';
 import { getEvent, ingestEvent } from '../events/intake.ts';
 import { getUserAttachments } from '../channels/files.ts';
 import { acknowledgeButton, parseInbound } from '../channels/inbound.ts';
@@ -74,13 +80,11 @@ export async function handleProcessMessage(job: Job): Promise<unknown> {
     if (await inboundHooks.handleButton(userId, msg, eventId)) return null;
     return IGNORED;
   }
-  // A code sent again from an already-linked chat.
-  if (normalizeLinkCode(msg.text) && msg.text.trim().length < 20) {
-    await queueOutbound({
-      userId,
-      sessionKey,
-      text: 'This chat is already linked to your account.',
-    });
+  // A code sent from a chat that is already linked (typed, or `/start <code>` from the deep link).
+  const bare = msg.text.trim().replace(/^\/start\s+/i, '');
+  const code = normalizeLinkCode(bare);
+  if (code && bare.length < 20) {
+    await replyToCodeInLinkedChat(msg, userId, code, eventId);
     return null;
   }
   if (await inboundHooks.handleButton(userId, msg, eventId)) return null;
@@ -110,6 +114,44 @@ export async function handleProcessMessage(job: Job): Promise<unknown> {
   return null;
 }
 
+const TOO_MANY_LINK_TRIES = 'Too many attempts. Please try again in an hour.';
+
+function linkedElsewhereText(): string {
+  return `This chat is linked to another Textcrew account. Unlink it there first: sign in to that account at ${config().WEB_APP_URL} and remove the chat in Settings → Channels. Then send your code again.`;
+}
+
+/** Guessing codes: at most 10 tries per chat per hour, linked or not (wrong codes count). */
+async function linkTryAllowed(msg: InboundMessage): Promise<boolean> {
+  const attempt = await hit({
+    key: `link:${msg.channel}:${msg.externalChatId}`,
+    max: 10,
+    windowSeconds: 3600,
+  });
+  return attempt.allowed;
+}
+
+/**
+ * A code from a chat that is linked already. The code is never used: a linked chat moves to
+ * another account only after it is unlinked in the web app. The reply says which case it is and
+ * nothing about the other account. One reply per event, even if the job runs again.
+ */
+async function replyToCodeInLinkedChat(
+  msg: InboundMessage,
+  userId: string,
+  code: string,
+  eventId: string,
+): Promise<void> {
+  let text = TOO_MANY_LINK_TRIES;
+  if (await linkTryAllowed(msg)) {
+    const owner = await linkCodeOwner(code, msg.channel);
+    text =
+      owner && owner !== userId
+        ? linkedElsewhereText()
+        : 'This chat is already linked to your account.';
+  }
+  await queueRawOutbound(msg.channel, msg.externalChatId, text, eventId);
+}
+
 async function handleUnlinked(msg: InboundMessage, eventId: string): Promise<void> {
   if (msg.buttonReply) return;
   const code = normalizeLinkCode(msg.text);
@@ -117,19 +159,8 @@ async function handleUnlinked(msg: InboundMessage, eventId: string): Promise<voi
     await queueRawOutbound(msg.channel, msg.externalChatId, linkInstructionsText(), eventId);
     return;
   }
-  // Guessing codes: at most 10 tries per chat per hour (wrong codes count).
-  const attempt = await hit({
-    key: `link:${msg.channel}:${msg.externalChatId}`,
-    max: 10,
-    windowSeconds: 3600,
-  });
-  if (!attempt.allowed) {
-    await queueRawOutbound(
-      msg.channel,
-      msg.externalChatId,
-      'Too many attempts. Please try again in an hour.',
-      eventId,
-    );
+  if (!(await linkTryAllowed(msg))) {
+    await queueRawOutbound(msg.channel, msg.externalChatId, TOO_MANY_LINK_TRIES, eventId);
     return;
   }
   const result = await linkWithCode({
@@ -141,7 +172,7 @@ async function handleUnlinked(msg: InboundMessage, eventId: string): Promise<voi
   if (!result.ok) {
     const text =
       result.reason === 'linked_to_other_user'
-        ? 'This chat is already linked to another account. Unlink it there first.'
+        ? linkedElsewhereText()
         : 'That code is invalid or expired. Get a new one in the web app (codes last 10 minutes).';
     await queueRawOutbound(msg.channel, msg.externalChatId, text, eventId);
     return;

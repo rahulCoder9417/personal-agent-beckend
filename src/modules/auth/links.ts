@@ -141,6 +141,24 @@ export async function linkWithCode(input: {
     });
 }
 
+/** The user a valid, unused code belongs to, without using it up. Null for any other text. */
+export async function linkCodeOwner(code: string, channel: LinkChannel): Promise<string | null> {
+  const normalized = normalizeLinkCode(code);
+  if (!normalized) return null;
+  const [row] = await db()
+    .select({ userId: linkCodes.userId })
+    .from(linkCodes)
+    .where(
+      and(
+        eq(linkCodes.codeHash, sha256Hex(normalized)),
+        eq(linkCodes.channel, channel),
+        isNull(linkCodes.usedAt),
+        gt(linkCodes.expiresAt, new Date()),
+      ),
+    );
+  return row?.userId ?? null;
+}
+
 export async function findLink(
   channel: LinkChannel,
   externalId: string,
@@ -160,12 +178,13 @@ export async function listLinks(userId: string): Promise<ChannelLink[]> {
     .orderBy(desc(channelLinks.createdAt));
 }
 
-export async function unlink(userId: string, linkId: string): Promise<boolean> {
-  const rows = await db()
+/** Removes one of the user's links. Returns the removed link, or undefined if there was none. */
+export async function unlink(userId: string, linkId: string): Promise<ChannelLink | undefined> {
+  const [row] = await db()
     .delete(channelLinks)
     .where(and(eq(channelLinks.userId, userId), eq(channelLinks.id, linkId)))
-    .returning({ id: channelLinks.id });
-  return rows.length > 0;
+    .returning();
+  return row;
 }
 
 export async function touchInbound(linkId: string): Promise<void> {

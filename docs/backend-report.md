@@ -200,6 +200,7 @@ So one user's messages are handled one by one, in order. The lock ends on its ow
 - **The worker crashes during a job.** BullMQ notices and puts the job back. The "already done" checks stop double work.
 - **The worker crashes while it holds a lock.** The lock ends after 16 minutes. Then that user's jobs run again.
 - **The api stops between saving an event and adding its job.** The sender sends the message again. The api then adds the missing job.
+- **A job ends before the api writes "queued" on its event.** A quick reply can be that fast. The api writes "queued" only on an event that is still "received", so a finished event stays finished.
 - **Redis loses its data.** Redis writes its data to disk, but a loss is still covered. Every time the worker starts, it adds jobs again for unfinished events of the last 7 days. It also sets up every automation timer again from Postgres.
 
 ## 4. A request inside the api
@@ -328,7 +329,7 @@ Linking proves that a chat on Telegram belongs to an account. Without a link, th
 
 ### The limits
 
-A code lives 10 minutes and works once. A user can make 10 codes an hour. One chat gets 10 tries an hour, and wrong codes count. Codes never use 0, O, 1 or I, so they are not mixed up.
+A code lives 10 minutes and works once. A user can make 10 codes an hour. One chat gets 10 tries an hour, linked or not, and wrong codes count. Codes never use 0, O, 1 or I, so they are not mixed up.
 
 ### What an unknown sender gets
 
@@ -339,9 +340,25 @@ A message from a chat that is not linked never reaches an agent. It is not saved
 | No code | The chat is not linked yet. Get a code in the web app |
 | A wrong or expired code | The code is invalid or expired |
 | A code, after too many tries | Too many attempts. Try again in an hour |
-| A code, but the chat belongs to another account | Unlink it there first |
+| A code, but the chat belongs to another account | The chat is linked to another Textcrew account. Unlink it there first |
 
-A code sent from a chat that is already linked gets "This chat is already linked to your account". The user removes a link in the web app.
+### A code from a chat that is already linked
+
+A code never moves a linked chat to another account. The user unlinks the chat first, in the web app. So the worker only looks the code up. It does not use it, and the code still works after the unlink.
+
+| The code is | The reply says |
+|---|---|
+| A valid code of another account | The chat is linked to another Textcrew account. Sign in there, unlink it in Settings → Channels, then send the code again |
+| A code of the same account, or a wrong or expired one | This chat is already linked to your account |
+| Any code, after too many tries | Too many attempts. Try again in an hour |
+
+The reply says nothing about the other account: no name, no email. It goes out once per event, even if the job runs twice. A code that comes through the bot's link, after the word /start, counts as a code too. It never reaches the agent.
+
+Example: Rahul's Telegram is linked to his first account. He signs in to a second account and sends its code from the same chat. The bot says the chat is linked to another Textcrew account. The chat stays with the first account until he unlinks it there.
+
+### Unlinking
+
+The user removes a link in the web app, in Settings → Channels. The activity log records it, like the link: the channel and the name shown when it was linked, never the chat id. From then on the chat gets the "not linked yet" reply.
 
 ## 8. Channels
 
@@ -385,7 +402,7 @@ This section follows one message through the whole system. Example: Rahul texts 
 6. It checks the special cases, in this order. Each one ends the job.
    - The chat is not linked: the link flow runs.
    - A button was tapped: it is an approval answer.
-   - The text is a link code: the reply says the chat is already linked.
+   - The text is a link code: the reply says the chat is already linked, to this account or to another one. The code is not used (section 7).
    - The text is "yes" or "no" and an approval waits in this chat: it is an approval answer.
    - The text is a coupon code: it is redeemed, and the reply shows the new balance.
 7. It downloads any files and turns voice into text.
@@ -425,7 +442,7 @@ Every message is a task when the router has no key (`JEV_API_KEY` is empty), is 
 
 ### What is recorded
 
-The `events` table keeps the webhook and its state: received, queued, then done, ignored or failed. The `messages` table keeps Rahul's message and the reply, each with a status. Files are in `attachments`. The activity log keeps the tool calls the agent made. The credit ledger keeps the charges of the turn.
+The `events` table keeps the webhook and its state: received, queued, then done, ignored or failed. Every way the job ends sets the last state, also the special cases of step 6. A quick job can end before the api has written "queued". The api then leaves the final state alone, so the next worker start does not queue the event again. The `messages` table keeps Rahul's message and the reply, each with a status. Files are in `attachments`. The activity log keeps the tool calls the agent made. The credit ledger keeps the charges of the turn.
 
 ### A message from web chat
 
@@ -1931,7 +1948,7 @@ A failing job is tried 5 times, with waits of 5 seconds, 30 seconds, 2 minutes a
 | Every endpoint, per visitor address | 600 a minute (`RATE_LIMIT_PER_IP_PER_MIN`) |
 | Messages from the web app, per user | 30 a minute |
 | Link codes, per user | 10 an hour |
-| Link code tries from an unlinked chat | 10 an hour |
+| Link code tries from one chat, linked or not | 10 an hour |
 | Waitlist | 10 an hour per address, 5 an hour per email |
 | Coupon codes | 5 an hour per user, 20 an hour per address |
 | Starting a Claude sign-in, per user | 10 an hour |

@@ -386,12 +386,19 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 
 - Gaps of this kind are listed in `backend-report.md`, section 43.
 
-### Found on the last test, waiting for your decision
+### Found on the browser's first test (5 October), and what was done on 8 October
 
-1. **In a container that has the browser, Hermes downloads its own tools from the internet.** About 0.5 GB per user, once. The choices: tell Hermes not to, put the tools into our image, or not start Hermes for a Claude plan user.
-2. **"Remember this" goes to Claude Code's own memory, not ours.** So the Memory screen stays empty. The fix is one line in Tex's instructions, plus turning the engine's own memory off.
-3. **The browser contacts Google when it starts.** Small. Two or three browser settings would stop it.
-4. **Once, a container stayed awake about 6 minutes after a browser turn** when 4 is the most expected. Cause not found.
+1. **Hermes downloaded its own tools in a container that has the browser.** Fixed by Hermes's own settings: no tool downloads, no calls home at start. Tools already downloaded stay in that user's folder.
+2. **"Remember this" went to Claude Code's own memory, not ours.** Fixed: Tex's instructions say to use the platform's memory, and both engines' own memory is switched off.
+3. **The browser contacts Google when it starts.** Not fixed: no browser switch stops it. Your decision (below).
+4. **Once, a container stayed awake about 6 minutes after a browser turn** when 4 is the most expected. Cause not found. On 8 October the idle stop came after 3 minutes 49 seconds.
+
+### Decisions waiting on you
+
+- **The browser's Google contacts:** (a) use Playwright's smaller "headless shell" browser, which makes none of them, (b) block the two Google hosts in the browser's proxy rule, or (c) accept them.
+- **The desktop app:** leave it out of the beta (recommended), then a thin shell around the live web app. Never bring the separate copy up to date. Its 22 commits are only on the laptop, on branch `feat/desktop-app`.
+- **Codex and other engines:** see `engines-proposal.md`, section 10. A ChatGPT plan cannot be used yet; OpenAI must approve first.
+- **A Clerk production instance on `textcrew.in`:** needed before a public launch, and it makes the first visit about a second faster.
 
 ### Smaller open questions
 
@@ -407,7 +414,6 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 
 ### Also waiting on you
 
-- The web app's Vercel address, and which domain to use.
 - A repo to test pull-request review on.
 - How Free credits should run out sooner (section 7).
 - New keys in place of the four that were pasted into chat.

@@ -1,14 +1,26 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { streamSSE } from 'hono/streaming';
+import {
+  findActiveConversation,
+  getConversation,
+  listConversations,
+  toApiConversation,
+} from '../../modules/channels/conversations.ts';
 import { listMessages, toApiMessage } from '../../modules/channels/messages.ts';
 import { attachments } from '../../modules/channels/schema.ts';
 import { subscribe } from '../../modules/channels/stream.ts';
-import { startNewWebChat, webChatStartedAt } from '../../modules/orchestrator/chats.ts';
+import {
+  deleteUserConversation,
+  openWebConversation,
+  renameUserConversation,
+  startNewWebChat,
+  webChatStartedAt,
+} from '../../modules/orchestrator/chats.ts';
 import { sendWebMessage } from '../../modules/orchestrator/process-message.ts';
 import { config } from '../../shared/config.ts';
 import { db } from '../../shared/db/client.ts';
-import { AppError, badRequest } from '../../shared/errors.ts';
+import { AppError, badRequest, notFound } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
 import { iso } from '../presenters.ts';
 import { route } from '../router.ts';
@@ -16,14 +28,30 @@ import { route } from '../router.ts';
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 export const chatRoutes = [
+  // Which messages: one conversation's; web chat's active conversation (`channel=web`); another
+  // channel's; or all of them.
   route('listMessages', async (c, { query }) => {
     const userId = c.get('user').id;
+    let conversationId = query.conversationId;
+    let nothingToList = false;
+    if (conversationId) {
+      if (!(await getConversation(userId, conversationId)))
+        throw notFound('Conversation not found');
+    } else if (query.channel === 'web') {
+      const active = await findActiveConversation(userId, 'web');
+      if (active) conversationId = active.id;
+      // Web chat has no conversation yet, so it has no message either.
+      else nothingToList = true;
+    }
     const [page, chatStartedAt] = await Promise.all([
-      listMessages(userId, {
-        limit: query.limit ?? 30,
-        ...(query.cursor ? { cursor: query.cursor } : {}),
-        ...(query.channel ? { channel: query.channel } : {}),
-      }),
+      nothingToList
+        ? { items: [], nextCursor: null }
+        : listMessages(userId, {
+            limit: query.limit ?? 30,
+            ...(query.cursor ? { cursor: query.cursor } : {}),
+            ...(query.channel ? { channel: query.channel } : {}),
+            ...(conversationId ? { conversationId } : {}),
+          }),
       webChatStartedAt(userId),
     ]);
     return c.json(
@@ -36,10 +64,43 @@ export const chatRoutes = [
     );
   }),
 
+  route('listConversations', async (c, { query }) => {
+    const page = await listConversations(c.get('user').id, {
+      limit: query.limit ?? 30,
+      ...(query.cursor ? { cursor: query.cursor } : {}),
+      ...(query.channel ? { channel: query.channel } : {}),
+    });
+    return c.json({ items: page.items.map(toApiConversation), nextCursor: page.nextCursor }, 200);
+  }),
+
   // A new web conversation: the agent starts with a fresh context there; saved memories stay.
+  route('createConversation', async (c) => {
+    return c.json(toApiConversation(await startNewWebChat(c.get('user').id)), 201);
+  }),
+
+  // The older name of the same action (and the same limit of 30 an hour).
   route('startNewChat', async (c) => {
     const conversation = await startNewWebChat(c.get('user').id);
     return c.json({ chatStartedAt: conversation.startedAt.toISOString() }, 200);
+  }),
+
+  // Rename it, or make a web conversation the one web chat writes in. Both at once: both happen.
+  route('updateConversation', async (c, { params, body }) => {
+    const userId = c.get('user').id;
+    const title = body.title?.trim();
+    if (body.title !== undefined && !title) throw badRequest('The title cannot be empty');
+    let conversation = body.active
+      ? await openWebConversation(userId, params.conversationId)
+      : undefined;
+    if (title) conversation = await renameUserConversation(userId, params.conversationId, title);
+    // The contract asks for at least one of the two fields.
+    if (!conversation) throw badRequest('Nothing to change');
+    return c.json(toApiConversation(conversation), 200);
+  }),
+
+  route('deleteConversation', async (c, { params }) => {
+    await deleteUserConversation(c.get('user').id, params.conversationId);
+    return c.body(null, 204);
   }),
 
   // The checks, the save and the job are one function, shared with the dev script's `send`.
@@ -48,6 +109,7 @@ export const chatRoutes = [
       text: body.text,
       clientMessageId: body.clientMessageId,
       ...(body.attachmentIds ? { attachmentIds: body.attachmentIds } : {}),
+      ...(body.conversationId ? { conversationId: body.conversationId } : {}),
     });
     return c.json(toApiMessage(message), 202);
   }),

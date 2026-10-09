@@ -172,6 +172,11 @@ describe('dev-user script', () => {
       ['send', '--user', userId],
       ['send', '--user', userId, '--text', 'hi', '--timeout', '0'],
       ['messages', '--user', userId, '--limit', 'many'],
+      ['messages', '--user', userId, '--conversation', 'cnv_not_theirs'],
+      ['conversations'],
+      ['conversations', '--user', userId, '--channel', 'sms'],
+      ['conversations', '--user', userId, '--limit', '0'],
+      ['new-chat'],
       ['activity', '--user', userId, '--limit', '0'],
       ['approve', '--user', userId, '--decision', 'maybe'],
       ['pr-review', '--user', userId, '--repo', 'acme/api'],
@@ -338,6 +343,81 @@ describe('dev-user script: reading what happened', () => {
     for (const l of all) expect(Number.isNaN(Date.parse(l.split(' ')[0]!))).toBe(false);
     const last = await devUser(['messages', '--user', userId, '--limit', '2']);
     expect(last.map((l) => l.split(': ').slice(1).join(': '))).toEqual(['third', 'echo: third']);
+  });
+
+  it('conversations, new-chat and send --conversation: each one is listed, and a message goes into the one named', async () => {
+    const userId = await devUserId();
+    expect(await devUser(['conversations', '--user', userId])).toEqual(['no conversations']);
+    const first = await devUser(['send', '--user', userId, '--text', 'about Goa']);
+    const firstId = /^sent msg_\w+ \(web chat, conversation (cnv_\w+)\)$/.exec(first[0]!)![1]!;
+
+    const started = await devUser(['new-chat', '--user', userId]);
+    expect(started).toHaveLength(1);
+    expect(started[0]).toMatch(/^started cnv_\w+ web #1 active last \S+: New chat$/);
+    const secondId = field(started, 'started');
+    await devUser(['send', '--user', userId, '--text', 'about laptops']);
+    /** Each line without its time: `<id> <channel> #<n>[ active]: <title>`. */
+    const listed = async (...more: string[]) =>
+      (await devUser(['conversations', '--user', userId, ...more])).map((l) =>
+        l.replace(/ last \S+:/, ':'),
+      );
+    expect(await listed()).toEqual([
+      `${secondId} web #1 active: about laptops`,
+      `${firstId} web #0: about Goa`,
+    ]);
+
+    // Into the first one: it becomes the active one, and the turn carries its own number.
+    const back = await devUser([
+      'send',
+      '--user',
+      userId,
+      '--text',
+      'and the hotel?',
+      '--conversation',
+      firstId,
+    ]);
+    expect(back[0]).toMatch(new RegExp(`^sent msg_\\w+ \\(web chat, conversation ${firstId}\\)$`));
+    expect(withPrefix(back, 'reply')).toEqual(['echo: and the hotel?']);
+    expect(back).toContain('message delivered');
+    const delivery = fake.deliveries.find((d) => d.text === 'and the hotel?');
+    expect(
+      JSON.parse((delivery as unknown as { metadataJson: string }).metadataJson),
+    ).toMatchObject({ chat_epoch: 0 });
+    expect(await listed()).toEqual([
+      `${firstId} web #0 active: about Goa`,
+      `${secondId} web #1: about laptops`,
+    ]);
+    expect(await listed('--limit', '1')).toEqual([
+      `${firstId} web #0 active: about Goa`,
+      '(more: raise --limit)',
+    ]);
+    expect(await listed('--channel', 'telegram')).toEqual(['no conversations']);
+
+    // `messages --conversation` reads one conversation.
+    const texts = async (id: string) =>
+      (await devUser(['messages', '--user', userId, '--conversation', id])).map((l) =>
+        l.split(': ').slice(1).join(': '),
+      );
+    expect(await texts(firstId)).toEqual([
+      'about Goa',
+      'echo: about Goa',
+      'and the hotel?',
+      'echo: and the hotel?',
+    ]);
+    expect(await texts(secondId)).toEqual(['about laptops', 'echo: about laptops']);
+
+    // A conversation that is not this user's is refused the way the api refuses it.
+    const err = await devUser([
+      'send',
+      '--user',
+      userId,
+      '--text',
+      'hello',
+      '--conversation',
+      'cnv_not_theirs',
+    ]).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AppError);
+    expect(err).toMatchObject({ status: 404, code: 'not_found' });
   });
 
   it('activity: action, crew member, credits and summary of each entry', async () => {

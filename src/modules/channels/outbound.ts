@@ -4,7 +4,7 @@ import { db } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import { logger } from '../../shared/logger.ts';
 import { addJob } from '../events/queues.ts';
-import { adapterFor } from './adapters/index.ts';
+import { sendToChat } from './adapters/index.ts';
 import { conversationFor, noteMessage } from './conversations.ts';
 import { getMessageById, setMessageStatus, toApiMessage, type MessageRow } from './messages.ts';
 import { messages } from './schema.ts';
@@ -125,7 +125,8 @@ export async function handleSendMessage(job: Job): Promise<unknown> {
       ...(data.buttons ? { buttons: data.buttons } : {}),
       ...(data.template ? { template: data.template } : {}),
     });
-    const result = await adapterFor(target.channel).send(target.externalChatId ?? '', content);
+    // The saved message keeps the text as it was written; a chat app gets it as plain text.
+    const result = await sendToChat(target.channel, target.externalChatId ?? '', content);
     await setMessageStatus(msg.id, 'sent', result.externalId);
   } catch (err) {
     if (err instanceof RecipientBlockedError) {
@@ -149,7 +150,7 @@ export async function handleSendRaw(job: Job): Promise<unknown> {
   };
   if (!isChannelEnabled(d.channel)) return null;
   try {
-    await adapterFor(d.channel).send(d.externalChatId, { text: d.text });
+    await sendToChat(d.channel, d.externalChatId, { text: d.text });
   } catch (err) {
     if (err instanceof RecipientBlockedError) return null;
     throw err;

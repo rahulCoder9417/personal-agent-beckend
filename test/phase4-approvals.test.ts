@@ -313,13 +313,27 @@ describe('apps + user MCP servers', () => {
     const { resetConfig } = await import('../src/shared/config.ts');
     resetConfig();
     const u = await chatUser();
-    const apps = await expectContract<{ items: Array<{ slug: string; availableOnPlan: boolean }> }>(
-      'listApps',
-      await call('/v1/apps', { token: u.token }),
-      200,
-    );
+    const apps = await expectContract<{
+      items: Array<{ slug: string; availableOnPlan: boolean; connectable: boolean }>;
+    }>('listApps', await call('/v1/apps', { token: u.token }), 200);
     expect(apps.items).toHaveLength(25);
     expect(apps.items.filter((a) => a.availableOnPlan)).toHaveLength(10);
+    // Only the apps this server has a Composio setup for can be connected.
+    expect(
+      apps.items
+        .filter((a) => a.connectable)
+        .map((a) => a.slug)
+        .sort(),
+    ).toEqual(['gmail', 'hubspot']);
+    // One that is on the plan but has no setup: listed, not connectable, and connecting says so.
+    const calendar = apps.items.find((a) => a.slug === 'googlecalendar')!;
+    expect(calendar).toMatchObject({ availableOnPlan: true, connectable: false });
+    const notSetUp = await expectContract<{ error: { code: string; message: string } }>(
+      'connectApp',
+      await call('/v1/apps/googlecalendar/connect', { method: 'POST', token: u.token }),
+      404,
+    );
+    expect(notSetUp.error.message).toBe("Google Calendar isn't configured yet");
     const ok = await expectContract<{ redirectUrl: string }>(
       'connectApp',
       await call('/v1/apps/gmail/connect', { method: 'POST', token: u.token, body: {} }),

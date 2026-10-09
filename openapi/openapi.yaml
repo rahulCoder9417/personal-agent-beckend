@@ -1861,13 +1861,19 @@ components:
 
     App:
       type: object
-      required: [slug, name, category, availableOnPlan, connections]
+      required: [slug, name, category, availableOnPlan, connectable, connections]
       properties:
         slug: { type: string, examples: [gmail] }
         name: { type: string, examples: [Gmail] }
         iconUrl: { type: [string, "null"], format: uri }
         category: { type: string, examples: [email, calendar, notes, tasks, crm, dev, research] }
         availableOnPlan: { type: boolean }
+        connectable:
+          type: boolean
+          description: |
+            True when this server has a Composio setup for the app, so it can be connected. False:
+            the app is listed but cannot be connected yet (`POST /v1/apps/{appSlug}/connect`
+            answers 404 for it); show it as "Not available yet", without a Connect button.
         connections:
           type: array
           items:

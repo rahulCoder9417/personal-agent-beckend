@@ -1247,6 +1247,12 @@ export interface components {
              */
             category: string;
             availableOnPlan: boolean;
+            /**
+             * @description True when this server has a Composio setup for the app, so it can be connected. False:
+             *     the app is listed but cannot be connected yet (`POST /v1/apps/{appSlug}/connect`
+             *     answers 404 for it); show it as "Not available yet", without a Connect button.
+             */
+            connectable: boolean;
             connections: {
                 id: string;
                 /** @example work@acme.com */

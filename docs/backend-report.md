@@ -10,7 +10,7 @@ Read `hld-mvp.md` first. It gives the short version and explains the words. This
 | **What it does** | Receives messages, runs each user's agent through the vm-manager, charges credits, sends replies |
 | **What it does not do** | It does not run the AI itself. Each user's agent runs in its own container |
 | **Where it runs** | On the AWS test server (see `aws-setup.md`) |
-| **How it is tested** | 526 automated tests, with a real database and real queues |
+| **How it is tested** | 566 automated tests, with a real database and real queues |
 | **What is in this report** | The backend, and the parts it depends on: the vm-manager, the container, the proxy |
 
 ## How to read this report
@@ -491,6 +491,8 @@ The router is an outside service named Jev. It judges only plain text of up to 1
 
 Every message is a task when the router has no key (`JEV_API_KEY` is empty), is too slow or fails. The same holds when the user's own Claude plan pays for the AI. It also holds when the cheap model says it cannot answer alone. So routing can save work, and it can never lose a message.
 
+The cheap model is told where its answer will be read. In web chat it may use formatting where that helps, such as a list for steps. In a chat app it is asked for plain text only. Section 10 says why.
+
 ### Waking and delivering
 
 11. The worker makes sure the container exists. Then it asks the vm-manager to wake it, with the plan's priority.
@@ -534,8 +536,9 @@ Every outgoing message takes the same path, whoever wrote it: the agent, the che
 2. A `send-message` job is added to outbound. Its id holds the message id.
 3. The worker takes the job. If the message is no longer `queued`, it stops: the message was already sent.
 4. If the channel is switched off, the message becomes `failed` and the job ends.
-5. The worker sends the text through the channel. On success the message becomes `sent`. The channel's own message id is saved with it.
-6. On failure the job is retried, 5 tries in total. After the last one the message becomes `failed`.
+5. For a chat app, the worker first makes the text a plain message (see "Plain text for chat apps" below).
+6. The worker sends the text through the channel. On success the message becomes `sent`. The channel's own message id is saved with it.
+7. On failure the job is retried, 5 tries in total. After the last one the message becomes `failed`.
 
 The agent names the chat to answer in. Without a name, the reply goes to the chat the user last wrote from. An agent can write only to its own user's chats.
 
@@ -543,12 +546,60 @@ The agent names the chat to answer in. Without a name, the reply goes to the cha
 
 | Channel | How it is sent | Limits |
 |---|---|---|
-| Telegram | Through the bot. Buttons sit under the last part | Split at about 4,096 characters, at a paragraph, line or space |
-| Web chat | Nothing is sent. The saved message and the live update are the delivery | None |
-| WhatsApp | Free text within 24 hours of the user's last message. Later, an approved template | 4,096 characters, 3 buttons. A template holds about 700 characters |
-| iMessage | Through Sendblue. No buttons: the text asks for YES or NO | Split at 4,096 characters |
+| Telegram | Through the bot, as plain text. Buttons sit under the last part | Split at about 4,096 characters, at a paragraph, line or space |
+| Web chat | Nothing is sent. The saved message and the live update are the delivery. The web app shows the formatting | None |
+| WhatsApp | As plain text. Free text within 24 hours of the user's last message. Later, an approved template | 4,096 characters, 3 buttons. A template holds about 700 characters |
+| iMessage | Through Sendblue, as plain text. No buttons: the text asks for YES or NO | Split at 4,096 characters |
 
 One message from the agent can hold up to 8,000 characters. WhatsApp and iMessage also report receipts. A receipt only moves a status forward: sent, delivered, read.
+
+### Plain text for chat apps
+
+The agent writes its answers in Markdown. Markdown is a way to write formatting with symbols: two stars around a word make it bold, a `#` starts a heading, rows of `|` make a table. The web app turns the symbols into real formatting. A chat app does not. Telegram, WhatsApp and iMessage show a text exactly as it was typed, symbols included. So every text is made plain before it goes to a chat app.
+
+Example: the agent writes `**Done.** See [the notes](https://docs.example.com/notes)`. Rahul's Telegram shows "Done. See the notes (https://docs.example.com/notes)".
+
+1. The agent's instructions ask for plain text in a chat app. Models still write Markdown at times, so the worker does not rely on that.
+2. Right before sending, the worker passes the text through one function. This is the same for every chat app and for every writer: the agent, the cheap model and the platform itself.
+3. The function changes only what is clearly Markdown. The first table below shows what.
+4. Everything else stays exactly as it was. A text with no Markdown is not changed at all, so the platform's own messages go out as written.
+5. After that, the channel's own steps run on the plain text: the purchase-link check on Telegram, then the split into parts.
+6. Only what is sent changes. The saved message keeps the agent's original text. So the web app shows a Telegram conversation with its formatting.
+
+| The agent wrote | The chat app gets |
+|---|---|
+| `**bold**`, `*italic*`, `~~struck out~~` | The words, without the symbols |
+| `# A heading` | The heading's text, on its own line |
+| Code between backticks, or a block of code | The code as written, without the backticks and without the name of the language |
+| `[the notes](https://docs.example.com/notes)` | the notes (https://docs.example.com/notes). Only the address, when the text is the address |
+| A picture | Its description and its address. No picture is sent |
+| `> a quoted line` | The line, without the `>` |
+| A line of `---` | Nothing. The line is dropped |
+| `* item` or `+ item` | `- item`. Numbered items stay as they are |
+| `- [ ] call the bank` and `- [x] call the bank` | `- call the bank` and `- ✓ call the bank` |
+| `\*`, a star the agent marked as "not formatting" | `*` |
+| A table | One line per row, see the next table |
+
+A chat app has no columns, and a phone screen is narrow. So each row of a table becomes one line, with no `|`.
+
+| The table has | Each row becomes | Example |
+|---|---|---|
+| Two columns | "first: second". The header row is written the same way and comes first | "Day: Plan", then "Mon: Gym" |
+| Three or more columns | Each value after the name of its column, with "; " between them | "Plan: Pro; Price: $20; Credits: 2,000" |
+| One column | The text of the cell | "Mon" |
+
+With three or more columns the names are repeated in every line, so a row still makes sense when it wraps on a phone. The sign between the values is "; " and not ", " because a value often holds a comma, as in "2,000".
+
+Some ordinary text looks like Markdown. The function leaves it alone:
+
+- Names with underscores, such as `snake_case_name` or `MAX_RETRIES`.
+- Web addresses, whatever symbols they hold.
+- Sums, such as "2 * 3 * 4" or "2*3*4".
+- File patterns such as `*.ts`, and schedule lines such as `0 9 * * 1`.
+- Well-known code names such as `__init__`.
+- HTML tags. They are not removed and not changed.
+
+The message is sent as simple text. Telegram can show bold text when a bot asks for it, and the bot does not ask.
 
 ### No purchase links on Telegram
 
@@ -564,6 +615,8 @@ Telegram wants digital goods sold inside the app to be paid with its own currenc
 - **The user blocked the bot.** The message becomes `failed` with no retry. The link is marked blocked, and the agent is told to use web chat. The mark is cleared when the user writes again.
 - **WhatsApp says the 24 hours are over.** The message is sent again as a template.
 - **The job runs twice.** The second run sees the message is not `queued` and sends nothing.
+- **The agent used a rare form of Markdown.** A few forms stay as typed, for example bold in the middle of a word. The text can still be read, with a stray symbol in it.
+- **Ordinary text that is also Markdown.** A line that starts with "# " is read as a heading and loses the "#". A name written as `__word__` loses its underscores, unless it is a well-known code name. The web app reads both the same way.
 
 ## 11. Voice, images and documents
 
@@ -620,7 +673,7 @@ The web app shows new messages and the agent's state without a reload. It keeps 
 | `conversation.updated` | A conversation starts, gets a message, is renamed, or becomes or stops being the active one |
 | `conversation.deleted` | A conversation is deleted. The event holds only its id |
 
-A message event holds the whole message, with the id of its conversation. So the web app knows which conversation to show it in. A conversation event holds the whole conversation: its title, its times and if it is the active one.
+A message event holds the whole message, with the id of its conversation. So the web app knows which conversation to show it in. Its text is the text as it was written. A reply that went to Telegram as plain text still has its Markdown here (section 10). A conversation event holds the whole conversation: its title, its times and if it is the active one.
 
 ### Progress lines are live only
 
@@ -2344,7 +2397,7 @@ These were found by reading the code while this report was written. Each is desc
 
 ## 44. What has run for real
 
-The backend has 526 automated tests. They use a real database and real queues, and stand-ins for outside services. "Run for real" below means it ran on the AWS test server against the real outside service.
+The backend has 566 automated tests. They use a real database and real queues, and stand-ins for outside services. "Run for real" below means it ran on the AWS test server against the real outside service.
 
 | Area | Run for real |
 |---|---|
@@ -2367,6 +2420,7 @@ The backend has 526 automated tests. They use a real database and real queues, a
 | Pull-request review; Byte through the git gateway | No |
 | Reminders and automations | Yes: a one-time reminder, a daily automation, the 15-minute limit |
 | Conversations: the list, going back to an earlier one, rename, delete | No. Built on 9 October, with the automated tests only |
+| Replies to a chat app as plain text, with the formatting kept for the web app | No. Built on 9 October, with the automated tests only |
 | Web search through Brave | No. The key answers a direct call |
 | The page reader on Claude Code | Yes |
 | Voice, images and documents | No |

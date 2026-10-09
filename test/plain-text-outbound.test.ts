@@ -4,6 +4,8 @@ import { randomUUID } from 'node:crypto';
 import type { Worker } from 'bullmq';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { sendToChat } from '../src/modules/channels/adapters/index.ts';
+import { setTelegramApi } from '../src/modules/channels/adapters/telegram.ts';
 import { messages } from '../src/modules/channels/schema.ts';
 import { subscribe, type StreamEvent } from '../src/modules/channels/stream.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
@@ -190,6 +192,27 @@ describe('a reply to Telegram', () => {
 
     const saved = (await savedOut(u.id, session_key)).map((m) => m.text);
     expect(saved).toEqual([expect.stringContaining('✅'), upgrade, long]);
+  });
+});
+
+describe('the one way out', () => {
+  it('sends Telegram a simple message and asks for no formatting of its own', async () => {
+    const calls: Array<{ method: string; body: Record<string, unknown> }> = [];
+    setTelegramApi(async (method, body) => {
+      calls.push({ method, body });
+      return { message_id: 7 };
+    });
+    const result = await sendToChat('telegram', '99', { text: '**Done.** See `the_notes`.' });
+    expect(result).toEqual({ externalId: '7' });
+    // Only the chat and the text: no parse mode, so Telegram shows the text as it is.
+    expect(calls).toEqual([
+      { method: 'sendMessage', body: { chat_id: '99', text: 'Done. See the_notes.' } },
+    ]);
+  });
+
+  it('sends nothing for web chat', async () => {
+    expect(await sendToChat('web', '', { text: '**Done.**' })).toEqual({});
+    expect(tg.sent).toHaveLength(0);
   });
 });
 

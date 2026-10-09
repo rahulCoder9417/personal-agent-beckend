@@ -10,7 +10,7 @@ Read `hld-mvp.md` first. It gives the short version and explains the words. This
 | **What it does** | Receives messages, runs each user's agent through the vm-manager, charges credits, sends replies |
 | **What it does not do** | It does not run the AI itself. Each user's agent runs in its own container |
 | **Where it runs** | On the AWS test server (see `aws-setup.md`) |
-| **How it is tested** | 566 automated tests, with a real database and real queues |
+| **How it is tested** | 568 automated tests, with a real database and real queues |
 | **What is in this report** | The backend, and the parts it depends on: the vm-manager, the container, the proxy |
 
 ## How to read this report
@@ -2397,7 +2397,7 @@ These were found by reading the code while this report was written. Each is desc
 
 ## 44. What has run for real
 
-The backend has 566 automated tests. They use a real database and real queues, and stand-ins for outside services. "Run for real" below means it ran on the AWS test server against the real outside service.
+The backend has 568 automated tests. They use a real database and real queues, and stand-ins for outside services. "Run for real" below means it ran on the AWS test server against the real outside service.
 
 | Area | Run for real |
 |---|---|

@@ -1,10 +1,12 @@
 // What the backend puts at the top of a turn's text before delivering it (HLD 0.9): the memory
-// block, and a recap of the chat when the engine changed. Both go inside `Deliver.text`, the field
-// the Bridge already hands to the engine, so the agent image and the proto don't change.
+// block, and a recap of the conversation when the engine changed. Both go inside `Deliver.text`,
+// the field the Bridge already hands to the engine, so the agent image and the proto don't change.
+// The memory block is the user's and the same in every conversation; the recap holds only the
+// turn's own conversation.
 import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../../shared/db/client.ts';
 import { logger } from '../../shared/logger.ts';
-import { recentSessionMessages } from '../channels/messages.ts';
+import { recentConversationMessages } from '../channels/messages.ts';
 import type { RuntimeName } from './agent-settings.ts';
 import { asData, memoryBlock } from './memory.ts';
 import { chatEngines } from './schema.ts';
@@ -21,12 +23,24 @@ export const RECAP_END = '[End of earlier messages]';
 /** The last line the platform adds. The turn's own text starts on the next line. */
 export const MESSAGE_FOLLOWS = "[This turn's message follows.]";
 
-/** Which engine last finished a turn in this chat, and when this engine last did. */
-async function enginesOf(userId: string, sessionKey: string) {
+/** A conversation as a delivery names it: its chat (the session key) and its number there. */
+export interface ConversationRef {
+  sessionKey: string;
+  epoch: number;
+}
+
+/** Which engines finished a turn in this conversation, and when each last did. */
+async function enginesOf(userId: string, c: ConversationRef) {
   return db()
     .select()
     .from(chatEngines)
-    .where(and(eq(chatEngines.userId, userId), eq(chatEngines.sessionKey, sessionKey)));
+    .where(
+      and(
+        eq(chatEngines.userId, userId),
+        eq(chatEngines.sessionKey, c.sessionKey),
+        eq(chatEngines.epoch, c.epoch),
+      ),
+    );
 }
 
 /**
@@ -36,41 +50,46 @@ async function enginesOf(userId: string, sessionKey: string) {
  */
 const TURN_END = sql`date_trunc('milliseconds', now()) + interval '1 millisecond'`;
 
-/** A turn ended well on this engine in this chat. Safe to repeat. */
+/** A turn ended well on this engine in this conversation. Safe to repeat. */
 export async function recordEngineTurn(
   userId: string,
-  sessionKey: string,
+  c: ConversationRef,
   engine: RuntimeName,
 ): Promise<void> {
   await db()
     .insert(chatEngines)
-    .values({ userId, sessionKey, runtime: engine, lastTurnAt: TURN_END })
+    .values({
+      userId,
+      sessionKey: c.sessionKey,
+      epoch: c.epoch,
+      runtime: engine,
+      lastTurnAt: TURN_END,
+    })
     .onConflictDoUpdate({
-      target: [chatEngines.userId, chatEngines.sessionKey, chatEngines.runtime],
+      target: [chatEngines.userId, chatEngines.sessionKey, chatEngines.epoch, chatEngines.runtime],
       set: { lastTurnAt: TURN_END },
     });
 }
 
-/** The later of two times (null when both are). */
-const later = (a: Date | null | undefined, b: Date | null | undefined): Date | null =>
-  a && b ? (a > b ? a : b) : (a ?? b ?? null);
+/** The conversation of a turn: where its messages are, and how a delivery names it. */
+export interface TurnConversation extends ConversationRef {
+  id: string;
+}
 
 /**
- * The recap a turn gets when its engine is not the one that handled the chat's previous turn (or
- * no engine has finished a turn in this chat yet): the stored messages this engine hasn't had,
- * the newest kept within the budget. Nothing from before the chat's latest new start is in it.
- * Null: the engine hasn't changed, or there is nothing to tell.
+ * The recap a turn gets when its engine is not the one that handled the conversation's previous
+ * turn (or no engine has finished a turn in this conversation yet): the conversation's stored
+ * messages this engine hasn't had, the newest kept within the budget. Nothing said in another
+ * conversation is ever in it. Null: the engine hasn't changed, or there is nothing to tell.
  */
 export async function chatRecap(input: {
   userId: string;
-  sessionKey: string;
+  conversation: TurnConversation;
   engine: RuntimeName;
   /** This turn's own message, which is delivered as the turn's text. */
   skipMessageId?: string;
-  /** When the user last started a new chat here (null: never). */
-  chatStartedAt?: Date | null;
 }): Promise<string | null> {
-  const rows = await enginesOf(input.userId, input.sessionKey);
+  const rows = await enginesOf(input.userId, input.conversation);
   const previous = rows.reduce<(typeof rows)[number] | undefined>(
     (latest, r) => (!latest || r.lastTurnAt > latest.lastTurnAt ? r : latest),
     undefined,
@@ -78,15 +97,15 @@ export async function chatRecap(input: {
   if (previous?.runtime === input.engine) return null;
   const mine = rows.find((r) => r.runtime === input.engine);
   const messages = (
-    await recentSessionMessages(
+    await recentConversationMessages(
       input.userId,
-      input.sessionKey,
+      input.conversation.id,
       RECAP_MAX_MESSAGES + 1,
-      later(mine?.lastTurnAt, input.chatStartedAt),
+      mine?.lastTurnAt,
     )
   ).filter((m) => m.id !== input.skipMessageId && m.text.trim());
-  // No engine has run in this chat and the user hasn't said anything before: there is no
-  // conversation to carry on, only the platform's own messages (the "linked" greeting).
+  // No engine has run in this conversation and the user hasn't said anything in it before: there
+  // is nothing to carry on, only the platform's own messages (the "linked" greeting).
   if (!rows.length && !messages.some((m) => m.direction === 'in')) return null;
 
   // Newest first until the budget is full, then back in the order they were said.
@@ -112,11 +131,10 @@ export async function chatRecap(input: {
 export async function turnText(
   input: {
     userId: string;
-    sessionKey: string;
     text: string;
     inboundMessageId?: string;
-    /** When the user last started a new chat here: the recap starts no earlier. */
-    chatStartedAt?: Date | null;
+    /** The turn's conversation: the recap holds only its messages. */
+    conversation: TurnConversation;
   },
   engine: RuntimeName,
 ): Promise<string> {
@@ -133,15 +151,31 @@ export async function turnText(
   const recap = await part('chat recap', () =>
     chatRecap({
       userId: input.userId,
-      sessionKey: input.sessionKey,
+      conversation: input.conversation,
       engine,
-      chatStartedAt: input.chatStartedAt ?? null,
       ...(input.inboundMessageId ? { skipMessageId: input.inboundMessageId } : {}),
     }),
   );
   const parts = [memory, recap].filter((p): p is string => Boolean(p));
   if (!parts.length) return input.text;
   return `${parts.join('\n\n')}\n\n${MESSAGE_FOLLOWS}\n${input.text}`;
+}
+
+/** A conversation was deleted: the record of which engines ran in it goes too. */
+export async function forgetConversationEngines(
+  userId: string,
+  sessionKey: string,
+  epoch: number,
+): Promise<void> {
+  await db()
+    .delete(chatEngines)
+    .where(
+      and(
+        eq(chatEngines.userId, userId),
+        eq(chatEngines.sessionKey, sessionKey),
+        eq(chatEngines.epoch, epoch),
+      ),
+    );
 }
 
 /** Account deletion. */

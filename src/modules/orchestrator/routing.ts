@@ -5,7 +5,7 @@
 import { TypeSafeClient, type Questions } from '@typesafe-ai/sdk';
 import { config } from '../../shared/config.ts';
 import { logger } from '../../shared/logger.ts';
-import { recentSessionMessages } from '../channels/messages.ts';
+import { recentConversationMessages, recentSessionMessages } from '../channels/messages.ts';
 import { setTurnHooks, type RouteDecision, type TurnInput } from './turn.ts';
 
 /** A candidate app for the "which apps" question (the user's connected apps). */
@@ -186,8 +186,11 @@ function taskWithApps(_input: TurnInput, apps: string[]): RouteDecision {
   return apps.length ? { kind: 'task', apps } : TASK;
 }
 
+/** What was said just before, in the turn's own conversation only. */
 async function conversation(input: TurnInput) {
-  const rows = await recentSessionMessages(input.userId, input.sessionKey, CONTEXT_MESSAGES + 1);
+  const rows = input.conversationId
+    ? await recentConversationMessages(input.userId, input.conversationId, CONTEXT_MESSAGES + 1)
+    : await recentSessionMessages(input.userId, input.sessionKey, CONTEXT_MESSAGES + 1);
   return rows
     .filter((m) => m.id !== input.inboundMessageId && m.text)
     .slice(-CONTEXT_MESSAGES)

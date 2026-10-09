@@ -1,19 +1,21 @@
 // "New chat": the user starts a fresh conversation (web chat's button, or `/new` in Telegram).
-// The chat's epoch goes up, every delivery carries it in metadata_json, the recap leaves out what
-// came before, and saved memories stay. No turn runs and nothing is charged for it.
+// The new conversation gets the chat's next number (its epoch), every delivery carries the number
+// of its conversation in metadata_json, the recap holds only that conversation, and saved memories
+// stay. No turn runs and nothing is charged for it. (What a user can do with their conversations
+// besides starting one is in conversations.test.ts.)
 import { randomUUID } from 'node:crypto';
 import type { Job, Worker } from 'bullmq';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { auditLog } from '../src/modules/admin/schema.ts';
 import { channelLinks } from '../src/modules/auth/schema.ts';
+import { chatCounter } from '../src/modules/channels/conversations.ts';
 import { saveWebMessage } from '../src/modules/channels/messages.ts';
-import { messages } from '../src/modules/channels/schema.ts';
+import { chatEpochs, conversations, messages } from '../src/modules/channels/schema.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
 import { events } from '../src/modules/events/schema.ts';
 import { markClaudeConnected } from '../src/modules/orchestrator/agent-settings.ts';
 import {
-  chatEpoch,
   isNewChatCommand,
   NEW_CHAT_TEXT,
   NEW_CHATS_PER_HOUR,
@@ -21,7 +23,6 @@ import {
 import { handleDeleteUser } from '../src/modules/orchestrator/lifecycle.ts';
 import { handleProcessMessage } from '../src/modules/orchestrator/process-message.ts';
 import { ensureSandbox } from '../src/modules/orchestrator/sandbox.ts';
-import { chatEpochs } from '../src/modules/orchestrator/schema.ts';
 import { RECAP_END } from '../src/modules/orchestrator/turn-context.ts';
 import { runTurn } from '../src/modules/orchestrator/turn.ts';
 import { db } from '../src/shared/db/client.ts';
@@ -82,6 +83,10 @@ const listMessages = async (token: string) =>
 const metadataOf = (d: unknown) =>
   JSON.parse((d as { metadataJson: string }).metadataJson) as Record<string, unknown>;
 
+/** The highest conversation number given out in a chat so far (undefined: it never had one). */
+const epochOf = async (userId: string, sessionKey: string) =>
+  (await chatCounter(userId, sessionKey))?.epoch;
+
 /** The user says something in web chat; it is stored, then delivered as a turn. */
 async function say(userId: string, text: string) {
   const { message } = await saveWebMessage({ userId, text, clientMessageId: randomUUID() });
@@ -93,6 +98,7 @@ async function say(userId: string, text: string) {
     channel: 'web',
     text,
     inboundMessageId: message.id,
+    conversationId: message.conversationId,
   });
   const delivery = vm.deliveries.at(-1)!;
   return { outcome, got: delivery.text, metadata: metadataOf(delivery) };
@@ -163,13 +169,16 @@ describe('new web chat: POST /v1/chats/new', () => {
     const page = await listMessages(user.token);
     expect(page.chatStartedAt).toBe(startedAt);
     expect(page.items.map((m) => m.text)).toEqual(['re: plan a trip to Goa', 'plan a trip to Goa']);
-    expect(await chatEpoch(user.id, 'web')).toEqual({ epoch: 1, startedAt: new Date(startedAt) });
+    expect(await chatCounter(user.id, 'web')).toMatchObject({
+      epoch: 1,
+      startedAt: new Date(startedAt),
+    });
 
     // Again: a later time, the next epoch.
     const again = await startWebChat(user.token);
     expect(Date.parse(again)).toBeGreaterThan(Date.parse(startedAt));
     expect((await listMessages(user.token)).chatStartedAt).toBe(again);
-    expect((await chatEpoch(user.id, 'web')).epoch).toBe(2);
+    expect(await epochOf(user.id, 'web')).toBe(2);
   });
 
   it('is in the activity log as chat_started by the user, with the channel and no message text', async () => {
@@ -197,7 +206,7 @@ describe('new web chat: POST /v1/chats/new', () => {
     const other = await createUser();
     for (let i = 0; i < NEW_CHATS_PER_HOUR; i++) await startWebChat(user.token);
     await expectContract('startNewChat', await newChat(user.token), 429);
-    expect((await chatEpoch(user.id, 'web')).epoch).toBe(NEW_CHATS_PER_HOUR);
+    expect(await epochOf(user.id, 'web')).toBe(NEW_CHATS_PER_HOUR);
     // Per user.
     await startWebChat(other.token);
   });
@@ -247,7 +256,7 @@ describe('every delivery carries the chat epoch', () => {
 });
 
 describe('the recap after a new chat', () => {
-  it('leaves out everything said before the chat’s latest start', async () => {
+  it('leaves out everything said before the new chat: it holds the new conversation only', async () => {
     const user = await chatUser();
     await ensureSandbox(user.id);
     await say(user.id, 'plan a trip to Goa');
@@ -302,13 +311,20 @@ describe('/new in Telegram', () => {
     await sendTelegram(chatId, 'plan a trip to Goa');
     await waitFor(async () => tg.sent.find((m) => m.text === 're: plan a trip to Goa'));
     const deliveries = vm.deliveries.length;
-    const saved = await db().select().from(messages).where(eq(messages.userId, user.id));
+    // Once the turn is over (its last step marks the message delivered) and the answer is sent,
+    // the stored messages no longer change.
+    const saved = await waitFor(async () => {
+      const all = await db().select().from(messages).where(eq(messages.userId, user.id));
+      return all.length === 2 && all.every((m) => ['delivered', 'sent'].includes(m.status))
+        ? all
+        : undefined;
+    });
 
     for (const [i, command] of ['/new', '/clear', '/reset'].entries()) {
       const update = await sendTelegram(chatId, command);
       await eventDone(update.update_id);
       await waitFor(async () => tg.sent.filter((m) => m.text === NEW_CHAT_TEXT).length === i + 1);
-      expect((await chatEpoch(user.id, sessionKey)).epoch).toBe(i + 1);
+      expect(await epochOf(user.id, sessionKey)).toBe(i + 1);
     }
     expect(NEW_CHAT_TEXT).toBe(
       "Started a new chat. I won't use what we talked about before here. Your saved memories stay.",
@@ -318,8 +334,8 @@ describe('/new in Telegram', () => {
     ).toBe(true);
     expect(vm.deliveries).toHaveLength(deliveries);
     expect(await db().select().from(messages).where(eq(messages.userId, user.id))).toEqual(saved);
-    // Web chat is a chat of its own: untouched.
-    expect(await chatEpoch(user.id, 'web')).toEqual({ epoch: 0, startedAt: null });
+    // Web chat is a chat of its own: untouched (it has had no conversation yet).
+    expect(await chatCounter(user.id, 'web')).toBeUndefined();
     expect((await startedEntries(user.id)).map((e) => e.summary)).toEqual([
       'Started a new chat on Telegram',
       'Started a new chat on Telegram',
@@ -342,7 +358,10 @@ describe('/new in Telegram', () => {
 
     await handleProcessMessage({ data: { eventId: event.id } } as Job);
     await new Promise((r) => setTimeout(r, 300));
-    expect((await chatEpoch(user.id, `telegram:${chatId}`)).epoch).toBe(1);
+    expect(await epochOf(user.id, `telegram:${chatId}`)).toBe(1);
+    expect(
+      await db().select().from(conversations).where(eq(conversations.userId, user.id)),
+    ).toHaveLength(1);
     expect(tg.sent.filter((m) => m.text === NEW_CHAT_TEXT)).toHaveLength(1);
     expect(await startedEntries(user.id)).toHaveLength(1);
   });
@@ -356,12 +375,18 @@ describe('/new in Telegram', () => {
   });
 });
 
-it('deleting the account removes the chat epochs', async () => {
+it('deleting the account removes the conversations and the chat counters', async () => {
   const user = await createUser();
   const other = await createUser();
   await startWebChat(user.token);
   await startWebChat(other.token);
   await handleDeleteUser({ data: { userId: user.id } } as Job);
   expect(await db().select().from(chatEpochs).where(eq(chatEpochs.userId, user.id))).toEqual([]);
-  expect((await chatEpoch(other.id, 'web')).epoch).toBe(1);
+  expect(await db().select().from(conversations).where(eq(conversations.userId, user.id))).toEqual(
+    [],
+  );
+  expect(await epochOf(other.id, 'web')).toBe(1);
+  expect(
+    await db().select().from(conversations).where(eq(conversations.userId, other.id)),
+  ).toHaveLength(1);
 });

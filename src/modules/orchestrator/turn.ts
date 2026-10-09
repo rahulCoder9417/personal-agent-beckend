@@ -6,6 +6,7 @@ import { redis } from '../../shared/redis.ts';
 import { alert } from '../admin/alerts.ts';
 import { audit } from '../admin/audit.ts';
 import { getActiveUser } from '../auth/users.ts';
+import { conversationFor } from '../channels/conversations.ts';
 import { signedFileUrl } from '../channels/files.ts';
 import { setMessageStatus } from '../channels/messages.ts';
 import { queueOutbound } from '../channels/outbound.ts';
@@ -20,7 +21,6 @@ import {
   type RuntimeName,
 } from './agent-settings.ts';
 import { syncBrowserAfterWake } from './browser.ts';
-import { chatEpoch } from './chats.ts';
 import { crewOfProgress } from './crew.ts';
 import { ensureSandbox } from './sandbox.ts';
 import { recordEngineTurn, turnText } from './turn-context.ts';
@@ -39,6 +39,11 @@ export interface TurnInput {
   attachments?: MediaRef[];
   approval?: { id: string; approved: boolean };
   inboundMessageId?: string;
+  /**
+   * The conversation the turn belongs to: the inbound message's own. Left out (an automation, an
+   * app event) or no longer there: the chat's active one.
+   */
+  conversationId?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -139,6 +144,58 @@ export async function turnEngine(userId: string): Promise<RuntimeName | null> {
   }
 }
 
+// --- the conversation of the turn in progress ---------------------------------------------------
+// What the agent sends during a turn belongs to the turn's conversation, also when the user has
+// opened another web conversation meanwhile. The agent's tools only know the chat (the session
+// key), so the worker records the turn's conversation when it delivers it, like the engine above.
+
+const turnConversationKey = (userId: string) => `turn-conversation:${userId}`;
+
+/** Never fails the turn: without the record a reply goes to the chat's active conversation. */
+async function recordTurnConversation(
+  userId: string,
+  sessionKey: string,
+  conversationId: string,
+): Promise<void> {
+  try {
+    await redis().set(
+      turnConversationKey(userId),
+      JSON.stringify({ sessionKey, conversationId }),
+      'EX',
+      TURN_ENGINE_TTL_SECONDS,
+    );
+  } catch (err) {
+    logger().warn({ userId, err: String(err) }, 'conversation of the turn not on record');
+  }
+}
+
+async function clearTurnConversation(userId: string): Promise<void> {
+  await redis()
+    .del(turnConversationKey(userId))
+    .catch((err: unknown) =>
+      logger().warn({ userId, err: String(err) }, 'conversation of the turn not cleared'),
+    );
+}
+
+/**
+ * The conversation of the user's turn in progress, when that turn is in this chat. Null: no turn
+ * in progress, another chat's turn, or not known.
+ */
+export async function turnConversationId(
+  userId: string,
+  sessionKey: string,
+): Promise<string | null> {
+  try {
+    const raw = await redis().get(turnConversationKey(userId));
+    if (!raw) return null;
+    const record = JSON.parse(raw) as { sessionKey?: string; conversationId?: string };
+    return record.sessionKey === sessionKey && record.conversationId ? record.conversationId : null;
+  } catch (err) {
+    logger().warn({ userId, err: String(err) }, 'conversation of the turn not readable');
+    return null;
+  }
+}
+
 /** A progress line is short; anything longer is cut. */
 export const PROGRESS_MAX_CHARS = 300;
 /** Crew lines saved to the activity log per turn (the rest are only streamed). */
@@ -176,14 +233,19 @@ async function reportProgress(
   }
 }
 
-export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
-  const { userId } = input;
-  const log = logger().child({ userId, deliveryId: input.deliveryId });
+export async function runTurn(given: TurnInput): Promise<TurnOutcome> {
+  const { userId } = given;
+  const log = logger().child({ userId, deliveryId: given.deliveryId });
+  // The turn's conversation: the message's own, else the chat's active one. Everything the turn
+  // saves and everything the agent is given comes from this one conversation.
+  const conversation = await conversationFor(userId, given.sessionKey, given.conversationId);
+  const input: TurnInput = { ...given, conversationId: conversation.id };
 
   if (!(await hooks.hasCredits(userId))) {
     await queueOutbound({
       userId,
       sessionKey: input.sessionKey,
+      conversationId: conversation.id,
       text: outOfCreditsText(input.channel),
     });
     if (input.inboundMessageId) await setMessageStatus(input.inboundMessageId, 'delivered');
@@ -196,7 +258,12 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
     return 'spam';
   }
   if (decision.kind === 'simple') {
-    await queueOutbound({ userId, sessionKey: input.sessionKey, text: decision.reply });
+    await queueOutbound({
+      userId,
+      sessionKey: input.sessionKey,
+      conversationId: conversation.id,
+      text: decision.reply,
+    });
     if (input.inboundMessageId) await setMessageStatus(input.inboundMessageId, 'delivered');
     await hooks.afterTurn(userId, 'simple');
     return 'simple';
@@ -223,28 +290,32 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
   const engine = await syncRuntimeAfterWake(userId, woke.sandbox);
   // Scout's browser is on for this container only if the plan says so (HLD 11.3).
   await syncBrowserAfterWake(userId, user.plan, woke.sandbox);
-  // The chat's epoch: when the user started a new chat, the engine starts a fresh conversation.
-  const chat = await chatEpoch(userId, input.sessionKey);
-  // What is known about the user, and a recap of the chat if the engine changed (HLD 0.9). The
-  // recap holds nothing from before the chat's latest new start.
-  const text = await turnText({ ...input, chatStartedAt: chat.startedAt }, engine);
-  // What the platform adds to the delivery's metadata: the chat's epoch, always. On Claude Code
-  // also the model and the effort the user chose (each left out when it is Claude Code's default).
+  // What is known about the user (the same in every conversation), and a recap of this
+  // conversation if the engine changed (HLD 0.9).
+  const text = await turnText({ ...input, conversation }, engine);
+  // What the platform adds to the delivery's metadata: the conversation's number in its chat,
+  // always. The Bridge keeps one engine conversation per number, so this turn continues its own
+  // conversation's context; the number is lower than the chat's highest when the user went back
+  // to an earlier conversation. On Claude Code also the model and the effort the user chose (each
+  // left out when it is Claude Code's default).
   const metadata: Record<string, unknown> = {
-    chat_epoch: chat.epoch,
+    chat_epoch: conversation.epoch,
     ...(engine === 'claude_code' ? { claude: await claudeTurnOptions(userId) } : {}),
   };
 
-  // From here until the turn ends, read_page knows which engine is calling it (HLD 5.1).
+  // From here until the turn ends, read_page knows which engine is calling it (HLD 5.1), and what
+  // the agent sends to this chat is saved in the turn's conversation.
   await recordTurnEngine(userId, engine);
+  await recordTurnConversation(userId, input.sessionKey, conversation.id);
   const outcome = await deliverTurn(input, { text, apps: decision.apps, metadata, log }).finally(
-    () => clearTurnEngine(userId),
+    () => Promise.all([clearTurnEngine(userId), clearTurnConversation(userId)]),
   );
 
   if (!outcome) throw new RetryableTurnError('deliver stream ended without turn_done');
-  // This engine now has the chat up to here. A failed turn is not recorded: it gets the recap again.
+  // This engine now has the conversation up to here. A failed turn is not recorded: it gets the
+  // recap again.
   if (outcome === 'done')
-    await recordEngineTurn(userId, input.sessionKey, engine).catch((err: unknown) =>
+    await recordEngineTurn(userId, conversation, engine).catch((err: unknown) =>
       log.warn({ err: String(err) }, 'engine of the turn not recorded'),
     );
   if (input.inboundMessageId)
@@ -337,6 +408,7 @@ async function deliverTurn(
           await queueOutbound({
             userId,
             sessionKey: input.sessionKey,
+            conversationId: input.conversationId,
             text: PLATFORM_FAULT_TEXT,
           });
           await refundFailedTurn(userId, {
@@ -348,6 +420,7 @@ async function deliverTurn(
           await queueOutbound({
             userId,
             sessionKey: input.sessionKey,
+            conversationId: input.conversationId,
             text: `I couldn't finish that: ${ev.message}`,
           });
           // Claude Code whose sign-in stopped working: forget it, Hermes answers next time.
@@ -355,6 +428,7 @@ async function deliverTurn(
             await queueOutbound({
               userId,
               sessionKey: input.sessionKey,
+              conversationId: input.conversationId,
               text: `Your Claude plan is no longer connected, so I've switched back to the standard agent. Reconnect it at ${config().WEB_APP_URL}/settings/ai`,
             });
           }

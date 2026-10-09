@@ -4,13 +4,14 @@ import { db } from '../../shared/db/client.ts';
 import { conflict, notFound } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
 import { audit } from '../admin/audit.ts';
+import { conversationOfApproval } from '../channels/messages.ts';
 import { queueOutbound } from '../channels/outbound.ts';
 import { publish } from '../channels/stream.ts';
 import type { InboundMessage } from '../channels/types.ts';
 import { ingestEvent } from '../events/intake.ts';
 import { IGNORED } from '../../worker/ignored.ts';
 import { approvals } from './schema.ts';
-import { runTurn } from './turn.ts';
+import { runTurn, turnConversationId } from './turn.ts';
 
 export type Approval = typeof approvals.$inferSelect;
 export const APPROVAL_TTL_MS = 24 * 3600 * 1000;
@@ -60,6 +61,8 @@ export async function requestApproval(input: {
   await queueOutbound({
     userId: input.userId,
     sessionKey: input.sessionKey,
+    // Asked during a turn: the question belongs to that turn's conversation.
+    conversationId: await turnConversationId(input.userId, input.sessionKey),
     text: `Approval needed: ${a.summary}`,
     approvalId: a.id,
     template: 'approval',
@@ -176,12 +179,16 @@ export async function handleProcessApproval(job: Job): Promise<unknown> {
     a.sessionKey === 'web'
       ? 'web'
       : (a.sessionKey.split(':')[0] as 'telegram' | 'whatsapp' | 'imessage');
+  // The answer goes back to the conversation the question was asked in, not to whichever one is
+  // active now: that is where the agent is waiting for it.
+  const conversationId = await conversationOfApproval(userId, a.id);
   await runTurn({
     userId,
     deliveryId: eventId,
     kind: 'approval_answer',
     sessionKey: a.sessionKey,
     channel: parsedChannel,
+    ...(conversationId ? { conversationId } : {}),
     text:
       a.status === 'approved'
         ? `The user APPROVED: ${a.summary}. Go ahead (call run_app_action with approval_id "${a.id}").`

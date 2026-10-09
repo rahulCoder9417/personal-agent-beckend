@@ -50,6 +50,7 @@ Five files make up the docs:
 ## 2. What a user can do
 
 - **Chat with their own agent.** On Telegram or in the web app. Example: "What is on my calendar today?"
+- **Read each reply in the form that fits the place.** In the web app a reply has formatting: headings, bold words, lists, tables and code. On Telegram the same reply is a simple text message, with no formatting symbols. Example: a table in the web app is one line per row on Telegram.
 - **Start a new chat.** The "New chat" button in the web app, or the message `/new` on Telegram. The agent then does not see what was said before in that chat. Its saved notes about the user stay. It costs nothing.
 - **Keep a history of conversations.** Each new chat is its own conversation, with its own context. The web app lists them, named after their first message. The user can open an earlier web conversation and go on writing in it: the agent continues that conversation, not the latest one. Example: open last week's "Plan a trip to Goa" and ask "and the hotel?". Telegram conversations are in the list for reading.
 - **Rename or delete a conversation.** Deleting one removes its messages and files.
@@ -167,7 +168,7 @@ Example: the user texts "email Priya the notes".
 5. The worker asks the vm-manager to wake the user's container. This takes a few seconds if it was asleep.
 6. The vm-manager hands the message to the Bridge inside the container. The Bridge gives it to the agent.
 7. The agent works. It may call tools, and Tex may hand parts to the crew. Short progress lines go to the chat.
-8. The agent gives its final reply. The worker sends it to Telegram.
+8. The agent gives its final reply. The worker sends it to Telegram as a simple text message: it takes the formatting symbols out first. The saved reply keeps them, so the web app shows it with its formatting.
 9. The worker counts what was used and charges credits.
 10. After 3 idle minutes the container stops. The user's files stay.
 

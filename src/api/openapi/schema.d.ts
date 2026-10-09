@@ -110,11 +110,19 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Chat history (all channels, newest first)
-         * @description `chatStartedAt` is when the web chat's latest new chat started (`POST /v1/chats/new`), or
-         *     null if the user never started one. The list itself is unchanged: older messages are still
-         *     returned. The web app draws a "New chat" divider before the first web message after that
-         *     time.
+         * Chat history (newest first)
+         * @description Which messages are listed:
+         *     - with `conversationId`: that conversation's messages (any channel; 404 if it isn't this
+         *       user's);
+         *     - with `channel=web` and no `conversationId`: the messages of the web chat's active
+         *       conversation (none if web chat has no conversation yet);
+         *     - with another `channel` and no `conversationId`: every message of that channel;
+         *     - with neither: every message of every channel.
+         *
+         *     Every message carries its `conversationId`.
+         *
+         *     `chatStartedAt` is kept for older clients: when the web chat's newest conversation started,
+         *     or null if the user never started a new chat in web chat.
          */
         get: operations["listMessages"];
         put?: never;
@@ -123,12 +131,85 @@ export interface paths {
          * @description Queued like any other channel message. The reply arrives on the SSE stream.
          *     Returns 402 when the balance is zero, and 403 `channel_disabled` when web chat is switched
          *     off (`web` is not in `available`, see `GET /v1/channels`).
+         *
+         *     The message goes into the web chat's active conversation. With `conversationId` it goes
+         *     into that web conversation instead, which becomes the active one first: the agent then
+         *     continues that conversation's own context, not the latest one's. 404 if the conversation
+         *     isn't this user's; 409 if it is not a web conversation (a Telegram conversation can only be
+         *     read in the web app).
          */
         post: operations["sendMessage"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v1/conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The user's conversations (newest `lastMessageAt` first)
+         * @description A chat is one channel thread (web chat, or one Telegram chat). A conversation is one
+         *     stretch of a chat between two "New chat" actions; the agent keeps a separate context for
+         *     each. Saved memories (`/v1/memories`) are shared by all of them.
+         *
+         *     Without `channel`, every channel's conversations are listed. Web conversations can be
+         *     opened and written in; Telegram conversations are listed for reading only (Telegram always
+         *     writes in its chat's latest one, and `/new` there starts a new one).
+         */
+        get: operations["listConversations"];
+        put?: never;
+        /**
+         * Start a new web conversation
+         * @description Starts a new, empty conversation in web chat and makes it the active one. The agent starts
+         *     with a fresh context there: it does not see what was said in other conversations. Saved
+         *     memories are kept; they are not part of a conversation. No body.
+         *
+         *     Web chat only (a Telegram chat starts a new one with the message `/new`). No turn runs and
+         *     no credits are charged. Rate limited to 30 an hour per user, counted together with
+         *     `POST /v1/chats/new`.
+         */
+        post: operations["createConversation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/conversations/{conversationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a conversation with its messages and files
+         * @description Removes the conversation, its messages and their attachments. The activity log gets
+         *     `conversation_deleted` (the channel, never any text). Deleting the active web conversation
+         *     makes the newest remaining web conversation the active one, or starts an empty one when
+         *     none is left. After the active conversation of a Telegram chat is deleted, the next message
+         *     from that chat starts a new one.
+         */
+        delete: operations["deleteConversation"];
+        options?: never;
+        head?: never;
+        /**
+         * Rename a conversation, or make a web conversation the active one
+         * @description `title` renames it (any channel). `active: true` makes a web conversation the active one:
+         *     web chat's next message goes there and the agent continues that conversation's own
+         *     context. A Telegram conversation cannot be made active from the web (409). At least one of
+         *     the two fields is required.
+         */
+        patch: operations["updateConversation"];
         trace?: never;
     };
     "/v1/chats/new": {
@@ -141,13 +222,13 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Start a new web chat
-         * @description The agent starts a fresh conversation in web chat: it no longer sees what was said there
-         *     before. Saved memories (`/v1/memories`) are kept; they are not part of a chat. No body.
-         *     Applies to web chat only (a Telegram chat starts a new one with the message `/new`).
-         *     No turn runs and no credits are charged. Rate limited to 30 an hour per user.
+         * Start a new web chat (older name of `POST /v1/conversations`)
+         * @deprecated
+         * @description Kept for older clients; it does what `POST /v1/conversations` does and shares its limit of
+         *     30 an hour per user. No body.
          *
-         *     The answer's `chatStartedAt` is the same value `GET /v1/messages` returns from now on.
+         *     The answer's `chatStartedAt` is when the new conversation started, the same value
+         *     `GET /v1/messages` returns from now on.
          */
         post: operations["startNewChat"];
         delete?: never;
@@ -1829,6 +1910,7 @@ export interface components {
              * @example memory_deleted
              * @example memories_cleared
              * @example chat_started
+             * @example conversation_deleted
              */
             action: string;
             summary: string;
@@ -1880,6 +1962,15 @@ export interface components {
         };
         /** @description Not found (or not owned by this user) */
         NotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The request can't be applied to this item as it is now */
+        Conflict: {
             headers: {
                 [name: string]: unknown;
             };
@@ -1952,6 +2043,7 @@ export interface components {
         McpServerId: string;
         AutomationId: string;
         MemoryId: string;
+        ConversationId: string;
         Provider: components["schemas"]["ByokProvider"];
         /** @description The GitHub user or organisation that owns the repo. */
         RepoOwner: string;
@@ -2132,6 +2224,8 @@ export interface operations {
                 cursor?: components["parameters"]["Cursor"];
                 limit?: components["parameters"]["Limit"];
                 channel?: components["schemas"]["ChannelType"];
+                /** @description List only this conversation's messages. */
+                conversationId?: string;
             };
             header?: never;
             path?: never;
@@ -2150,7 +2244,8 @@ export interface operations {
                         nextCursor: string | null;
                         /**
                          * Format: date-time
-                         * @description When the web chat's latest new chat started. Null if never.
+                         * @description For older clients. When the web chat's newest conversation started; null if
+                         *     the user never started a new chat there.
                          */
                         chatStartedAt: string | null;
                     };
@@ -2158,6 +2253,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
         };
     };
     sendMessage: {
@@ -2177,6 +2273,11 @@ export interface operations {
                      */
                     clientMessageId: string;
                     attachmentIds?: string[];
+                    /**
+                     * @description The web conversation to write in. Left out: the active one. A conversation that
+                     *     is not active becomes the active one first.
+                     */
+                    conversationId?: string;
                 };
             };
         };
@@ -2194,7 +2295,116 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             402: components["responses"]["OutOfCredits"];
             403: components["responses"]["ChannelDisabled"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             429: components["responses"]["RateLimited"];
+        };
+    };
+    listConversations: {
+        parameters: {
+            query?: {
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+                channel?: components["schemas"]["ChannelType"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["Conversation"][];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Started; it is the active web conversation now */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Conversation"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    deleteConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversationId: components["parameters"]["ConversationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversationId: components["parameters"]["ConversationId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    title?: string;
+                    /** @constant */
+                    active?: true;
+                };
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Conversation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     startNewChat: {

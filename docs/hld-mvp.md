@@ -51,6 +51,8 @@ Five files make up the docs:
 
 - **Chat with their own agent.** On Telegram or in the web app. Example: "What is on my calendar today?"
 - **Start a new chat.** The "New chat" button in the web app, or the message `/new` on Telegram. The agent then does not see what was said before in that chat. Its saved notes about the user stay. It costs nothing.
+- **Keep a history of conversations.** Each new chat is its own conversation, with its own context. The web app lists them, named after their first message. The user can open an earlier web conversation and go on writing in it: the agent continues that conversation, not the latest one. Example: open last week's "Plan a trip to Goa" and ask "and the hotel?". Telegram conversations are in the list for reading.
+- **Rename or delete a conversation.** Deleting one removes its messages and files.
 - **Get real work done in apps.** The agent can act in about 25 apps. Example: "Email Priya the meeting notes."
 - **Stay in control.** Before the agent sends something to another person, deletes something or pays, it asks first.
 - **Set reminders and automations.** Once, on a schedule, or when something happens in an app. Example: "Every Monday at 9, send me my open pull requests."
@@ -76,6 +78,8 @@ Five files make up the docs:
 | **Claude Code** | Anthropic's agent program. Used when the user connects their own Claude plan |
 | **Bridge** | A small program inside each container. It takes a message in and sends the agent's events out |
 | **Turn** | One piece of work: a message comes in, the agent works, a reply goes out |
+| **Chat** | One place to talk: web chat, or one linked Telegram chat |
+| **Conversation** | One stretch of a chat, from one "New chat" to the next. The agent keeps a separate context for each |
 | **Credit** | Our unit of payment. 1 credit is $0.01 of price |
 | **Job** | A piece of work written into a queue, to be done a moment later |
 | **Queue** | A waiting line of jobs |
@@ -385,6 +389,8 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - Payments through Polar.
 - Pull-request review, and Byte pushing code through our git gateway.
 - A memory saved on one engine and used on the other.
+- The history of conversations: the list, going back to an earlier one, rename and delete. Built on 9 October.
+- The app list telling the web app which apps can be connected on this server (only those with a Composio setup: today Gmail and GitHub).
 - Web search through Brave. The key works; the path through the app has not run.
 
 ### Not finished

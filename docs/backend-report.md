@@ -10,7 +10,7 @@ Read `hld-mvp.md` first. It gives the short version and explains the words. This
 | **What it does** | Receives messages, runs each user's agent through the vm-manager, charges credits, sends replies |
 | **What it does not do** | It does not run the AI itself. Each user's agent runs in its own container |
 | **Where it runs** | On the AWS test server (see `aws-setup.md`) |
-| **How it is tested** | 457 automated tests, with a real database and real queues |
+| **How it is tested** | 526 automated tests, with a real database and real queues |
 | **What is in this report** | The backend, and the parts it depends on: the vm-manager, the container, the proxy |
 
 ## How to read this report
@@ -141,7 +141,7 @@ The code is split into nine modules, so every area has one owner. A module is a 
 | Module | What it does | Tables it owns |
 |---|---|---|
 | auth | Users, sign-in checks, link codes, linked chats, the waitlist | `users`, `link_codes`, `channel_links`, `waitlist_entries`, `waitlist_attempts` |
-| channels | Talks to the chat apps. Stores messages and files. Carries live updates | `messages`, `attachments` |
+| channels | Talks to the chat apps. Stores messages and files, and groups messages into conversations. Carries live updates | `messages`, `attachments`, `conversations`, `chat_epochs` |
 | events | Saves everything that comes in. Owns the queues | `events` |
 | orchestrator | Runs one agent turn. Also approvals, agent settings and memory | `sandbox_tokens`, `approvals`, `agent_settings`, `memories`, `chat_engines` |
 | platform-mcp | The tool server that agents call | None. It keeps short-lived data in Redis |
@@ -304,7 +304,7 @@ This section follows a new person from sign-up to an account with credits and a 
 
 - **The web app arrives first.** If a request comes before Clerk's webhook, the api creates the account from Clerk's data. The same onboarding job is added once.
 - **Clerk reports a change.** The email, its verified state and the role are updated. An admin is a user whose role is set to admin in Clerk.
-- **Clerk reports a deletion.** The account is marked deleted and a delete job runs. It removes the container and its data, the LiteLLM key, app connections, automations, linked chats, messages, files and memories. It also stops the subscription from renewing.
+- **Clerk reports a deletion.** The account is marked deleted and a delete job runs. It removes the container and its data, the LiteLLM key, app connections, automations, linked chats, conversations, messages, files and memories. It also stops the subscription from renewing.
 
 ### What can go wrong
 
@@ -388,30 +388,71 @@ The setting is `ENABLED_CHANNELS`: a list of channel names with commas between t
 
 With web chat off, sending from the web app is refused with 403 `channel_disabled`. The rest of the web app works. `GET /v1/channels` returns the channels that are on, as `available`. The web app offers only those.
 
-### Starting a new chat
+### Conversations
 
-A user can start a new chat with their agent. The agent then does not see what was said before in that chat. The saved memories stay, because they are not part of a chat (section 22). A chat here is one place to talk: web chat is one chat, and each linked Telegram chat is another.
+A chat is one place to talk: web chat is one chat, and each linked Telegram chat is another. A conversation is one stretch of a chat between two "New chat" actions. The web app shows them as a list, like a chat history. Each conversation has its own context: in one conversation the agent does not see what was said in another. The saved memories are the same in all of them, because they belong to the user, not to a chat (section 22).
+
+| A conversation has | What it is |
+|---|---|
+| A channel | Web chat or Telegram |
+| A number | Its place in its chat: 0 for the first, then 1, 2 and so on. The code calls it the epoch |
+| A title | The first message the user wrote in it, cut to 60 characters at a word. "New chat" while it has none. The user can rename it |
+| A start time and a last-message time | The list is sorted by the last message, newest first |
+| Active or not | The active one is where the chat's next message goes. Each chat has one |
+
+The rules:
+
+- **Every message belongs to one conversation.** A new message is saved in its chat's active conversation. A chat's first message starts conversation 0.
+- **Web chat:** the user can start a new conversation, open any earlier web conversation and keep writing in it. Writing in an earlier one makes it the active one. The agent then continues that conversation's own context, not the latest one's.
+- **Telegram:** a message always goes into the chat's latest conversation. `/new` starts the next one. In the web app, Telegram conversations are listed for reading only. The api answers 409 when the web app tries to open one or write in it.
+- **A reply stays where its question was asked.** What the agent sends during a turn is saved in that turn's conversation, also when the user has opened another conversation meanwhile. An approval's answer goes back to the conversation that asked for it.
+- **Renaming:** the user can give any conversation a name of 1 to 80 characters. A later message does not change it back.
+- **Deleting:** the conversation goes, with its messages and their files. They are the user's own data. A file that a message in another conversation still shows is kept. The activity log gets "Deleted a conversation in web chat" or "on Telegram". It never holds the title or the text of a message.
+- **After the active web conversation is deleted,** the newest remaining web conversation becomes the active one. When none is left, an empty one is started. After a Telegram chat's current conversation is deleted, the chat's next message starts a new one.
+- **A number is never used twice.** The table `chat_epochs` keeps, for each chat, the highest number given out. It only goes up, also after a delete. The reason: the engine may still hold the deleted conversation's context under its old number, and a new conversation must not pick that up.
+
+How the context stays separate:
+
+1. Every message the agent gets carries the number of the conversation it belongs to.
+2. The Bridge, our small program in the container, keeps one engine conversation for each chat and number. A message continues the engine conversation of its number. A number the Bridge has not seen starts a new one.
+3. When the user goes back to an earlier conversation, the message carries a lower number than the chat's highest. The engine picks that conversation up where it stopped.
+4. The recap the backend adds when the engine changes holds only the turn's own conversation (section 22). The router also sees only that conversation (section 9).
+5. The Bridge is not told when a conversation is deleted. The backend deletes its own copy at once. The engine's own record stays in the container, unused, because the number never comes back. It goes when the account is deleted.
+
+What the web app calls:
+
+| Call | What it does |
+|---|---|
+| `GET /v1/conversations` | Lists the user's conversations, the one with the newest message first. `channel` narrows it to web or Telegram. Pages of 30 |
+| `POST /v1/conversations` | Starts a new web conversation and makes it the active one |
+| `PATCH /v1/conversations/{conversationId}` | Renames it, or makes a web conversation the active one |
+| `DELETE /v1/conversations/{conversationId}` | Deletes it with its messages and files |
+| `GET /v1/messages` | With a conversation's id: its messages. With `channel=web` only: the active web conversation's messages. With nothing: every message |
+| `POST /v1/messages` | Sends a message. With a conversation's id it goes into that web conversation, which becomes the active one first |
+
+Example: Rahul plans a trip to Goa in web chat. He clicks "New chat" and asks "what is a good laptop?". The agent answers about laptops and says nothing about Goa. The next day he opens the Goa conversation in the list and asks "and the hotel?". The agent answers with the trip in mind, and knows nothing of the laptop. In both it still knows he is vegetarian, because that is a saved memory.
+
+### Starting a new chat
 
 | Where | How the user starts one | What they see |
 |---|---|---|
-| Web chat | The "New chat" button | A "New chat" line in the history, before the first message after it |
+| Web chat | The "New chat" button | A new, empty conversation at the top of the list, named "New chat" |
 | Telegram | The message `/new`. `/clear` and `/reset` work too | The bot answers: "Started a new chat. I won't use what we talked about before here. Your saved memories stay." |
 
-What happens, in order:
-
-1. The backend keeps a number for each chat, called the chat epoch. It starts at 0.
-2. Starting a new chat adds 1 to that chat's number and records the time. Other chats keep their number.
-3. Every message the agent gets carries its chat's number.
-4. The Bridge, our small program in the container, remembers the last number it saw for each chat. When a message comes with a higher number, the engine starts a fresh conversation for that chat, then answers. A lower number changes nothing.
-5. The recap the backend adds when the engine changes leaves out everything said before the new start (section 22).
-6. The activity log gets "Started a new chat on Telegram" or "Started a new chat in web chat". It never holds the text of a message.
-
 - **No turn and no charge.** Starting a new chat wakes no container and costs no credits. It works at zero credits too.
-- **Web chat:** at most 30 new chats an hour per user. The old messages stay in the history. With the history, the web app gets the time of the latest new chat, and draws its line there.
+- **Its number:** the new conversation gets the chat's next number. Other chats keep theirs.
+- **Web chat:** at most 30 new chats an hour per user. The earlier conversations stay in the list. The older address `POST /v1/chats/new` still works and does the same.
 - **Telegram:** the command must be the whole message. "/new please" goes to the agent as a normal message. The command and the bot's answer are not saved as chat messages. A Telegram message that arrives twice starts only one new chat and gets one answer.
 - **A chat that is not linked** and sends `/new` only gets the "please link" reply.
+- **The activity log** gets "Started a new chat on Telegram" or "Started a new chat in web chat". It never holds the text of a message.
 
-Example: Rahul planned a trip to Goa with his agent on Telegram. He sends `/new`, then asks "what is a good laptop?". The agent answers about laptops and says nothing about Goa. It still knows he is vegetarian, because that is a saved memory.
+### Messages stored before conversations existed
+
+Conversations were added on 9 October. The messages stored before that day were put into conversations once, when the database was updated:
+
+- A chat that never had a new chat became one conversation, number 0, with all its messages.
+- A chat that had a new chat became two. The messages since its latest start are the current conversation, with the chat's current number. Everything before is one conversation, with the number before it. Earlier starts had not been recorded, so they could not be told apart.
+- Each conversation got its title and its last-message time from its messages. The record of which engine last ran went to the conversation it ran in.
 
 ## 9. One message from start to end
 
@@ -428,11 +469,11 @@ This section follows one message through the whole system. Example: Rahul texts 
    - The chat is not linked: the link flow runs.
    - A button was tapped: it is an approval answer.
    - The text is a link code: the reply says the chat is already linked, to this account or to another one. The code is not used (section 7).
-   - The text is `/new`, `/clear` or `/reset` on Telegram: a new chat starts in this chat (section 8).
+   - The text is `/new`, `/clear` or `/reset` on Telegram: a new conversation starts in this chat (section 8).
    - The text is "yes" or "no" and an approval waits in this chat: it is an approval answer.
    - The text is a coupon code: it is redeemed, and the reply shows the new balance.
 7. It downloads any files and turns voice into text.
-8. It saves the message in `messages`, once per event. The web app gets a live update.
+8. It saves the message in `messages`, once per event, in the chat's active conversation (section 8). The web app gets a live update.
 9. It checks the credits. At zero, Rahul gets an "out of credits" reply and the job ends. No container is woken.
 
 ### The routing decision
@@ -446,7 +487,7 @@ This section follows one message through the whole system. Example: Rahul texts 
 | Spam | The router is at least 90% sure | The message is dropped. No reply |
 | Task | Everything else | The message goes to the agent |
 
-The router is an outside service named Jev. It judges only plain text of up to 1,000 characters, with no files. It sees the new message, the last six messages of the chat and the user's connected apps. It can also name the apps a task likely needs, as a hint for the agent.
+The router is an outside service named Jev. It judges only plain text of up to 1,000 characters, with no files. It sees the new message, the last six messages of the same conversation and the user's connected apps. It can also name the apps a task likely needs, as a hint for the agent.
 
 Every message is a task when the router has no key (`JEV_API_KEY` is empty), is too slow or fails. The same holds when the user's own Claude plan pays for the AI. It also holds when the cheap model says it cannot answer alone. So routing can save work, and it can never lose a message.
 
@@ -454,8 +495,8 @@ Every message is a task when the router has no key (`JEV_API_KEY` is empty), is 
 
 11. The worker makes sure the container exists. Then it asks the vm-manager to wake it, with the plan's priority.
 12. It checks the container against the account: which engine runs, and if the browser is on. The engine is the agent program, Hermes or Claude Code.
-13. It builds the text: what the agent has saved about the user, a short recap if the engine changed, then the message. The recap never reaches back before the chat's latest new start.
-14. It sends the delivery to the vm-manager and keeps the connection open. The delivery carries the event id, the chat it came from, the text and signed links to the files. It also carries the chat's number, the chat epoch (section 8). On Claude Code it also carries the Claude model and the thinking effort the user chose (section 30).
+13. It builds the text: what the agent has saved about the user, a short recap if the engine changed, then the message. The recap holds only the message's own conversation.
+14. It sends the delivery to the vm-manager and keeps the connection open. The delivery carries the event id, the chat it came from, the text and signed links to the files. It also carries the number of the message's conversation (section 8). After the user went back to an earlier conversation, that number is lower than the chat's highest. On Claude Code it also carries the Claude model and the thinking effort the user chose (section 30).
 15. The vm-manager reports back while the turn runs:
     - **Accepted.** The message becomes `processing`. The web app shows the agent as busy.
     - **Working.** A progress line. It is shown live in the web app only.
@@ -463,16 +504,18 @@ Every message is a task when the router has no key (`JEV_API_KEY` is empty), is 
     - **Error on our side.** Rahul is told at once that he was not charged, and the message becomes `failed`. A separate refund job gives the turn's credits back about 30 seconds later (section 25).
     - **Other error.** Rahul gets "I couldn't finish that" with the reason.
 16. In the container, the agent does the work. It calls the tool server at `/mcp` to use Gmail.
-17. The Bridge is our small program in the container. It sends the final answer through the tool server's send tool. The tool saves the reply and adds an outbound job.
+17. The Bridge is our small program in the container. It sends the final answer through the tool server's send tool. The tool saves the reply in the turn's conversation and adds an outbound job.
 18. After the turn, the worker syncs Rahul's usage, which charges his credits. The web app gets the new balance. The event is marked `done` and the lock is given back.
 
 ### What is recorded
 
-The `events` table keeps the webhook and its state: received, queued, then done, ignored or failed. Every way the job ends sets the last state, also the special cases of step 6. A quick job can end before the api has written "queued". The api then leaves the final state alone, so the next worker start does not queue the event again. The `messages` table keeps Rahul's message and the reply, each with a status. Files are in `attachments`. The activity log keeps the tool calls the agent made. The credit ledger keeps the charges of the turn.
+The `events` table keeps the webhook and its state: received, queued, then done, ignored or failed. Every way the job ends sets the last state, also the special cases of step 6. A quick job can end before the api has written "queued". The api then leaves the final state alone, so the next worker start does not queue the event again. The `messages` table keeps Rahul's message and the reply, each with a status and its conversation. Files are in `attachments`. The activity log keeps the tool calls the agent made. The credit ledger keeps the charges of the turn.
 
 ### A message from web chat
 
 A web message skips the webhook. The web app calls `POST /v1/messages`. The api checks that web chat is on, the 30 a minute limit and the credits. At zero it answers 402. Then it saves the message once and adds the job. The rest is the same. The reply arrives through the live updates.
+
+The web app can name the conversation to write in. Without a name, the message goes into web chat's active conversation. A named conversation that is not active becomes the active one first. The api answers 404 for a conversation that is not the user's, and 409 for a Telegram conversation. The turn then runs in the message's own conversation, also when the user opens another one before the worker gets to it. The same message sent twice is saved once and does not change which conversation is active.
 
 ### What can go wrong
 
@@ -487,7 +530,7 @@ Every outgoing message takes the same path, whoever wrote it: the agent, the che
 
 ### The path
 
-1. The message is saved in `messages` as outgoing, with the status `queued`. The web app gets a live update.
+1. The message is saved in `messages` as outgoing, with the status `queued`. It goes into a conversation: the turn's own while a turn runs in that chat, else the chat's active one. The web app gets a live update.
 2. A `send-message` job is added to outbound. Its id holds the message id.
 3. The worker takes the job. If the message is no longer `queued`, it stops: the message was already sent.
 4. If the channel is switched off, the message becomes `failed` and the job ends.
@@ -574,6 +617,10 @@ The web app shows new messages and the agent's state without a reload. It keeps 
 | `agent.progress` | The agent reports a progress line |
 | `credits.updated` | A turn ends, or credits are added or run out |
 | `automation.updated` | An automation changes |
+| `conversation.updated` | A conversation starts, gets a message, is renamed, or becomes or stops being the active one |
+| `conversation.deleted` | A conversation is deleted. The event holds only its id |
+
+A message event holds the whole message, with the id of its conversation. So the web app knows which conversation to show it in. A conversation event holds the whole conversation: its title, its times and if it is the active one.
 
 ### Progress lines are live only
 
@@ -652,6 +699,7 @@ Composio is an outside service. It keeps the user's sign-ins to apps such as Gma
 - The catalog is a fixed list of 25 apps in the code. Pro and Max may connect all 25.
 - Free may connect 10 of them: Gmail, Google Calendar, Drive, Docs, Sheets, Notion, Todoist, Slack, GitHub and Exa Search.
 - An app also needs a Composio setup on the server, named in the setting `COMPOSIO_AUTH_CONFIGS`. Without one, the api answers that the app is not configured yet.
+- The app list says for each app if it can be connected on this server. The field is called `connectable`. The web app shows an app that cannot be connected as "Not available yet", with no Connect button. Today the test server has a setup for Gmail and GitHub.
 
 ### How a user connects an app
 
@@ -716,7 +764,7 @@ The platform decides by these words in the action's name. There is one exception
 3. The api sends "Approval needed: ..." to the chat the request came from. Telegram shows two buttons, Approve and Reject.
 4. The tool answers "pending" at once. The agent ends its turn and says it is waiting. It never waits inside a turn.
 5. The user taps a button, types "yes" or "no", or decides in the web app. A typed answer goes to the newest waiting approval in that chat.
-6. The api records the answer in the activity log. A job then wakes the agent with a new message: "The user APPROVED ..." or "The user REJECTED ...".
+6. The api records the answer in the activity log. A job then wakes the agent with a new message: "The user APPROVED ..." or "The user REJECTED ...". It goes to the conversation the approval was asked in, not to the one that is open now.
 7. After a yes, the agent calls `run_app_action` with the approval's id. The action runs.
 
 **Example.** Rahul texts "email Priya the notes". He gets "Approval needed: Send the notes to priya@example.com". He taps Approve. The agent wakes up and sends the email. 1 credit is charged.
@@ -1047,10 +1095,11 @@ A memory is one short fact about the user, on one line of at most 300 characters
 
 ### The recap when the engine changes
 
-- Each engine keeps its own copy of a chat. A new engine would not know what was said. So the platform records which engine last finished a turn in each chat, in the table `chat_engines`.
-- When a turn runs on a different engine, the backend adds a recap after the memory block. The same engine gets no recap.
-- The recap holds the messages this engine has not seen: at most 12 messages and 3,000 characters. It is framed as a record, not as new requests.
-- Nothing from before the chat's latest new start is in the recap (section 8). If the user started a new chat just before the engine changed, there is no recap at all.
+- Each engine keeps its own copy of a conversation. A new engine would not know what was said. So the platform records which engine last finished a turn in each conversation, in the table `chat_engines`.
+- When a turn runs on a different engine than the conversation's turn before it, the backend adds a recap after the memory block. The same engine gets no recap.
+- The recap holds the messages of that conversation that this engine has not seen: at most 12 messages and 3,000 characters. It is framed as a record, not as new requests.
+- Nothing said in another conversation is ever in the recap (section 8). A new, empty conversation has no recap at all.
+- The memory block is the other way round: it is the same in every conversation.
 
 ### Limits and refused secrets
 
@@ -2028,7 +2077,7 @@ Every job is safe to run again, so a job that did not finish is simply run again
 2. It registers the timer of every enabled automation again.
 3. It registers the repeating jobs again: usage sync, credit expiry, approval expiry, clean-up, backup and health check.
 
-A failing job is tried 5 times, with waits of 5 seconds, 30 seconds, 2 minutes and 10 minutes. After the last failure its event is marked "failed" and an alert is raised. A daily clean-up removes finished events older than 30 days and messages older than 365 days.
+A failing job is tried 5 times, with waits of 5 seconds, 30 seconds, 2 minutes and 10 minutes. After the last failure its event is marked "failed" and an alert is raised. A daily clean-up removes finished events older than 30 days and messages older than 365 days. A conversation that has had no message for 365 days, has none left and is not the active one is removed too.
 
 ### Rate limits on public endpoints
 
@@ -2108,14 +2157,15 @@ This section lists every table of the backend's database, grouped by the module 
 | auth | `waitlist_entries` | People waiting for access, with request details for abuse checks |
 | auth | `waitlist_attempts` | Every waitlist try, also repeats and blocked ones |
 | events | `events` | Everything that came in, saved once, with its status |
-| channels | `messages` | Every message in and out, with its channel and status |
+| channels | `messages` | Every message in and out, with its channel, its conversation and its status |
+| channels | `conversations` | One row per conversation: its chat, its number in that chat, its title, its start and last-message times, and if it is the active one |
+| channels | `chat_epochs` | Each chat's counter: the highest conversation number given out in it. It only goes up, so a number is never used twice |
 | channels | `attachments` | Files uploaded in the web app or received in a chat |
 | orchestrator | `sandbox_tokens` | The hash of each container's token and the user it belongs to |
 | orchestrator | `agent_settings` | The chosen engine, the AI choice, when Claude was connected, and Claude Code's model and thinking effort |
 | orchestrator | `approvals` | Risky actions waiting for a yes or no, with their exact details |
 | orchestrator | `memories` | Short facts about the user that every engine gets |
-| orchestrator | `chat_engines` | Which engine last finished a turn in each chat |
-| orchestrator | `chat_epochs` | Each chat's number (the chat epoch) and when its latest new chat started. No row means 0, never started |
+| orchestrator | `chat_engines` | Which engine last finished a turn in each conversation |
 | integrations | `connections` | A user's connected app accounts and their status |
 | integrations | `user_mcp_servers` | The user's own MCP servers, with the secret encrypted |
 | integrations | `composio_triggers` | Made for app triggers. No code reads or writes it today |
@@ -2133,7 +2183,7 @@ This section lists every table of the backend's database, grouped by the module 
 | billing | `coupon_redemptions` | Who redeemed which campaign, once per user |
 | admin | `audit_log` | The activity log: who did what, when, and credits charged |
 
-No table holds a "balance" number: the balance is the sum of what is left in a user's grants. The vm-manager has its own small database with three tables: `sandboxes`, `awake_periods` and `browser_usage`. The backend never reads it directly. Example: one Telegram message adds one row in `events` and two rows in `messages`: the message and the answer. It also adds entries in `audit_log`, and one row each in `usage_periods` and `credit_ledger` for the charge.
+No table holds a "balance" number: the balance is the sum of what is left in a user's grants. The vm-manager has its own small database with three tables: `sandboxes`, `awake_periods` and `browser_usage`. The backend never reads it directly. Example: one Telegram message adds one row in `events` and two rows in `messages`: the message and the answer. The first message of a chat also adds one row in `conversations` and one in `chat_epochs`. It also adds entries in `audit_log`, and one row each in `usage_periods` and `credit_ledger` for the charge.
 
 ## 41. The API in words
 
@@ -2143,9 +2193,9 @@ This section says what the web app can do through the api, group by group. Almos
 |---|---|
 | Profile | Read the user's name, plan and credit summary. Change the name and time zone |
 | Channels and linking | See linked chat apps and which channels are on. Get a one-time code to link Telegram. Unlink a chat |
-| Chat and the live stream | Read the chat history, with the time of the latest new web chat. Send a message, upload a file up to 10 MB. Start a new web chat. Keep a live stream open |
+| Chat and the live stream | List the conversations. Start a new web conversation, open an earlier one, rename or delete one. Read the messages of one conversation, or of all. Send a message into the active web conversation or into one the app names. Upload a file up to 10 MB. Keep a live stream open |
 | Approvals | List approvals, the waiting ones by default. Approve or reject one |
-| Apps | See the app list with status and plan. Start connecting an app. Disconnect one |
+| Apps | See the app list with status and plan, and which apps can be connected on this server. Start connecting an app. Disconnect one |
 | MCP servers | List the user's own MCP servers. Add one (Max plan), rename it, switch it on or off, remove it |
 | Own AI keys | See which providers have a key and which one is in use, never the key itself. Set, replace or remove one |
 | Automations | List reminders and automations. Pause, resume or delete one |
@@ -2160,7 +2210,7 @@ This section says what the web app can do through the api, group by group. Almos
 | Waitlist | Join the waitlist. The answer is always the same, so nobody can test an email |
 | Admin | Manage coupons, adjust a user's credits, see free-credit totals, and handle the waitlist |
 
-The live stream pushes new messages, message status, approvals, the agent's state, progress lines and credit changes. Long lists come in pages of 30 by default, and 100 at most. Every error has the same shape: a code, a message, and sometimes details. Some addresses are not for the web app. Webhooks are for outside services. `/mcp` and `/git` are for containers only. `/metrics` is for monitoring. Admins also have a page that shows the job queues.
+The live stream pushes new messages, message status, conversation changes, approvals, the agent's state, progress lines and credit changes. Long lists come in pages of 30 by default, and 100 at most. Every error has the same shape: a code, a message, and sometimes details. Some addresses are not for the web app. Webhooks are for outside services. `/mcp` and `/git` are for containers only. `/metrics` is for monitoring. Admins also have a page that shows the job queues.
 
 Example: linking Telegram takes three steps. The app asks for a link code and shows it. The user sends the code to the bot. The app reads the channel list again and shows the new chat.
 
@@ -2286,6 +2336,7 @@ These were found by reading the code while this report was written. Each is desc
 ### Other gaps
 
 - A user's files have no size limit on the server.
+- When a user deletes a conversation, the backend deletes its messages and files at once. The engine's own record of it stays in the container until the account is deleted, because the Bridge is not told. Nothing reads it again: the conversation's number is never used twice.
 - Backups stay on the same disk as the data until an outside store is set.
 - With no alert channel set, failures are only in the logs.
 - A saved memory cannot be checked against what the user really said. A planted "fact" stays until the user sees and deletes it.
@@ -2293,7 +2344,7 @@ These were found by reading the code while this report was written. Each is desc
 
 ## 44. What has run for real
 
-The backend has 457 automated tests. They use a real database and real queues, and stand-ins for outside services. "Run for real" below means it ran on the AWS test server against the real outside service.
+The backend has 526 automated tests. They use a real database and real queues, and stand-ins for outside services. "Run for real" below means it ran on the AWS test server against the real outside service.
 
 | Area | Run for real |
 |---|---|
@@ -2315,6 +2366,7 @@ The backend has 457 automated tests. They use a real database and real queues, a
 | Payments through Polar, coupons | No |
 | Pull-request review; Byte through the git gateway | No |
 | Reminders and automations | Yes: a one-time reminder, a daily automation, the 15-minute limit |
+| Conversations: the list, going back to an earlier one, rename, delete | No. Built on 9 October, with the automated tests only |
 | Web search through Brave | No. The key answers a direct call |
 | The page reader on Claude Code | Yes |
 | Voice, images and documents | No |

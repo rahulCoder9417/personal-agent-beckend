@@ -529,14 +529,15 @@ describe('the live stream', () => {
       await waitFor(async () => live.of('agent.status').some((s) => s.state === 'awake'));
       live.seen.length = 0;
       const second = await startNewWebChat(user.id);
-      await waitFor(async () => live.seen.length >= 2);
+      // Count the conversation events only: an agent.status event may arrive in between.
+      await waitFor(async () => live.of('conversation.updated').length >= 2);
       expect(live.of('conversation.updated')).toMatchObject([
         { id: sent.conversationId, active: false },
         { id: second.id, active: true, title: 'New chat', epoch: 1 },
       ]);
       live.seen.length = 0;
       await activateConversation(user.id, sent.conversationId);
-      await waitFor(async () => live.seen.length >= 2);
+      await waitFor(async () => live.of('conversation.updated').length >= 2);
       expect(live.of('conversation.updated')).toMatchObject([
         { id: second.id, active: false },
         { id: sent.conversationId, active: true },
@@ -545,7 +546,7 @@ describe('the live stream', () => {
       live.seen.length = 0;
       await activateConversation(user.id, sent.conversationId);
       await new Promise((r) => setTimeout(r, 150));
-      expect(live.seen).toEqual([]);
+      expect(live.of('conversation.updated')).toEqual([]);
     } finally {
       live.stop();
     }

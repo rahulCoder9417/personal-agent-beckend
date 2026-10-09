@@ -6,6 +6,7 @@ import { TypeSafeClient, type Questions } from '@typesafe-ai/sdk';
 import { config } from '../../shared/config.ts';
 import { logger } from '../../shared/logger.ts';
 import { recentConversationMessages, recentSessionMessages } from '../channels/messages.ts';
+import type { Channel } from '../channels/types.ts';
 import { setTurnHooks, type RouteDecision, type TurnInput } from './turn.ts';
 
 /** A candidate app for the "which apps" question (the user's connected apps). */
@@ -165,7 +166,23 @@ export function setChatCompleter(fn: ChatCompleter | undefined): void {
   chat = fn ?? litellmChat;
 }
 
-const SYSTEM_PROMPT = `You are a friendly personal assistant replying in a chat app. Answer in a few plain sentences, no markdown tables. If answering needs tools, the web, current information, the user's accounts, files, reminders, memory of the user, or anything you are unsure about, reply with exactly ${ESCALATE} and nothing else.`;
+/**
+ * How a quick reply is to be written, by the turn's channel. The same rule the Bridge gives the
+ * agent: the web app renders Markdown, a chat app shows the text as typed. This asks the model
+ * for it; what goes out to a chat app is made plain in any case (channels/plain-text.ts).
+ */
+const REPLY_STYLE = {
+  web: 'Your reply is shown as rendered Markdown. Use Markdown only when it helps the reader: a list for steps, a table for a comparison, a fenced code block (with the language) for code or commands. A short answer stays a short plain sentence. No headings, no raw HTML, no images.',
+  chatApp:
+    'Write plain text only, as in a text message. No Markdown symbols. Short paragraphs. A list is lines that start with "- " or "1. ". No tables: one line per item. A link is the bare address.',
+};
+
+/** The cheap model's instructions for a turn on this channel. */
+export function quickReplyPrompt(channel: Channel): string {
+  const where = channel === 'web' ? 'a web chat' : 'a chat app';
+  const style = channel === 'web' ? REPLY_STYLE.web : REPLY_STYLE.chatApp;
+  return `You are a friendly personal assistant replying in ${where}. Answer in a few short sentences. ${style} If answering needs tools, the web, current information, the user's accounts, files, reminders, memory of the user, or anything you are unsure about, reply with exactly ${ESCALATE} and nothing else.`;
+}
 
 // --- apps -----------------------------------------------------------------------------------
 
@@ -223,7 +240,7 @@ export async function routeTurn(input: TurnInput): Promise<RouteDecision> {
     const reply = await chat({
       userId: input.userId,
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: quickReplyPrompt(input.channel) },
         ...history.map((m) => ({ role: m.role, content: m.text })),
         { role: 'user', content: text },
       ],

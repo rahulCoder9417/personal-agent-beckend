@@ -381,6 +381,9 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - Tested on 8 October (on a test account): a reminder that fires, a daily automation created and cancelled, the 15-minute limit, a free GitHub read, an approval approved (an email sent) and one rejected, memory saved, recalled and forgotten without naming the tool, a password refused as a memory, Scout reading pages on Claude Code, the browser, out of credits, "connect your own AI first" for a user with none, the idle stop (3 minutes 11 seconds), and the isolation test (5 of 5).
 - A request Anthropic refuses gets a clear reply, is not counted as our fault and is not kept in the chat's history.
 - A new chat from the web app's code path, and Claude Code running with the model and effort chosen in Settings (Opus 5.5 at "xhigh" was checked on the running process).
+- Each conversation keeping its own context, tested on 9 October with the test script on a test account. A code word was said in one conversation. A new chat answered "unknown" when asked for it. Going back to the first conversation gave the code word. The new one still answered "unknown" afterwards.
+- The old messages were sorted into conversations when the server was updated: both accounts show their earlier chats in the list.
+- The app list says which apps can be connected: on this server Gmail and GitHub, and "not yet" for the other 23.
 
 ### Built, never run for real
 
@@ -389,8 +392,9 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - Payments through Polar.
 - Pull-request review, and Byte pushing code through our git gateway.
 - A memory saved on one engine and used on the other.
-- The history of conversations: the list, going back to an earlier one, rename and delete. Built on 9 October.
-- The app list telling the web app which apps can be connected on this server (only those with a Composio setup: today Gmail and GitHub).
+- The chat history in the web app with a signed-in user: the list beside the chat, rename and delete. The screens were checked in the web app's demo mode and the backend with the test script, but nobody has clicked through them on the live site yet.
+- A conversation older than 30 days being opened again. Claude Code removes its own saved sessions after 30 days, so such a conversation would start with no context. Your decision (below).
+- The desktop app. It is now a small window around the live web app (`https://app.textcrew.in`), so it always shows the same screens. It reaches the sign-in page, and Clerk's and Google's sign-in pages open inside the window. Nobody has signed in with a real account in it, and the tray icon, the shortcut and "start at login" have not been run. A Linux installer builds; Windows and Mac installers are not built.
 - Web search through Brave. The key works; the path through the app has not run.
 
 ### Not finished
@@ -409,7 +413,8 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 ### Decisions waiting on you
 
 - **The browser's Google contacts:** (a) use Playwright's smaller "headless shell" browser, which makes none of them, (b) block the two Google hosts in the browser's proxy rule, or (c) accept them.
-- **The desktop app:** leave it out of the beta (recommended), then a thin shell around the live web app. Never bring the separate copy up to date. Its 22 commits are only on the laptop, on branch `feat/desktop-app`.
+- **More apps than Gmail and GitHub:** every other app shows "Not available yet" in the web app, because the server has no Composio setup for it. Each app you want (Google Calendar first?) needs its setup made in Composio's dashboard, then its id added to the server's settings.
+- **Old conversations:** keep Claude Code's 30-day clean-up of saved sessions (an older conversation then starts afresh when opened), or keep sessions for as long as the conversation exists (more disk per user).
 - **Codex and other engines:** see `engines-proposal.md`, section 10. A ChatGPT plan cannot be used yet; OpenAI must approve first.
 - **A Clerk production instance on `textcrew.in`:** needed before a public launch, and it makes the first visit about a second faster.
 

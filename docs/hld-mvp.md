@@ -385,6 +385,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - Each conversation keeping its own context, tested on 9 October with the test script on a test account. A code word was said in one conversation. A new chat answered "unknown" when asked for it. Going back to the first conversation gave the code word. The new one still answered "unknown" afterwards.
 - The old messages were sorted into conversations when the server was updated: both accounts show their earlier chats in the list.
 - The app list says which apps can be connected: on this server Gmail and GitHub, and "not yet" for the other 23.
+- A reply written for the web app: asked on 9 October for a comparison and a command, the agent answered in web chat with a Markdown table and a code block. The same stored reply, passed through the plain-text step on the server, came out with no table pipes, stars or backticks.
 
 ### Built, never run for real
 
@@ -394,6 +395,8 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - Pull-request review, and Byte pushing code through our git gateway.
 - A memory saved on one engine and used on the other.
 - The chat history in the web app with a signed-in user: the list beside the chat, rename and delete. The screens were checked in the web app's demo mode and the backend with the test script, but nobody has clicked through them on the live site yet.
+- A reply on Telegram since replies there became plain text. The agent's instructions and the plain-text step are both on the server, but no real Telegram message has been sent through them yet.
+- The web app drawing a real reply as Markdown for a signed-in user. It was checked in the web app's demo mode only.
 - A conversation older than 30 days being opened again. Claude Code removes its own saved sessions after 30 days, so such a conversation would start with no context. Your decision (below).
 - The desktop app. It is now a small window around the live web app (`https://app.textcrew.in`), so it always shows the same screens. It reaches the sign-in page, and Clerk's and Google's sign-in pages open inside the window. Nobody has signed in with a real account in it, and the tray icon, the shortcut and "start at login" have not been run. A Linux installer builds; Windows and Mac installers are not built.
 - Web search through Brave. The key works; the path through the app has not run.

@@ -311,8 +311,14 @@ paths:
       description: |
         One long-lived SSE connection per browser tab. Event types:
         `message.created`, `message.status`, `approval.created`, `approval.resolved`,
-        `agent.status`, `agent.progress`, `credits.updated`, `automation.updated`.
+        `agent.status`, `agent.progress`, `credits.updated`, `automation.updated`,
+        `conversation.updated`, `conversation.deleted`.
         Each event's `data` is JSON matching the `StreamEvent` schema.
+
+        `message.created` and `message.status` carry the whole message, so its `conversationId`
+        comes with it. `conversation.updated` carries the whole conversation: it is sent when one
+        starts, and when its `title`, `lastMessageAt` or `active` changes. `conversation.deleted`
+        carries the deleted conversation's `id` only.
 
         `agent.progress` is a short line about what the agent is doing in the current turn (for
         example `Scout: reading 4 pages` or `using web_search`). It is live only: it isn't saved
@@ -1821,11 +1827,50 @@ components:
           format: uri
           description: e.g. a wa.me or t.me link with the code pre-filled
 
-    Message:
+    Conversation:
       type: object
-      required: [id, channel, direction, text, status, createdAt]
+      description: One stretch of a chat between two "New chat" actions. The agent keeps a context of its own for each.
+      required: [id, channel, epoch, startedAt, lastMessageAt, title, active]
+      properties:
+        id: { type: string, examples: [cnv_01jz3m8q4kd2v7x9w0t5b6c8ya] }
+        channel: { $ref: "#/components/schemas/ChannelType" }
+        epoch:
+          type: integer
+          minimum: 0
+          description: The conversation's number within its chat. It never changes and is never used again.
+        startedAt: { type: string, format: date-time }
+        lastMessageAt:
+          type: string
+          format: date-time
+          description: When its newest message was saved; `startedAt` while it has none.
+        title:
+          type: string
+          description: |
+            The name the user gave it, else the first incoming message's text cut to 60 characters
+            at a word, else "New chat" while it has no such message.
+          examples: [Plan a trip to Goa]
+        active:
+          type: boolean
+          description: |
+            True for the one conversation of its chat that the next message goes into. Web chat:
+            the one the user has open to write in. Telegram: the chat's latest one.
+
+    ConversationDeleted:
+      type: object
+      description: The `data` of a `conversation.deleted` stream event.
+      required: [id]
+      additionalProperties: false
       properties:
         id: { type: string }
+
+    Message:
+      type: object
+      required: [id, conversationId, channel, direction, text, status, createdAt]
+      properties:
+        id: { type: string }
+        conversationId:
+          type: string
+          description: The conversation this message belongs to.
         channel: { $ref: "#/components/schemas/ChannelType" }
         direction: { type: string, enum: [in, out] }
         text: { type: string }
@@ -2417,10 +2462,13 @@ components:
         type:
           type: string
           enum: [message.created, message.status, approval.created, approval.resolved,
-                 agent.status, agent.progress, credits.updated, automation.updated]
+                 agent.status, agent.progress, credits.updated, automation.updated,
+                 conversation.updated, conversation.deleted]
         data:
           oneOf:
             - { $ref: "#/components/schemas/Message" }
+            - { $ref: "#/components/schemas/Conversation" }
+            - { $ref: "#/components/schemas/ConversationDeleted" }
             - { $ref: "#/components/schemas/Approval" }
             - { $ref: "#/components/schemas/AgentStatus" }
             - { $ref: "#/components/schemas/AgentProgress" }

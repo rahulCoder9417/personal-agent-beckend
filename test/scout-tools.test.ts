@@ -79,7 +79,14 @@ import { processors } from '../src/worker/processors.ts';
 import { startWorkers } from '../src/worker/runner.ts';
 import { grantsOf, ledgerMatchesGrants, ledgerOf } from './billing-helpers.ts';
 import { installFakeVm, mcpCall, type McpResult } from './fakes.ts';
-import { call, chatUser, createUser, expectContract, waitFor } from './helpers.ts';
+import {
+  call,
+  chatUser,
+  createUser,
+  expectContract,
+  waitFor,
+  webConversationId,
+} from './helpers.ts';
 
 let workers: Worker[];
 let vm: ReturnType<typeof installFakeVm>;
@@ -861,6 +868,7 @@ describe('read_page: only an address already seen for the user (Hermes, and outs
         .values({
           id: newId('msg'),
           userId: old.id,
+          conversationId: await webConversationId(old.id),
           channel: 'web',
           direction: 'in',
           text: `https://example.com/${path}`,

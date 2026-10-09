@@ -31,7 +31,7 @@ import { wireModules } from '../src/wiring.ts';
 import { processors } from '../src/worker/processors.ts';
 import { startWorkers } from '../src/worker/runner.ts';
 import { installFakeTelegram, installFakeVm, mcpCall } from './fakes.ts';
-import { call, chatUser, expectContract, waitFor } from './helpers.ts';
+import { call, chatUser, expectContract, waitFor, webConversationId } from './helpers.ts';
 
 let workers: Worker[];
 let vm: ReturnType<typeof installFakeVm>;
@@ -366,6 +366,7 @@ describe('switching engines keeps the thread', () => {
       .values({
         id: newId('msg'),
         userId: user.id,
+        conversationId: await webConversationId(user.id),
         channel: 'web',
         direction: 'out',
         text: '✅ Linked! You can chat with your agent right here.',
@@ -386,6 +387,7 @@ describe('switching engines keeps the thread', () => {
       .values({
         id: newId('msg', Date.now() + 5),
         userId: user.id,
+        conversationId: message.conversationId,
         channel: 'web',
         direction: 'out',
         text: 'Hello! How can I help?',
@@ -402,9 +404,11 @@ describe('switching engines keeps the thread', () => {
     const { user } = await agent();
     await say(user.id, 'first ever');
     const base = Date.now() + 1000;
+    const conversationId = await webConversationId(user.id);
     const stored = Array.from({ length: 30 }, (_, i) => ({
       id: newId('msg', base + i),
       userId: user.id,
+      conversationId,
       channel: 'web' as const,
       direction: i % 2 ? ('out' as const) : ('in' as const),
       text: `m${i}`,
@@ -422,12 +426,14 @@ describe('switching engines keeps the thread', () => {
     const other = await agent();
     await say(other.user.id, 'first ever');
     const base2 = Date.now() + 1000;
+    const otherConversationId = await webConversationId(other.user.id);
     await db()
       .insert(messages)
       .values(
         Array.from({ length: 10 }, (_, i) => ({
           id: newId('msg', base2 + i),
           userId: other.user.id,
+          conversationId: otherConversationId,
           channel: 'web' as const,
           direction: 'in' as const,
           text: `${i}:`.padEnd(900, 'y'),

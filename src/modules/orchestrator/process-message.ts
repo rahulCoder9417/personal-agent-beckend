@@ -15,6 +15,7 @@ import { getUserAttachments } from '../channels/files.ts';
 import { acknowledgeButton, parseInbound } from '../channels/inbound.ts';
 import {
   getMessageById,
+  getWebMessage,
   saveInbound,
   saveWebMessage,
   setMessageEvent,
@@ -24,7 +25,12 @@ import {
 import { queueOutbound, queueRawOutbound } from '../channels/outbound.ts';
 import { sessionKeyFor, type InboundMessage } from '../channels/types.ts';
 import { IGNORED } from '../../worker/ignored.ts';
-import { isNewChatCommand, NEW_CHAT_TEXT, startNewChat } from './chats.ts';
+import {
+  isNewChatCommand,
+  NEW_CHAT_TEXT,
+  startNewChat,
+  webConversationToWriteIn,
+} from './chats.ts';
 import { runTurn, userHasCredits } from './turn.ts';
 
 /** Hooks other modules plug into the inbound path (approvals, coupons in chat). */
@@ -88,8 +94,9 @@ export async function handleProcessMessage(job: Job): Promise<unknown> {
     await replyToCodeInLinkedChat(msg, userId, code, eventId);
     return null;
   }
-  // `/new` (or `/clear`, `/reset`) in Telegram: a new chat starts there. No turn, no credits. The
-  // command and the answer are not saved as messages, so they are not part of either chat.
+  // `/new` (or `/clear`, `/reset`) in Telegram: a new conversation starts in that chat and is its
+  // active one from now on. No turn, no credits. The command and the answer are not saved as
+  // messages, so they are part of neither conversation.
   if (msg.channel === 'telegram' && isNewChatCommand(msg.text)) {
     await startNewChat(userId, sessionKey, { channel: msg.channel, key: eventId });
     await queueRawOutbound(msg.channel, msg.externalChatId, NEW_CHAT_TEXT, eventId);
@@ -118,6 +125,7 @@ export async function handleProcessMessage(job: Job): Promise<unknown> {
     text: saved.text,
     attachments: saved.mediaRef ?? [],
     inboundMessageId: saved.id,
+    conversationId: saved.conversationId,
   });
   return null;
 }
@@ -203,12 +211,19 @@ async function handleUnlinked(msg: InboundMessage, eventId: string): Promise<voi
 /**
  * A message the user sends in web chat (POST /v1/messages): the channel must be on, at most 30 a
  * minute, refused at zero credits, saved once per `clientMessageId`, and the turn is queued as an
- * inbound job. Returns at once; the worker runs the turn. Throws the api's errors (403
- * channel_disabled, 429, 402 out_of_credits, 400).
+ * inbound job. It goes into web chat's active conversation, or into the web conversation named,
+ * which becomes the active one first. Returns at once; the worker runs the turn. Throws the api's
+ * errors (403 channel_disabled, 429, 402 out_of_credits, 400, and for a named conversation 404 or
+ * 409).
  */
 export async function sendWebMessage(
   userId: string,
-  input: { text: string; clientMessageId: string; attachmentIds?: string[] },
+  input: {
+    text: string;
+    clientMessageId: string;
+    attachmentIds?: string[];
+    conversationId?: string;
+  },
 ): Promise<{ message: MessageRow; eventId: string }> {
   if (!isChannelEnabled('web')) throw channelDisabled('web');
   await enforce({ key: `msg:user:${userId}`, max: 30, windowSeconds: 60 });
@@ -216,11 +231,16 @@ export async function sendWebMessage(
   const ids = input.attachmentIds ?? [];
   const files = await getUserAttachments(userId, ids);
   if (files.length !== ids.length) throw badRequest('Unknown attachment');
+  // The same message sent again changes nothing, not even which conversation is active.
+  const sent = await getWebMessage(userId, input.clientMessageId);
+  const conversationId =
+    sent?.conversationId ?? (await webConversationToWriteIn(userId, input.conversationId)).id;
   const { message, created } = await saveWebMessage({
     userId,
     text: input.text,
     clientMessageId: input.clientMessageId,
     media: files.map((f) => ({ id: f.id, name: f.name, mimeType: f.mimeType, path: f.path })),
+    conversationId,
   });
   const { eventId } = await ingestEvent({
     source: 'web',
@@ -260,6 +280,8 @@ export async function handleWebMessage(job: Job): Promise<unknown> {
     text: msg.text,
     attachments: msg.mediaRef ?? [],
     inboundMessageId: msg.id,
+    // The message's own conversation, also when the user has opened another one since.
+    conversationId: msg.conversationId,
   });
   return null;
 }

@@ -90,35 +90,19 @@ export const memories = pgTable(
 );
 
 /**
- * Which engine last finished a turn in each chat (HLD 0.9). An engine keeps one session per chat,
- * so a turn on another engine than the chat's previous one gets a recap of the chat.
+ * Which engine last finished a turn in each conversation (HLD 0.9). A conversation is named here
+ * by its chat (the session key) and its number in that chat (`epoch`), the two things a delivery
+ * carries. An engine keeps one session per conversation, so a turn on another engine than the
+ * conversation's previous one gets a recap of the conversation.
  */
 export const chatEngines = pgTable(
   'chat_engines',
   {
     userId: text().notNull(),
     sessionKey: text().notNull(),
+    epoch: integer().notNull().default(0),
     runtime: text({ enum: ['hermes', 'claude_code'] }).notNull(),
     lastTurnAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [primaryKey({ columns: [t.userId, t.sessionKey, t.runtime] })],
-);
-
-/**
- * The chat epoch: a number per chat (session key), 0 until the user first starts a new chat.
- * Starting one adds 1 and records when. Every delivery carries the number, so the engine starts a
- * fresh conversation for that chat; the recap leaves out what was said before `startedAt`.
- * No row means epoch 0, never started.
- */
-export const chatEpochs = pgTable(
-  'chat_epochs',
-  {
-    userId: text().notNull(),
-    sessionKey: text().notNull(),
-    epoch: integer().notNull(),
-    startedAt: timestamp({ withTimezone: true }).notNull(),
-    /** What started the latest one (a Telegram event id): the same event never starts two. */
-    startKey: text(),
-  },
-  (t) => [primaryKey({ columns: [t.userId, t.sessionKey] })],
+  (t) => [primaryKey({ columns: [t.userId, t.sessionKey, t.epoch, t.runtime] })],
 );

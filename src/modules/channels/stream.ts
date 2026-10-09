@@ -11,7 +11,9 @@ export type StreamEventType =
   | 'agent.status'
   | 'agent.progress'
   | 'credits.updated'
-  | 'automation.updated';
+  | 'automation.updated'
+  | 'conversation.updated'
+  | 'conversation.deleted';
 
 export interface StreamEvent {
   type: StreamEventType;

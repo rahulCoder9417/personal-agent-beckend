@@ -5,6 +5,7 @@ import { newId } from '../../shared/ids.ts';
 import { logger } from '../../shared/logger.ts';
 import { addJob } from '../events/queues.ts';
 import { adapterFor } from './adapters/index.ts';
+import { conversationFor, noteMessage } from './conversations.ts';
 import { getMessageById, setMessageStatus, toApiMessage, type MessageRow } from './messages.ts';
 import { messages } from './schema.ts';
 import { publish } from './stream.ts';
@@ -23,20 +24,27 @@ export interface OutboundInput {
   buttons?: Button[];
   approvalId?: string;
   template?: OutboundContent['template'];
+  /**
+   * The conversation to save it in: the turn's own, when the message is written during a turn.
+   * Left out (or no longer there): the chat's active one.
+   */
+  conversationId?: string | null;
 }
 
 /**
- * Saves an outgoing message and queues it (always via the outbound queue).
+ * Saves an outgoing message in its conversation and queues it (always via the outbound queue).
  * Buttons/templates travel in the job data.
  */
 export async function queueOutbound(input: OutboundInput): Promise<MessageRow> {
   const parsed = parseSessionKey(input.sessionKey);
   if (!parsed) throw new Error(`bad session key ${input.sessionKey}`);
+  const conversation = await conversationFor(input.userId, input.sessionKey, input.conversationId);
   const [row] = await db()
     .insert(messages)
     .values({
       id: newId('msg'),
       userId: input.userId,
+      conversationId: conversation.id,
       channel: parsed.channel,
       direction: 'out',
       text: input.text,
@@ -46,6 +54,7 @@ export async function queueOutbound(input: OutboundInput): Promise<MessageRow> {
     })
     .returning();
   await publish(input.userId, 'message.created', toApiMessage(row!));
+  await noteMessage(row!);
   await addJob(
     'outbound',
     'send-message',

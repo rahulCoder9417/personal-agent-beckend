@@ -1,13 +1,24 @@
-// Starting a new chat: the agent no longer sees what was said before in that chat. A chat is a
-// session key (`web`, `telegram:<chat id>`). Shared memory is kept: it is not part of a chat.
-// The chat's epoch goes up by one; every delivery carries it, and the Bridge starts a fresh engine
-// conversation for that chat when it sees a higher one. The recap leaves out what came before.
-import { and, eq, sql } from 'drizzle-orm';
-import { db } from '../../shared/db/client.ts';
+// What a user can do with their conversations: start a new one ("New chat"), open an earlier web
+// conversation, rename one, delete one. A chat is a session key (`web`, `telegram:<chat id>`); a
+// conversation is one stretch of it, and the channels module keeps them (channels/conversations.ts).
+// Each conversation has a number in its chat (its epoch). Every delivery carries the number of the
+// conversation it belongs to, and the Bridge keeps one engine conversation per number, so each has
+// a context of its own. Shared memory is kept across all of them: it is not part of a chat.
+import { conflict, notFound } from '../../shared/errors.ts';
 import { enforce } from '../../shared/rate-limit.ts';
 import { audit } from '../admin/audit.ts';
+import {
+  activateConversation,
+  activeConversation,
+  chatCounter,
+  deleteConversation,
+  getConversation,
+  renameConversation,
+  startConversation,
+  type ConversationRow,
+} from '../channels/conversations.ts';
 import type { Channel } from '../channels/types.ts';
-import { chatEpochs } from './schema.ts';
+import { forgetConversationEngines } from './turn-context.ts';
 
 /** The bot's answer to `/new` in a chat app. */
 export const NEW_CHAT_TEXT =
@@ -31,80 +42,115 @@ const IN_CHANNEL: Record<Channel, string> = {
 };
 
 /**
- * The start time, by the database's clock (the one that stamps the messages), moved up to the
- * next whole millisecond. Read back into JavaScript it loses nothing, so a message saved before
- * the start is never counted as after it.
- */
-const START = sql`date_trunc('milliseconds', now()) + interval '1 millisecond'`;
-
-export interface ChatEpoch {
-  /** 0 until the first new chat. */
-  epoch: number;
-  /** When the latest new chat started; null if never. */
-  startedAt: Date | null;
-}
-
-async function epochRow(userId: string, sessionKey: string) {
-  const [row] = await db()
-    .select()
-    .from(chatEpochs)
-    .where(and(eq(chatEpochs.userId, userId), eq(chatEpochs.sessionKey, sessionKey)));
-  return row;
-}
-
-/** The chat's epoch and when its latest new chat started. */
-export async function chatEpoch(userId: string, sessionKey: string): Promise<ChatEpoch> {
-  const row = await epochRow(userId, sessionKey);
-  return row ? { epoch: row.epoch, startedAt: row.startedAt } : { epoch: 0, startedAt: null };
-}
-
-/**
- * Starts a new chat: the epoch goes up by one and the time is recorded, with an activity entry
- * that names the channel (never any message text). With a `key` (the event that asked for it),
- * a second run for the same key changes nothing: `started` is then false.
+ * Starts a new conversation in a chat: it becomes the chat's active one, with the next number,
+ * and the activity log says so with the channel (never any message text). With a `key` (the
+ * event that asked for it), a second run for the same key changes nothing: `started` is then
+ * false.
  */
 export async function startNewChat(
   userId: string,
   sessionKey: string,
   opts: { channel: Channel; key?: string },
-): Promise<{ epoch: number; startedAt: Date; started: boolean }> {
-  const key = opts.key ?? null;
-  const row = await db().transaction(async (tx) => {
-    const [updated] = await tx
-      .insert(chatEpochs)
-      .values({ userId, sessionKey, epoch: 1, startedAt: START, startKey: key })
-      .onConflictDoUpdate({
-        target: [chatEpochs.userId, chatEpochs.sessionKey],
-        set: { epoch: sql`${chatEpochs.epoch} + 1`, startedAt: START, startKey: key },
-        ...(key ? { setWhere: sql`${chatEpochs.startKey} is distinct from ${key}` } : {}),
-      })
-      .returning();
-    if (!updated) return undefined;
-    await audit(
-      {
-        userId,
-        actor: 'user',
-        action: 'chat_started',
-        summary: `Started a new chat ${IN_CHANNEL[opts.channel]}`,
-        details: { channel: opts.channel, epoch: updated.epoch },
-      },
-      tx,
-    );
-    return updated;
+): Promise<{ conversation: ConversationRow; started: boolean }> {
+  return startConversation(userId, sessionKey, {
+    ...(opts.key ? { key: opts.key } : {}),
+    onStarted: (tx, c) =>
+      audit(
+        {
+          userId,
+          actor: 'user',
+          action: 'chat_started',
+          summary: `Started a new chat ${IN_CHANNEL[opts.channel]}`,
+          details: { channel: opts.channel, epoch: c.epoch, conversationId: c.id },
+        },
+        tx,
+      ),
   });
-  if (row) return { epoch: row.epoch, startedAt: row.startedAt, started: true };
-  // This key started the latest chat already (the job ran again).
-  const current = (await epochRow(userId, sessionKey))!;
-  return { epoch: current.epoch, startedAt: current.startedAt, started: false };
 }
 
-/** POST /v1/chats/new: a new web chat, at most 30 an hour (429 after that). */
-export async function startNewWebChat(userId: string): Promise<Date> {
+/** POST /v1/conversations: a new web conversation, at most 30 an hour (429 after that). */
+export async function startNewWebChat(userId: string): Promise<ConversationRow> {
   await enforce({ key: `new-chat:user:${userId}`, max: NEW_CHATS_PER_HOUR, windowSeconds: 3600 });
-  return (await startNewChat(userId, 'web', { channel: 'web' })).startedAt;
+  return (await startNewChat(userId, 'web', { channel: 'web' })).conversation;
 }
 
-/** Account deletion. */
-export async function deleteChatEpochs(userId: string): Promise<void> {
-  await db().delete(chatEpochs).where(eq(chatEpochs.userId, userId));
+/**
+ * For older clients (`chatStartedAt`): when web chat's newest conversation started, or null if
+ * the user never started a new chat there (web chat is still on its first conversation, or has
+ * none).
+ */
+export async function webChatStartedAt(userId: string): Promise<Date | null> {
+  const counter = await chatCounter(userId, 'web');
+  return counter && counter.epoch > 0 ? counter.startedAt : null;
+}
+
+const NOT_FOUND = 'Conversation not found';
+
+/** The user's conversation, which must be a web one to be written in or opened from the web. */
+async function webConversation(userId: string, id: string): Promise<ConversationRow> {
+  const c = await getConversation(userId, id);
+  if (!c) throw notFound(NOT_FOUND);
+  if (c.channel !== 'web')
+    throw conflict('Only a web conversation can be opened to write in from the web app');
+  return c;
+}
+
+/**
+ * Makes a web conversation the active one: web chat's next message goes there, and the agent
+ * continues that conversation's own context. 404 if not this user's; 409 for another channel's.
+ */
+export async function openWebConversation(userId: string, id: string): Promise<ConversationRow> {
+  const c = await webConversation(userId, id);
+  if (c.active) return c;
+  const opened = await activateConversation(userId, id);
+  if (!opened) throw notFound(NOT_FOUND);
+  return opened;
+}
+
+/**
+ * The web conversation a message is written in: the one named (made the active one first if it
+ * isn't), or web chat's active one.
+ */
+export async function webConversationToWriteIn(
+  userId: string,
+  conversationId?: string,
+): Promise<ConversationRow> {
+  return conversationId
+    ? openWebConversation(userId, conversationId)
+    : activeConversation(userId, 'web');
+}
+
+/** The user renames a conversation (any channel). 404 if not this user's. */
+export async function renameUserConversation(
+  userId: string,
+  id: string,
+  title: string,
+): Promise<ConversationRow> {
+  const renamed = await renameConversation(userId, id, title);
+  if (!renamed) throw notFound(NOT_FOUND);
+  return renamed;
+}
+
+/**
+ * The user deletes a conversation: its messages and their files go with it, and the activity log
+ * gets `conversation_deleted` with the channel (no title, no text). 404 if not this user's.
+ * The Bridge is not told: the engine's own record of that conversation stays in the container,
+ * unused, because the conversation's number is never given out again.
+ */
+export async function deleteUserConversation(userId: string, id: string): Promise<void> {
+  const result = await deleteConversation(userId, id, {
+    onDeleted: (tx, c) =>
+      audit(
+        {
+          userId,
+          actor: 'user',
+          action: 'conversation_deleted',
+          summary: `Deleted a conversation ${IN_CHANNEL[c.channel]}`,
+          details: { channel: c.channel, epoch: c.epoch, conversationId: c.id },
+        },
+        tx,
+      ),
+  });
+  if (!result) throw notFound(NOT_FOUND);
+  await forgetConversationEngines(userId, result.deleted.sessionKey, result.deleted.epoch);
 }

@@ -1,6 +1,12 @@
 import { and, desc, eq, gt, gte, inArray, lt } from 'drizzle-orm';
 import { db } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
+import {
+  activeConversation,
+  cleanupEmptyConversations,
+  deleteUserConversations,
+  noteMessage,
+} from './conversations.ts';
 import { messages, type MediaRef } from './schema.ts';
 import { publish } from './stream.ts';
 import type { Channel } from './types.ts';
@@ -11,6 +17,7 @@ export type MessageStatus = MessageRow['status'];
 export function toApiMessage(m: MessageRow) {
   return {
     id: m.id,
+    conversationId: m.conversationId,
     channel: m.channel,
     direction: m.direction,
     text: m.text,
@@ -34,7 +41,10 @@ export async function getMessageById(id: string): Promise<MessageRow | undefined
   return row;
 }
 
-/** Saves an inbound chat message once per event (safe to re-run). */
+/**
+ * Saves an inbound chat message once per event (safe to re-run), in the chat's active
+ * conversation.
+ */
 export async function saveInbound(input: {
   userId: string;
   channel: Channel;
@@ -49,11 +59,13 @@ export async function saveInbound(input: {
     .from(messages)
     .where(and(eq(messages.eventId, input.eventId), eq(messages.direction, 'in')));
   if (existing) return existing;
+  const conversation = await activeConversation(input.userId, input.sessionKey);
   const [row] = await db()
     .insert(messages)
     .values({
       id: newId('msg'),
       userId: input.userId,
+      conversationId: conversation.id,
       channel: input.channel,
       direction: 'in',
       text: input.text,
@@ -65,21 +77,40 @@ export async function saveInbound(input: {
     })
     .returning();
   await publish(input.userId, 'message.created', toApiMessage(row!));
+  await noteMessage(row!);
   return row!;
 }
 
-/** Web message: idempotent on (user, clientMessageId). */
+/** The web message already saved for a `clientMessageId`, if any. */
+export async function getWebMessage(
+  userId: string,
+  clientMessageId: string,
+): Promise<MessageRow | undefined> {
+  const [row] = await db()
+    .select()
+    .from(messages)
+    .where(and(eq(messages.userId, userId), eq(messages.clientMessageId, clientMessageId)));
+  return row;
+}
+
+/**
+ * Web message: idempotent on (user, clientMessageId). It is saved in `conversationId` (a web
+ * conversation of this user: the caller checked), or in web chat's active one.
+ */
 export async function saveWebMessage(input: {
   userId: string;
   text: string;
   clientMessageId: string;
   media?: MediaRef[];
+  conversationId?: string;
 }): Promise<{ message: MessageRow; created: boolean }> {
+  const conversationId = input.conversationId ?? (await activeConversation(input.userId, 'web')).id;
   const [row] = await db()
     .insert(messages)
     .values({
       id: newId('msg'),
       userId: input.userId,
+      conversationId,
       channel: 'web',
       direction: 'in',
       text: input.text,
@@ -92,14 +123,10 @@ export async function saveWebMessage(input: {
     .returning();
   if (row) {
     await publish(input.userId, 'message.created', toApiMessage(row));
+    await noteMessage(row);
     return { message: row, created: true };
   }
-  const [existing] = await db()
-    .select()
-    .from(messages)
-    .where(
-      and(eq(messages.userId, input.userId), eq(messages.clientMessageId, input.clientMessageId)),
-    );
+  const existing = await getWebMessage(input.userId, input.clientMessageId);
   return { message: existing!, created: false };
 }
 
@@ -164,8 +191,8 @@ export async function getInboundByEvent(eventId: string): Promise<MessageRow | u
 }
 
 /**
- * The last messages of one chat, oldest first (context for routing, quick replies and the recap
- * a new engine gets). `after`: only messages saved after that time.
+ * The last messages of one chat, oldest first, whichever conversations they are in. `after`: only
+ * messages saved after that time.
  */
 export async function recentSessionMessages(
   userId: string,
@@ -186,6 +213,45 @@ export async function recentSessionMessages(
     .orderBy(desc(messages.id))
     .limit(limit);
   return rows.reverse();
+}
+
+/**
+ * The last messages of one conversation, oldest first (the context for routing, and the recap a
+ * new engine gets). `after`: only messages saved after that time.
+ */
+export async function recentConversationMessages(
+  userId: string,
+  conversationId: string,
+  limit: number,
+  after?: Date | null,
+): Promise<MessageRow[]> {
+  const rows = await db()
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.userId, userId),
+        eq(messages.conversationId, conversationId),
+        ...(after ? [gt(messages.createdAt, after)] : []),
+      ),
+    )
+    .orderBy(desc(messages.id))
+    .limit(limit);
+  return rows.reverse();
+}
+
+/** The conversation the approval's question was asked in, while that message exists. */
+export async function conversationOfApproval(
+  userId: string,
+  approvalId: string,
+): Promise<string | undefined> {
+  const [row] = await db()
+    .select({ conversationId: messages.conversationId })
+    .from(messages)
+    .where(and(eq(messages.userId, userId), eq(messages.approvalId, approvalId)))
+    .orderBy(desc(messages.id))
+    .limit(1);
+  return row?.conversationId;
 }
 
 /**
@@ -213,13 +279,15 @@ export async function recentInboundTexts(
   return rows.map((r) => r.text).filter(Boolean);
 }
 
+/** The user's messages, newest first: all of them, or one channel's, or one conversation's. */
 export async function listMessages(
   userId: string,
-  opts: { cursor?: string; limit: number; channel?: Channel },
+  opts: { cursor?: string; limit: number; channel?: Channel; conversationId?: string },
 ) {
   const where = [eq(messages.userId, userId)];
   if (opts.cursor) where.push(lt(messages.id, opts.cursor));
   if (opts.channel) where.push(eq(messages.channel, opts.channel));
+  if (opts.conversationId) where.push(eq(messages.conversationId, opts.conversationId));
   const rows = await db()
     .select()
     .from(messages)
@@ -241,7 +309,7 @@ export async function lastInboundSession(userId: string): Promise<string | null>
   return row?.sessionKey ?? null;
 }
 
-/** Account deletion: remove the user's messages and files. */
+/** Account deletion: remove the user's messages and files, then their conversations. */
 export async function deleteUserChannelData(userId: string): Promise<void> {
   const { attachments } = await import('./schema.ts');
   const { rm } = await import('node:fs/promises');
@@ -249,13 +317,19 @@ export async function deleteUserChannelData(userId: string): Promise<void> {
   for (const f of files) await rm(f.path, { force: true });
   await db().delete(attachments).where(eq(attachments.userId, userId));
   await db().delete(messages).where(eq(messages.userId, userId));
+  await deleteUserConversations(userId);
 }
 
-/** Chat history retention. */
+/**
+ * Chat history retention: messages older than a year go, and with them the conversations that
+ * are not active and have nothing left. Returns the number of messages removed.
+ */
 export async function cleanupMessages(olderThanDays = 365): Promise<number> {
+  const before = new Date(Date.now() - olderThanDays * 86400_000);
   const rows = await db()
     .delete(messages)
-    .where(lt(messages.createdAt, new Date(Date.now() - olderThanDays * 86400_000)))
+    .where(lt(messages.createdAt, before))
     .returning({ id: messages.id });
+  await cleanupEmptyConversations(before);
   return rows.length;
 }

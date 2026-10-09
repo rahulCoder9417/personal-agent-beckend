@@ -5,6 +5,7 @@ import { expect } from 'vitest';
 import { createApp } from '../src/api/app.ts';
 import { formatErrors, responseValidator } from '../src/api/openapi/spec.ts';
 import { upsertUserFromClerk, type User } from '../src/modules/auth/users.ts';
+import { activeConversation } from '../src/modules/channels/conversations.ts';
 import { users } from '../src/modules/auth/schema.ts';
 import { db } from '../src/shared/db/client.ts';
 import { eq } from 'drizzle-orm';
@@ -131,6 +132,10 @@ export async function waitFor<T>(
     await new Promise((r) => setTimeout(r, 50));
   }
 }
+
+/** The id of web chat's active conversation (started if there is none): for rows a test inserts itself. */
+export const webConversationId = async (userId: string): Promise<string> =>
+  (await activeConversation(userId, 'web')).id;
 
 /** A user with credits (for tests that run agent turns through the real balance check). */
 export function chatUser(overrides: Partial<User> & { credits?: number } = {}) {

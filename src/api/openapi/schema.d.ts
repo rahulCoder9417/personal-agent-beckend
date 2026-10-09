@@ -184,8 +184,14 @@ export interface paths {
          * Live updates (Server-Sent Events)
          * @description One long-lived SSE connection per browser tab. Event types:
          *     `message.created`, `message.status`, `approval.created`, `approval.resolved`,
-         *     `agent.status`, `agent.progress`, `credits.updated`, `automation.updated`.
+         *     `agent.status`, `agent.progress`, `credits.updated`, `automation.updated`,
+         *     `conversation.updated`, `conversation.deleted`.
          *     Each event's `data` is JSON matching the `StreamEvent` schema.
+         *
+         *     `message.created` and `message.status` carry the whole message, so its `conversationId`
+         *     comes with it. `conversation.updated` carries the whole conversation: it is sent when one
+         *     starts, and when its `title`, `lastMessageAt` or `active` changes. `conversation.deleted`
+         *     carries the deleted conversation's `id` only.
          *
          *     `agent.progress` is a short line about what the agent is doing in the current turn (for
          *     example `Scout: reading 4 pages` or `using web_search`). It is live only: it isn't saved
@@ -1191,8 +1197,40 @@ export interface components {
              */
             deepLink?: string | null;
         };
+        /** @description One stretch of a chat between two "New chat" actions. The agent keeps a context of its own for each. */
+        Conversation: {
+            /** @example cnv_01jz3m8q4kd2v7x9w0t5b6c8ya */
+            id: string;
+            channel: components["schemas"]["ChannelType"];
+            /** @description The conversation's number within its chat. It never changes and is never used again. */
+            epoch: number;
+            /** Format: date-time */
+            startedAt: string;
+            /**
+             * Format: date-time
+             * @description When its newest message was saved; `startedAt` while it has none.
+             */
+            lastMessageAt: string;
+            /**
+             * @description The name the user gave it, else the first incoming message's text cut to 60 characters
+             *     at a word, else "New chat" while it has no such message.
+             * @example Plan a trip to Goa
+             */
+            title: string;
+            /**
+             * @description True for the one conversation of its chat that the next message goes into. Web chat:
+             *     the one the user has open to write in. Telegram: the chat's latest one.
+             */
+            active: boolean;
+        };
+        /** @description The `data` of a `conversation.deleted` stream event. */
+        ConversationDeleted: {
+            id: string;
+        };
         Message: {
             id: string;
+            /** @description The conversation this message belongs to. */
+            conversationId: string;
             channel: components["schemas"]["ChannelType"];
             /** @enum {string} */
             direction: "in" | "out";
@@ -1808,8 +1846,8 @@ export interface components {
         };
         StreamEvent: {
             /** @enum {string} */
-            type: "message.created" | "message.status" | "approval.created" | "approval.resolved" | "agent.status" | "agent.progress" | "credits.updated" | "automation.updated";
-            data: components["schemas"]["Message"] | components["schemas"]["Approval"] | components["schemas"]["AgentStatus"] | components["schemas"]["AgentProgress"] | components["schemas"]["CreditBalance"] | components["schemas"]["Automation"];
+            type: "message.created" | "message.status" | "approval.created" | "approval.resolved" | "agent.status" | "agent.progress" | "credits.updated" | "automation.updated" | "conversation.updated" | "conversation.deleted";
+            data: components["schemas"]["Message"] | components["schemas"]["Conversation"] | components["schemas"]["ConversationDeleted"] | components["schemas"]["Approval"] | components["schemas"]["AgentStatus"] | components["schemas"]["AgentProgress"] | components["schemas"]["CreditBalance"] | components["schemas"]["Automation"];
         };
     };
     responses: {

@@ -5,6 +5,7 @@ import { ownsChat } from '../../auth/links.ts';
 import { lastInboundSession } from '../../channels/messages.ts';
 import { queueOutbound } from '../../channels/outbound.ts';
 import { parseSessionKey } from '../../channels/types.ts';
+import { turnConversationId } from '../../orchestrator/turn.ts';
 import { defineTool, ToolError } from '../registry.ts';
 
 /** Where the agent's messages may go: only this user's own sessions. */
@@ -39,7 +40,13 @@ defineTool({
   },
   async run({ userId }, args) {
     const sessionKey = await resolveSession(userId, args.session_key);
-    const msg = await queueOutbound({ userId, sessionKey, text: args.text });
+    const msg = await queueOutbound({
+      userId,
+      sessionKey,
+      text: args.text,
+      // Sent during a turn in this chat: it belongs to the turn's conversation.
+      conversationId: await turnConversationId(userId, sessionKey),
+    });
     return { message_id: msg.id, status: 'queued' };
   },
   summarize: (args) => `Sent a message (${args.text.length} chars)`,

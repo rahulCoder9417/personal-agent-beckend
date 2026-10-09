@@ -376,11 +376,15 @@ describe('/new in Telegram', () => {
 });
 
 it('deleting the account removes the conversations and the chat counters', async () => {
-  const user = await createUser();
+  const user = await chatUser();
   const other = await createUser();
+  await ensureSandbox(user.id);
+  // Two conversations, the first with messages in it.
+  await say(user.id, 'plan a trip to Goa');
   await startWebChat(user.token);
   await startWebChat(other.token);
   await handleDeleteUser({ data: { userId: user.id } } as Job);
+  expect(await db().select().from(messages).where(eq(messages.userId, user.id))).toEqual([]);
   expect(await db().select().from(chatEpochs).where(eq(chatEpochs.userId, user.id))).toEqual([]);
   expect(await db().select().from(conversations).where(eq(conversations.userId, user.id))).toEqual(
     [],

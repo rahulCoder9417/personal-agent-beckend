@@ -100,6 +100,11 @@ export async function refreshPendingConnections(userId: string): Promise<void> {
   }
 }
 
+/**
+ * The catalog for one user. `connectable`: this server has a Composio setup for the app
+ * (COMPOSIO_AUTH_CONFIGS). Without one the app is listed but `startConnect` answers 404 for it,
+ * so the web app shows "Not available yet" instead of a Connect button.
+ */
 export async function appCatalogFor(userId: string, plan: PlanId) {
   await refreshPendingConnections(userId);
   const rows = await listConnections(userId);
@@ -109,6 +114,7 @@ export async function appCatalogFor(userId: string, plan: PlanId) {
     iconUrl: null,
     category: app.category,
     availableOnPlan: appAllowedOnPlan(app, plan),
+    connectable: Boolean(authConfigFor(app.slug)),
     connections: rows
       .filter((r) => r.app === app.slug && r.status !== 'pending')
       .map((r) => ({

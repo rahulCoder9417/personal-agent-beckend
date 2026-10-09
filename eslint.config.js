@@ -3,7 +3,10 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['node_modules', 'proto-gen', 'migrations', 'src/api/openapi/schema.d.ts'] },
+  {
+    // `.claude`: Claude Code's own settings and its agents' worktrees, not this repo's code.
+    ignores: ['node_modules', '.claude', 'proto-gen', 'migrations', 'src/api/openapi/schema.d.ts'],
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

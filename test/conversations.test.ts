@@ -360,6 +360,26 @@ describe('every message belongs to one conversation', () => {
   });
 });
 
+describe('many requests at once', () => {
+  it('a chat’s first messages arriving together start one conversation, not several', async () => {
+    const user = await chatUser();
+    const got = await Promise.all(
+      Array.from({ length: 12 }, () => activeConversation(user.id, 'web')),
+    );
+    expect(new Set(got.map((c) => c.id)).size).toBe(1);
+    expect(await conversationsOf(user.id)).toMatchObject([{ epoch: 0, active: true }]);
+  });
+
+  it('new chats started together each get their own number, and one is the active one', async () => {
+    const user = await chatUser();
+    const started = await Promise.all(Array.from({ length: 6 }, () => startNewWebChat(user.id)));
+    expect(started.map((c) => c.epoch).sort()).toEqual([1, 2, 3, 4, 5, 6]);
+    const all = await conversationsOf(user.id);
+    expect(all).toHaveLength(6);
+    expect(all.filter((c) => c.active).map((c) => c.epoch)).toEqual([6]);
+  });
+});
+
 describe('each conversation has its own context', () => {
   it('a turn runs in its message’s conversation, and its answer is saved there, also after the user moved on', async () => {
     const user = await chatUser();

@@ -767,7 +767,7 @@ Composio is an outside service. It keeps the user's sign-ins to apps such as Gma
 A connection becomes `active`, `expired` or `error` in one of three ways. The first one to happen wins.
 
 - **Composio's webhook.** A webhook is a message a service sends to our server when something happens. Composio sends one when the status changes.
-- **The app list.** Each time the web app lists the apps, the api asks Composio.
+- **The app list.** When the web app lists the apps and a connection is still pending, the api asks Composio. With nothing pending it does not ask. So a connection that expires later is learned from Composio's webhook only.
 - **The check job.** The worker asks Composio by itself. The first check runs 15 seconds after the link is made. The next ones come 30 seconds, then 1, 2, 4 and 8 minutes later.
 - That is six checks in about 16 minutes. They stop as soon as the connection is no longer pending. After the last one, the other two ways can still finish it.
 
@@ -802,10 +802,11 @@ An approval is the user's yes before the agent does something that other people 
 
 | Kind of action | Words that mark it |
 |---|---|
-| Sending to others | SEND, REPLY, FORWARD, POST, PUBLISH, SHARE, INVITE |
+| Sending to others | SEND, REPLY, FORWARD, POST, PUBLISH, TWEET, SHARE, INVITE |
 | Deleting | DELETE, REMOVE, TRASH, ARCHIVE |
 | Paying | PAY, PAYMENT, TRANSFER, CHARGE, REFUND |
 | Changing what exists | UPDATE, MOVE, MERGE, CLOSE, CANCEL, ACCEPT, DECLINE |
+| Putting an event in a calendar | CREATE_EVENT (other people may be invited) |
 | GitHub comments and reviews | COMMENT or REVIEW, in a GitHub action that writes |
 
 The platform decides by these words in the action's name. There is one exception, for pull-request review. It is described in that section.

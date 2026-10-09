@@ -427,7 +427,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - **The page reader on Hermes:** it refuses a redirect to an address it has not seen, even on the same site. Keep that, or allow redirects inside one site?
 - **Signing in to websites in Scout's browser:** wanted as the next step. Open: how long a sign-in is kept, which sites, and what Scout may do there without asking.
 - **The waitlist form** still asks about WhatsApp and iMessage. Keep it as a signal of demand, or change it.
-- **Composio:** on its project, "mask connected account secrets" must be off, or the git gateway and pull-request review cannot work.
+- **Composio and the GitHub token:** the git gateway and pull-request review need the user's GitHub token from Composio. The plan was to switch off the project setting "mask connected account secrets". Composio's change note of 22 April 2026 says the token is always hidden for its shared sign-in, whatever that setting says. So Byte pushing code, and Patch reading the code for a review, may need our own GitHub app registered at Composio. Not confirmed: neither has run for real. `composio.md`, section 10, has the details.
 - **Pull-request review** needs admin access to the repo, because Composio puts a webhook on it.
 - **Small gaps the web app found in the API:** no history of past reviews, no list of repos to pick from, no way to add or edit a memory, and progress lines are not shown again after a page reload.
 

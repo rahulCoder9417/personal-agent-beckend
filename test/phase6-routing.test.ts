@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { messages } from '../src/modules/channels/schema.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
 import {
+  quickReplyPrompt,
   routeTurn,
   setChatCompleter,
   setJevClient,
@@ -112,10 +113,53 @@ describe('Phase 6: Jev routing', () => {
     const chat = chatCalls[0]!;
     expect(chat[0]!.role).toBe('system');
     expect(chat[0]!.content).toContain('ESCALATE');
+    // WhatsApp shows a text as typed: the model is asked for plain text.
+    expect(chat[0]!.content).toBe(quickReplyPrompt('whatsapp'));
     expect(chat.at(-1)).toEqual({ role: 'user', content: 'hi, how are you?' });
 
     const rows = await db().select().from(messages).where(eq(messages.userId, user.id));
     expect(rows.find((r) => r.direction === 'out' && r.text === reply.text)).toBeTruthy();
+  });
+
+  it('the cheap model is told how to write for the channel: Markdown in web chat, plain text in a chat app', async () => {
+    const web = quickReplyPrompt('web');
+    expect(web).toContain('rendered Markdown');
+    expect(web).not.toContain('plain text only');
+    for (const channel of ['telegram', 'whatsapp', 'imessage'] as const) {
+      const prompt = quickReplyPrompt(channel);
+      expect(prompt, channel).toContain('plain text only');
+      expect(prompt, channel).toContain('No Markdown symbols');
+      expect(prompt, channel).toContain('No tables');
+      expect(prompt, channel).not.toContain('rendered Markdown');
+    }
+    // Whatever the channel, the model can still hand the message to the agent.
+    for (const channel of ['web', 'telegram', 'whatsapp', 'imessage'] as const)
+      expect(quickReplyPrompt(channel), channel).toContain('reply with exactly ESCALATE');
+
+    // The prompt follows the turn's own channel.
+    jevAnswer = { route: 'simple', confidence: 0.95, apps: [] };
+    const turn = { userId: 'usr_x', deliveryId: 'evt_x', kind: 'message' as const, text: 'hi' };
+    await routeTurn({ ...turn, sessionKey: 'web', channel: 'web' });
+    await routeTurn({ ...turn, sessionKey: 'telegram:42', channel: 'telegram' });
+    expect(chatCalls.map((c) => c[0])).toEqual([
+      { role: 'system', content: quickReplyPrompt('web') },
+      { role: 'system', content: quickReplyPrompt('telegram') },
+    ]);
+  });
+
+  it('a quick reply written in Markdown anyway reaches the chat app as plain text', async () => {
+    const { user, number } = await linkedUser();
+    jevAnswer = { route: 'simple', confidence: 0.93, apps: [] };
+    chatAnswer = '**Paris** is the capital of *France*. See `Europe`.';
+    await postWhatsapp(waWebhook([waText(number, 'capital of France?')]));
+    const reply = await waitFor(async () =>
+      wa.sent.find((m) => m.to === number && m.text?.includes('Paris')),
+    );
+    expect(reply.text).toBe('Paris is the capital of France. See Europe.');
+    // The saved message keeps what the model wrote.
+    const rows = await db().select().from(messages).where(eq(messages.userId, user.id));
+    expect(rows.find((r) => r.direction === 'out' && r.text === chatAnswer)).toBeTruthy();
+    expect(wakes).toHaveLength(0);
   });
 
   it('a task wakes the container and carries the apps Jev picked', async () => {

@@ -17,8 +17,13 @@
 //   connect-app     --user <id> --app <slug>
 //   status          --user <id>
 //   browser         --user <id>                      (send Scout's browser switch for this user now)
-//   send            --user <id> --text <text> [--timeout 900]
-//   messages        --user <id> [--limit 10]
+//   send            --user <id> --text <text> [--conversation <id>] [--timeout 900]
+//                   (into web chat's active conversation; with --conversation into that web
+//                   conversation, which becomes the active one first)
+//   conversations   --user <id> [--channel web|telegram] [--limit 20]
+//                   (the user's conversations, the one with the newest message first)
+//   new-chat        --user <id>                      (start a new web conversation, as the web app's button does)
+//   messages        --user <id> [--conversation <id>] [--limit 10]
 //   activity        --user <id> [--limit 20]
 //   approve         --user <id> [--approval <id>] [--decision approve|reject] [--timeout 900]
 //   pr-review       --user <id> [--repo <owner>/<name> --state on|off]
@@ -47,11 +52,18 @@ import { getKeyRow } from '../src/modules/billing/litellm.ts';
 import { creditExpiry, PLAN_IDS, PLANS, type PlanId } from '../src/modules/billing/plans.ts';
 import { getCurrentSubscription } from '../src/modules/billing/subscriptions.ts';
 import {
+  getConversation,
+  listConversations,
+  toApiConversation,
+} from '../src/modules/channels/conversations.ts';
+import {
   getMessageById,
   listMessages,
+  recentConversationMessages,
   recentSessionMessages,
 } from '../src/modules/channels/messages.ts';
 import { subscribe } from '../src/modules/channels/stream.ts';
+import type { Channel } from '../src/modules/channels/types.ts';
 import { findEvent, getEvent } from '../src/modules/events/intake.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
 import {
@@ -62,6 +74,7 @@ import {
 import { getAgentSettings } from '../src/modules/orchestrator/agent-settings.ts';
 import { decideApproval, listApprovals } from '../src/modules/orchestrator/approvals.ts';
 import { browserStatus, syncBrowser } from '../src/modules/orchestrator/browser.ts';
+import { startNewWebChat } from '../src/modules/orchestrator/chats.ts';
 import { completeClaudeLogin, startClaudeLogin } from '../src/modules/orchestrator/claude-login.ts';
 import { crewOfDetails } from '../src/modules/orchestrator/crew.ts';
 import { handleOnboardUser } from '../src/modules/orchestrator/lifecycle.ts';
@@ -90,8 +103,10 @@ const USAGE = `usage: node --import tsx scripts/dev-user.ts <command> [flags]
   connect-app     --user <id> --app <slug>
   status          --user <id>
   browser         --user <id>
-  send            --user <id> --text <text> [--timeout 900]
-  messages        --user <id> [--limit 10]
+  send            --user <id> --text <text> [--conversation <id>] [--timeout 900]
+  conversations   --user <id> [--channel web|telegram] [--limit 20]
+  new-chat        --user <id>
+  messages        --user <id> [--conversation <id>] [--limit 10]
   activity        --user <id> [--limit 20]
   approve         --user <id> [--approval <id>] [--decision approve|reject] [--timeout 900]
   pr-review       --user <id> [--repo <owner>/<name> --state on|off]
@@ -152,6 +167,16 @@ const browserLine = (b: { available: boolean; wanted: boolean; onRecord: boolean
   `browser ${b.onRecord === null ? 'unknown' : b.onRecord ? 'on' : 'off'} ` +
   `(should be ${b.wanted ? 'on' : 'off'}; the image has it: ${b.available ? 'yes' : 'no'})`;
 
+const CHANNELS: Channel[] = ['web', 'telegram', 'whatsapp', 'imessage'];
+
+/** One conversation on one line: id, channel, its number in the chat, whether it is the active one. */
+function conversationLine(c: ReturnType<typeof toApiConversation>): string {
+  return (
+    `${c.id} ${c.channel} #${c.epoch}${c.active ? ' active' : ''} ` +
+    `last ${c.lastMessageAt}: ${shown(c.title, 80)}`
+  );
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** An event's job is over: it ran, it failed for good, or it had nothing to do. */
@@ -185,6 +210,8 @@ async function listen(userId: string) {
     async finish(input: {
       eventId: string;
       sessionKey: string;
+      /** The turn's conversation, when known: only what was sent there counts as the reply. */
+      conversationId?: string;
       /** Only what was sent after this counts as the reply. */
       since: Date;
       timeoutSeconds: number;
@@ -198,9 +225,10 @@ async function listen(userId: string) {
       } finally {
         stop();
       }
-      const sent = (await recentSessionMessages(userId, input.sessionKey, 50, input.since)).filter(
-        (m) => m.direction === 'out',
-      );
+      const after = input.conversationId
+        ? await recentConversationMessages(userId, input.conversationId, 50, input.since)
+        : await recentSessionMessages(userId, input.sessionKey, 50, input.since);
+      const sent = after.filter((m) => m.direction === 'out');
       const seconds = ((Date.now() - started) / 1000).toFixed(1);
       const finished = ENDED.has(status);
       return [
@@ -406,7 +434,8 @@ export async function devUser(argv: string[]): Promise<string[]> {
     }
     case 'send': {
       // A message in web chat, through the same function as POST /v1/messages. The worker runs
-      // the turn; this waits for it and prints what the user would see.
+      // the turn; this waits for it and prints what the user would see. With --conversation it
+      // goes into that web conversation (made the active one first), else into the active one.
       const user = await activeUser(flags);
       const text = need(flags, 'text');
       const timeoutSeconds = count(flags, 'timeout', TURN_TIMEOUT_SECONDS, 3600);
@@ -414,6 +443,7 @@ export async function devUser(argv: string[]): Promise<string[]> {
       const { message, eventId } = await sendWebMessage(user.id, {
         text,
         clientMessageId: `dev-${randomUUID()}`,
+        ...(flags.conversation ? { conversationId: flags.conversation } : {}),
       }).catch((err: unknown) => {
         turn.cancel();
         throw err;
@@ -421,20 +451,48 @@ export async function devUser(argv: string[]): Promise<string[]> {
       const lines = await turn.finish({
         eventId,
         sessionKey: 'web',
+        conversationId: message.conversationId,
         since: message.createdAt,
         timeoutSeconds,
       });
       return [
-        `sent ${message.id} (web chat)`,
+        `sent ${message.id} (web chat, conversation ${message.conversationId})`,
         ...lines,
         // `failed`: the turn ended in an error (the reply says which).
         `message ${(await getMessageById(message.id))?.status ?? 'gone'}`,
         `balance ${await getBalance(user.id)} credits`,
       ];
     }
+    case 'conversations': {
+      // What GET /v1/conversations lists: every chat's conversations, newest message first.
+      const user = await activeUser(flags);
+      const channel = flags.channel as Channel | undefined;
+      if (channel && !CHANNELS.includes(channel))
+        throw new UsageError(`--channel must be one of ${CHANNELS.join(', ')}`);
+      const page = await listConversations(user.id, {
+        limit: count(flags, 'limit', 20, 100),
+        ...(channel ? { channel } : {}),
+      });
+      if (!page.items.length) return ['no conversations'];
+      return [
+        ...page.items.map((c) => conversationLine(toApiConversation(c))),
+        ...(page.nextCursor ? ['(more: raise --limit)'] : []),
+      ];
+    }
+    case 'new-chat': {
+      // A new web conversation, through the same function as POST /v1/conversations (and its
+      // limit of 30 an hour). No turn runs.
+      const user = await activeUser(flags);
+      return [`started ${conversationLine(toApiConversation(await startNewWebChat(user.id)))}`];
+    }
     case 'messages': {
       const user = await activeUser(flags);
-      const page = await listMessages(user.id, { limit: count(flags, 'limit', 10, 100) });
+      if (flags.conversation && !(await getConversation(user.id, flags.conversation)))
+        throw new UsageError(`no conversation ${flags.conversation} for this user`);
+      const page = await listMessages(user.id, {
+        limit: count(flags, 'limit', 10, 100),
+        ...(flags.conversation ? { conversationId: flags.conversation } : {}),
+      });
       if (!page.items.length) return ['no messages'];
       // Oldest first, the way a chat reads.
       return page.items

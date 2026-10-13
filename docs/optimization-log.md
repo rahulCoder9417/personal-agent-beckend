@@ -60,6 +60,46 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 4. The log
 
+### 13 October 2026: proper jobs for Patch and Byte
+
+- **Where it is:** on `main` since 13 October, in the backend, the vm-manager and the web app.
+- **Why:** Patch only reviewed pull requests automatically, and Byte only worked from chat. Neither could be given a brief, neither said where its report should go, and neither cleaned up the programs it started.
+- **What the user notices:**
+  - **On the Crew screen:** "Give Patch a review" and "Give Byte a job".
+  - **The brief:** pick the repo from your GitHub list (or type it), then the branch or pull request, and say what to do.
+    - **For Patch:** what to focus on (bugs, security, tests, speed, style) and the commands to run.
+    - **For Byte:** what to fix or build, what to test for, and whether to open a pull request or only push a branch.
+  - **Where the report goes:** it always comes to your chat. You can also have it posted on the pull request, or opened as a GitHub issue.
+  - **The report has a fixed shape:** the verdict, the findings by file and line, the tests that were run and their results, and what was not checked.
+  - **The job list:** below the forms, a list of jobs with their state, and the report once done.
+  - **From chat:** a job can also be asked for, for example "Patch, review acme/web PR 42, run pnpm test, post it on the PR".
+- **Backend:**
+  - **Running a job:** the brief is saved and run as one turn of the agent, with the same per-user queue as messages, so it never runs twice. The platform writes the instruction from the brief; nothing written on GitHub is put into it as an instruction. The report is kept on the job.
+  - **What ticking "post it on the pull request" allows:** exactly one review of the "comment" kind on that pull request, for that job. Merging, approving, closing and pushing to the main branch are never allowed. A job started from chat must still be approved before it posts, because the platform cannot tell that the request really came from you.
+  - **Limits:** at most 5 jobs waiting and 20 an hour.
+  - **After a job:** the container is put to sleep right away instead of after 3 idle minutes.
+- **vm-manager:**
+  - **A folder per job:** inside the container, each job gets a folder of its own. When the job's turn ends, whatever happened, the Bridge stops every program the job started and deletes the folder. Folders left behind are cleared when the container starts.
+  - **Patch's parallel reviews:** Patch may split a large review into up to 3 parallel reviews.
+  - **Sign-in safety:** a polite stop now also waits while a Claude sign-in is waiting for its code.
+- **Cost and speed:** a job costs what a turn costs, plus 1 credit for each review, issue or pull request it creates. The container sleeps sooner after a job, which saves awake time. Not measured.
+- **Contracts:** `openapi.yaml` gained the crew jobs (`/v1/crew-jobs`) and the list of your GitHub repos (`/v1/github/repos`). `vm.proto` did not change.
+- **Database:** a new table, `crew_jobs`.
+- **How it was checked:**
+  - New tests in all three repos, including real programs being started and stopped for the clean-up.
+  - The web app's screens in demo mode.
+  - All checks pass: backend 625 of 626 (the known failure, the Hindi title test), web app 577, vm-manager all.
+- **Still open:**
+  - A real run against GitHub in a real container.
+  - The clean-up inside the container's gVisor sandbox.
+  - On Hermes, the clean-up finds a job's programs by its folder only.
+  - What Composio's repo-list action really returns.
+- **Docs updated:** `backend-report.md` sections 13, 15, 19, 20, 32, 33, 34, 40, 41, 43 and 44; `hld-mvp.md` sections 2, 5.6 (new; the two after it renumbered) and 12; the vm-manager's README; the web app's README.
+- **Commits:**
+  - backend `6c3b1b6`, `43e58ed`, `74595fa`, `ffde17a`, `b596c81`, `225e9d0`, `09b8fce`, `e9327a9`, merged in `4790b72`;
+  - vm-manager `f057f96`, `9b02bce`, `370ab8b`, merged in `af7dcf2`;
+  - web app `296bb95`, `2a19409`, `4e799ab`, `4b2b990`, `cb951bd`, `e4343d8`, `d08171b`, merged in `a0282a8`.
+
 ### 13 October 2026: replies appear in web chat as they are written
 
 - **Where it is:** on `main` since 13 October, in the backend, the vm-manager and the web app. It works only once the server is deployed: the web app on its own shows nothing new.

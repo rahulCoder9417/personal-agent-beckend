@@ -2,7 +2,7 @@
 // a standing approval that covers a new review or comment on that repo's pull requests only.
 import { randomUUID } from 'node:crypto';
 import type { Worker } from 'bullmq';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNotNull } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DeliverKind } from '../proto-gen/vm/v1/vm_pb.ts';
 import { auditLog } from '../src/modules/admin/schema.ts';
@@ -14,7 +14,7 @@ import {
 } from '../src/modules/automations/pr-review.ts';
 import { automations, prReviews } from '../src/modules/automations/schema.ts';
 import { createGrant, getBalance } from '../src/modules/billing/credits.ts';
-import { activeConversation } from '../src/modules/channels/conversations.ts';
+import { activeConversation, findAutomationsChat } from '../src/modules/channels/conversations.ts';
 import { conversations, messages } from '../src/modules/channels/schema.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
 import {
@@ -464,15 +464,22 @@ describe('a pull request is opened or gets new commits', () => {
     };
     const first = `w-${randomUUID()}`;
     await prEvent(u.id, trigger, opened, first);
-    const verdict = await waitFor(async () => tg.sent.find((m) => m.text.startsWith('Verdict')));
-    expect(verdict).toMatchObject({
-      chatId: u.chatId,
-      text: `Verdict for #12 at aaaaaaa: 2 things to fix.`,
-    });
+    // The verdict is in the Automations chat; the user's Telegram chat gets a copy of it.
+    const verdict = await waitFor(async () => tg.sent.find((m) => m.text.includes('Verdict')));
+    expect(verdict).toMatchObject({ chatId: u.chatId });
+    expect(verdict.text).toMatch(
+      /^⚡ Review pull requests in acme\/website\n\nVerdict for #12 at aaaaaaa: 2 things to fix\.\n\nTo follow up, open the Automations chat/,
+    );
+    const chat = (await findAutomationsChat(u.id))!;
+    const [saved] = await db()
+      .select()
+      .from(messages)
+      .where(and(eq(messages.userId, u.id), eq(messages.conversationId, chat.id)));
+    expect(saved!.text).toBe('Verdict for #12 at aaaaaaa: 2 things to fix.');
 
     // The instruction names the repo, the pull request, the head commit GitHub has, and Patch.
     const [turn] = reviewTurns(u.id);
-    expect(turn!.sessionKey).toBe(`telegram:${u.chatId}`);
+    expect(turn!.sessionKey).toBe('web');
     expect(turn!.text).toContain(
       `Review pull request #12 in acme/website at head commit ${SHA_A}.`,
     );
@@ -533,7 +540,7 @@ describe('a pull request is opened or gets new commits', () => {
     github.set('acme/website', 12, SHA_B);
     await prEvent(u.id, trigger, { action: 'synchronize', number: 12 });
     await waitFor(async () => reviewTurns(u.id).length === 2);
-    await waitFor(async () => tg.sent.filter((m) => m.text.startsWith('Verdict')).length === 2);
+    await waitFor(async () => tg.sent.filter((m) => m.text.includes('\n\nVerdict')).length === 2);
     expect(reviewTurns(u.id)[1]!.text).toContain(`head commit ${SHA_B}`);
     // A review is marked done when its turn has fully ended (after the usage sync), a moment
     // after the verdict is sent.
@@ -545,7 +552,7 @@ describe('a pull request is opened or gets new commits', () => {
     expect((await listed(u.token))[0]!.lastReviewAt).not.toBeNull();
   });
 
-  it('in web chat, the verdict is saved in the review’s own conversation, not the one open', async () => {
+  it('the verdict is saved in the Automations chat, not the conversation that is open', async () => {
     const u = await dev({ telegram: false });
     await on(u.token, 'acme/site');
     const trigger = await triggerOf(u.id, 'site');
@@ -571,7 +578,14 @@ describe('a pull request is opened or gets new commits', () => {
       .select()
       .from(conversations)
       .where(eq(conversations.id, first!.conversationId));
-    expect(own).toMatchObject({ title: 'Review pull requests in acme/site', active: false });
+    expect(own).toMatchObject({ kind: 'automations', title: 'Automations', active: false });
+    // No Telegram chat: no copy.
+    expect(
+      await db()
+        .select()
+        .from(messages)
+        .where(and(eq(messages.userId, u.id), isNotNull(messages.copyOf))),
+    ).toHaveLength(0);
     // The next commit's verdict goes to the same conversation.
     github.set('acme/site', 7, SHA_B);
     await prEvent(u.id, trigger, { action: 'synchronize', number: 7 });

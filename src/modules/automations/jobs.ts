@@ -1,20 +1,19 @@
 import type { Job } from 'bullmq';
 import { eq } from 'drizzle-orm';
+import { config, isChannelEnabled } from '../../shared/config.ts';
 import { db } from '../../shared/db/client.ts';
+import { ownsChat } from '../auth/links.ts';
 import { isValidTimezone } from '../auth/users.ts';
+import { automationsChat } from '../channels/conversations.ts';
+import { turnReply, type MessageRow } from '../channels/messages.ts';
 import { queueOutbound } from '../channels/outbound.ts';
+import { WEB_APP_NAME } from '../channels/purchase-links.ts';
 import { parseSessionKey } from '../channels/types.ts';
 import { getEvent, ingestEvent } from '../events/intake.ts';
 import type { ComposioTriggerEvent } from '../integrations/composio.ts';
 import { runTurn, type TurnKind, type TurnOutcome } from '../orchestrator/turn.ts';
 import { IGNORED } from '../../worker/ignored.ts';
-import {
-  findByTriggerRef,
-  recordRun,
-  runConversation,
-  setEnabled,
-  type Automation,
-} from './automations.ts';
+import { findByTriggerRef, recordRun, setEnabled, type Automation } from './automations.ts';
 import { finishPrReview, preparePrReview } from './pr-review.ts';
 import { automations } from './schema.ts';
 
@@ -109,6 +108,48 @@ export async function handleRunAutomation(job: Job): Promise<unknown> {
   return null;
 }
 
+/** The path of the web app that opens the Automations chat. */
+export const AUTOMATIONS_CHAT_PATH = '/?chat=automations';
+
+/**
+ * The copy of a run's answer that goes to the chat app the automation was made in: a first line
+ * naming the automation, the answer, and a last line saying where to follow it up (only while web
+ * chat is on). Sent as it is written; the chat app's own plain-text step still runs on it.
+ */
+export function copyText(a: Pick<Automation, 'kind' | 'title'>, text: string): string {
+  const head = `${a.kind === 'event' ? '⚡' : '⏰'} ${a.title}`;
+  const tail = isChannelEnabled('web')
+    ? `\n\nTo follow up, open the Automations chat in ${WEB_APP_NAME}: ${config().WEB_APP_URL}${AUTOMATIONS_CHAT_PATH}`
+    : '';
+  return `${head}\n\n${text.trim()}${tail}`;
+}
+
+/**
+ * Made in a chat app (its session key is a Telegram chat): a copy of `message`, which is kept in
+ * the Automations chat, is sent there as well, as plain text. It is saved in that chat's current
+ * conversation, to be shown there, marked as a copy: it never becomes part of the agent's context
+ * in that chat. Once per message, so a job that runs again sends no second copy. Nothing is sent
+ * to a chat that is no longer the user's, that blocked the bot, or whose channel is switched off.
+ */
+async function copyToChat(a: Automation, message: MessageRow | undefined): Promise<void> {
+  const target = parseSessionKey(a.sessionKey);
+  if (!message || !target || target.channel === 'web' || !isChannelEnabled(target.channel)) return;
+  const link = await ownsChat(a.userId, target.channel, target.externalChatId ?? '');
+  if (!link || link.blocked) return;
+  await queueOutbound({
+    userId: a.userId,
+    sessionKey: a.sessionKey,
+    text: copyText(a, message.text),
+    copyOf: message.id,
+  });
+}
+
+/**
+ * One run as one turn of the agent, in the user's Automations chat: wherever the automation was
+ * made, never in the conversation the user has open, and never made the active one. The agent
+ * continues the Automations chat's own context. The run's reply (the agent's answer, or what the
+ * platform said instead) is then copied to the chat app the automation was made in, if any.
+ */
 async function runAutomationTurn(
   a: Automation,
   deliveryId: string,
@@ -116,19 +157,19 @@ async function runAutomationTurn(
   text: string,
   metadata: Record<string, unknown> = {},
 ): Promise<TurnOutcome> {
-  const session = parseSessionKey(a.sessionKey) ?? { channel: 'web' as const };
-  // Web chat: the conversation it was made in, or its own; never the one the user has open.
-  const conversationId = await runConversation(a);
+  const chat = await automationsChat(a.userId);
   const outcome = await runTurn({
     userId: a.userId,
     deliveryId,
     kind,
-    sessionKey: a.sessionKey,
-    channel: session.channel,
+    sessionKey: chat.sessionKey,
+    channel: chat.channel,
     text,
-    ...(conversationId ? { conversationId } : {}),
+    conversationId: chat.id,
+    inAutomationsChat: true,
     metadata: { automationId: a.id, title: a.title, ...metadata },
   });
+  await copyToChat(a, await turnReply(a.userId, deliveryId));
   if (outcome === 'out_of_credits') {
     await setEnabled(a.userId, a.id, false, 'out_of_credits');
     return outcome;
@@ -136,12 +177,14 @@ async function runAutomationTurn(
   const updated = await recordRun(a, outcome !== 'error');
   if (outcome === 'error' && updated.failCount >= MAX_FAILURES && updated.enabled) {
     await setEnabled(a.userId, a.id, false, 'failures');
-    await queueOutbound({
+    const notice = await queueOutbound({
       userId: a.userId,
-      sessionKey: a.sessionKey,
-      conversationId: conversationId ?? null,
+      sessionKey: chat.sessionKey,
+      conversationId: chat.id,
+      inAutomationsChat: true,
       text: `I paused the automation "${a.title}" because it failed ${MAX_FAILURES} times in a row. You can resume it in the web app.`,
     });
+    await copyToChat(a, notice);
   }
   return outcome;
 }

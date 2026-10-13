@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type { Worker } from 'bullmq';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DeliverEventType, DeliverKind } from '../proto-gen/vm/v1/vm_pb.ts';
 import { automations } from '../src/modules/automations/schema.ts';
+import { findAutomationsChat } from '../src/modules/channels/conversations.ts';
+import { messages } from '../src/modules/channels/schema.ts';
 import {
   createAutomation,
   reregisterAll,
@@ -97,8 +99,24 @@ async function linkedUser(plan: 'free' | 'pro' | 'max' = 'pro') {
   return { ...user, chatId, sessionKey: `telegram:${chatId}` };
 }
 
+/**
+ * The copies of a run's answer sent to Telegram. A run answers in the Automations chat; made in a
+ * Telegram chat, a copy goes there, its first line naming the automation.
+ */
 const fired = (title: string) =>
-  tg.sent.filter((m) => m.text.startsWith('AUTO:') && m.text.includes(title));
+  tg.sent.filter((m) => m.text.includes('\n\nAUTO: ') && m.text.includes(title));
+
+/** What the user's Automations chat holds. */
+async function automationsChatTexts(userId: string): Promise<string[]> {
+  const chat = await findAutomationsChat(userId);
+  if (!chat) return [];
+  const rows = await db()
+    .select()
+    .from(messages)
+    .where(and(eq(messages.userId, userId), eq(messages.conversationId, chat.id)))
+    .orderBy(messages.id);
+  return rows.map((m) => m.text);
+}
 
 describe('Phase 7: automations and reminders', () => {
   it('the agent schedules a reminder with a tool and it fires once, to the right chat', async () => {
@@ -120,8 +138,15 @@ describe('Phase 7: automations and reminders', () => {
     await waitFor(async () => tg.sent.find((m) => m.text === 'OK, I will remind you.'));
     const reminder = await waitFor(async () => fired('call mom')[0], 15_000);
     expect(reminder.chatId).toBe(String(u.chatId));
+    expect(reminder.text.split('\n')[0]).toBe('⏰ Reminder: call mom');
+    expect(reminder.text).toMatch(
+      /To follow up, open the Automations chat in the Textcrew web app/,
+    );
     await new Promise((r) => setTimeout(r, 1000));
     expect(fired('call mom')).toHaveLength(1);
+    // The run itself answered in the Automations chat.
+    const [answer] = await automationsChatTexts(u.id);
+    expect(answer).toMatch(/^AUTO: .*\[Automation "Reminder: call mom"\]/s);
     const [row] = await db().select().from(automations).where(eq(automations.userId, u.id));
     expect(row!.completedAt).not.toBeNull();
   });
@@ -232,10 +257,14 @@ describe('Phase 7: automations and reminders', () => {
         'webhook-timestamp': '1',
       },
     });
-    const ev = await waitFor(async () => tg.sent.find((m) => m.text.startsWith('EVENT:')));
+    const ev = await waitFor(async () => tg.sent.find((m) => m.text.includes('\n\nEVENT: ')));
     expect(ev.text).toContain('boss@acme.com');
+    expect(ev.text.split('\n')[0]).toBe('⚡ boss mail');
     await new Promise((r) => setTimeout(r, 500));
-    expect(tg.sent.filter((m) => m.text.startsWith('EVENT:'))).toHaveLength(1);
+    expect(tg.sent.filter((m) => m.text.includes('EVENT:'))).toHaveLength(1);
+    expect(await automationsChatTexts(u.id)).toEqual([
+      expect.stringMatching(/^EVENT: .*boss@acme\.com/s),
+    ]);
   });
 
   it('pauses at 0 credits', async () => {
@@ -254,9 +283,15 @@ describe('Phase 7: automations and reminders', () => {
     });
     expect(row.enabled).toBe(false);
     expect(fired('broke')).toHaveLength(0);
-    await waitFor(async () =>
+    // The notice is in the Automations chat, and a copy goes to Telegram (with no purchase link).
+    const copy = await waitFor(async () =>
       tg.sent.find((m) => m.chatId === String(u.chatId) && m.text.includes('out of credits')),
     );
+    expect(copy.text.split('\n')[0]).toBe('⏰ broke');
+    expect(copy.text).not.toContain('/billing');
+    expect(await automationsChatTexts(u.id)).toEqual([
+      expect.stringContaining("You're out of credits"),
+    ]);
   });
 
   it('pauses after 3 failures in a row', async () => {
@@ -274,8 +309,13 @@ describe('Phase 7: automations and reminders', () => {
       return r?.pausedReason === 'failures' ? r : undefined;
     }, 20_000);
     expect(row.failCount).toBeGreaterThanOrEqual(3);
-    await waitFor(async () =>
+    const copy = await waitFor(async () =>
       tg.sent.find((m) => m.text.includes('paused the automation "flaky"')),
+    );
+    expect(copy.text.split('\n')[0]).toBe('⏰ flaky');
+    // The notice itself is in the Automations chat.
+    expect(await automationsChatTexts(u.id)).toContain(
+      'I paused the automation "flaky" because it failed 3 times in a row. You can resume it in the web app.',
     );
   });
 

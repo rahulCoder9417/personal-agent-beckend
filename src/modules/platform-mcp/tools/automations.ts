@@ -5,19 +5,19 @@ import {
   deleteAutomation,
   listAutomations,
   toApiAutomation,
+  whereRunsAnswer,
 } from '../../automations/automations.ts';
-import { turnConversationId } from '../../orchestrator/turn.ts';
 import { defineTool, ToolError } from '../registry.ts';
 import { resolveSession } from './core.ts';
 
 /**
- * Made during a turn in the same chat: the automation remembers the turn's conversation, and its
- * runs reply there (web chat).
+ * Every run answers in the user's Automations chat (and, made in a Telegram chat, a copy goes
+ * there). The answer says so, for the agent to tell the user.
  */
 async function create(userId: string, input: Parameters<typeof createAutomation>[0]) {
   try {
-    const conversationId = await turnConversationId(userId, input.sessionKey);
-    return toApiAutomation(await createAutomation({ ...input, conversationId }));
+    const a = await createAutomation(input);
+    return { ...toApiAutomation(a), where_results_go: whereRunsAnswer(a) };
   } catch (err) {
     if (err instanceof AutomationError) throw new ToolError(err.message);
     throw err;

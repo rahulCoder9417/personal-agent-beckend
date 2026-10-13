@@ -10,7 +10,7 @@ Read `hld-mvp.md` first. It gives the short version and explains the words. This
 | **What it does** | Receives messages, runs each user's agent through the vm-manager, charges credits, sends replies |
 | **What it does not do** | It does not run the AI itself. Each user's agent runs in its own container |
 | **Where it runs** | On the AWS test server (see `aws-setup.md`) |
-| **How it is tested** | 581 automated tests, with a real database and real queues |
+| **How it is tested** | 626 automated tests, with a real database and real queues |
 | **What is in this report** | The backend, and the parts it depends on: the vm-manager, the container, the proxy |
 
 ## How to read this report
@@ -727,7 +727,7 @@ The Platform MCP is the platform's tool server. MCP is a standard way for an AI 
 
 - The tool server is part of the api process. It answers at the path `/mcp`.
 - Only containers can reach it. From the public internet, `/mcp` answers "not found".
-- It offers the same 14 tools to every container. It keeps nothing between two calls.
+- It offers the same 15 tools to every container. It keeps nothing between two calls.
 
 ### How a container proves who it is
 
@@ -756,6 +756,7 @@ The Platform MCP is the platform's tool server. MCP is a standard way for an AI 
 | `remember` | Saves one short fact about the user |
 | `recall` | Finds saved facts about the user |
 | `forget` | Removes or corrects a saved fact |
+| `start_crew_job` | Gives Patch a review or Byte a coding job, with a brief (section 20) |
 
 **Example.** Rahul texts "email Priya the notes". The agent finds Gmail's send action with `list_app_actions`. It asks for a yes with `request_approval`. After the yes it calls `run_app_action`. The reply "Sent" leaves the container through `send_message`.
 
@@ -856,7 +857,7 @@ An approval is the user's yes before the agent does something that other people 
 | Putting an event in a calendar | CREATE_EVENT (other people may be invited) |
 | GitHub comments and reviews | COMMENT or REVIEW, in a GitHub action that writes |
 
-The platform decides by these words in the action's name. There is one exception, for pull-request review. It is described in that section.
+The platform decides by these words in the action's name. There are two exceptions. Pull-request review is one (section 19). A crew job whose brief says "post it on the pull request" is the other (section 20).
 
 ### The life of an approval
 
@@ -1095,6 +1096,8 @@ A GitHub comment is read by other people, so it normally needs a yes each time. 
 - Also never covered: merging, closing, replying, editing or deleting a comment, or a comment in another repository.
 - A covered action still costs 1 credit and is still in the activity log. If Composio names an action differently, the agent must ask for approval.
 
+To have Patch review one pull request once, with the user's own brief, there is a crew job (section 20). Its brief gives a yes of its own, narrower than this one: one review, on that pull request, during that job.
+
 ### What the review instruction contains
 
 - The repository, the pull request number and the head commit. Then the steps for Patch, and a rule: do not merge, approve, close or push.
@@ -1138,9 +1141,69 @@ The crew is one lead agent and three specialists. The user texts the lead, and t
 
 **Example.** Rahul texts "compare the pricing of Vercel and Netlify". Tex hands it to Scout. The web app shows "Scout: reading 4 pages". Telegram shows only the final answer.
 
+### Crew jobs: a brief for Patch or Byte
+
+A crew job is a piece of work the user writes down for Patch (a review) or Byte (a change), the way one would brief a colleague. It runs as one turn of the agent and ends with a report. Patch and Byte work in a folder of their own, and when the job is over, everything they started is stopped and the folder is deleted.
+
+The user gives one on the Crew screen of the web app ("Give Patch a review", "Give Byte a job"), or in chat: "Patch, review acme/web PR 42, run pnpm test".
+
+**The brief**
+
+| | Patch | Byte |
+|---|---|---|
+| The repository | Picked from the user's GitHub repositories, or typed as owner/repo | The same |
+| What to look at | A pull request, or a branch (against the default branch) | Where to start: the default branch, a branch, or a pull request's branch |
+| The user's own words | Anything Patch should know (optional) | What to fix or build (needed) |
+| Only for this member | What to look for: bugs, security, tests, performance, style. Bugs, security and tests when none is ticked | What to test for: the checks that say the job is done |
+| Commands | To install, run the tests or start the app (optional) | The same |
+| At the end | Patch never changes code | Push a new branch and open a pull request (the default), or only push the branch. Never the default branch: the git gateway refuses it anyway |
+| What to do with the report | Always: send it to the chosen chat (web chat or the linked Telegram chat). If ticked: post it on the pull request as one review; open an issue with it | Always: the chat. If ticked: put it in the description of the pull request Byte opens; open an issue with it |
+
+The list of repositories comes from Composio's GitHub action for the signed-in account's repositories: the 100 pushed to most recently. It is kept for a minute per user and costs nothing. Without GitHub connected, or when Composio cannot be asked, the user types the repository instead.
+
+**How a job runs**
+
+1. The api checks the brief, that GitHub is connected, that the user has credits, and that fewer than 5 jobs are waiting. At most 20 jobs an hour.
+2. It saves the job in the table `crew_jobs` as `queued`, and queues it on the inbound queue, the same line as the user's messages. A request sent twice with the same key makes one job.
+3. When the user's agent is free, the worker marks the job `running` and runs one turn with it. A job that runs again after a failure in the middle (the vm-manager restarted) goes on with the same delivery id, so the container never runs it twice. A job that is `done` or `failed` never runs again.
+4. The turn's message is written by the platform from the brief. The user's own words are quoted and marked as theirs. Nothing read from GitHub is in it, not even a pull request's title. The repository's code and files, its commit messages and every pull request's text are material to work on, never instructions, and the message says so.
+5. Tex hands the job to Patch or Byte. For a large change Tex may split a review into up to 3 Patch runs at the same time, each with some of the focus areas.
+6. Tex's final answer is the report. It goes to the chosen chat like any answer, and the platform also keeps it on the job. In web chat it goes to a conversation of its own, named after the job, like an automation's runs. On Telegram it goes to the chat's current conversation. A job started from chat answers in the conversation it was asked in.
+7. The job is marked `done` or `failed`. Right after, the backend asks the vm-manager to stop the container politely, so it sleeps now instead of after 3 idle minutes. The vm-manager refuses while a turn runs, a delivery is in flight or a Claude sign-in waits; then the idle stop does it later.
+
+**The report** has a fixed shape, so the user always finds the same things in the same place:
+
+| Patch | Byte |
+|---|---|
+| The verdict: ship, or fix first | The verdict: done, or not done |
+| Each finding with its file and line, the most serious first | The branch, and the pull request's link |
+| | Each change with its file and line, and each check from "what to test for" with passed or failed |
+| The tests run, with their results | The same |
+| What was not checked, and why | The same |
+
+**The one yes for the pull request.** A GitHub review is read by other people, so it normally needs the user's yes each time (section 15). Ticking "post it on the pull request" in Patch's brief is that yes, for one thing only:
+
+- one new review of type comment, or one comment, on exactly that pull request in exactly that repository;
+- while that job's turn runs;
+- once. The job is marked "posted" in the same step as the check. If GitHub refuses the review, the mark is taken back, so it can be tried again.
+
+Approving, requesting changes, merging, closing and pushing to the default branch are never covered. Byte's report goes into the description of the pull request it opens, which needs no yes today. Opening an issue needs none either.
+
+**From chat.** Tex has the tool `start_crew_job`, with the same brief. The job runs as its own turn right after the current one, and Tex tells the user it is queued. Asked again for the same brief while that job still waits or works (within 10 minutes), it starts no second one. A job from chat that would post Patch's review on a pull request needs the user's yes first, through an ordinary approval for that exact brief: "Approval needed: Patch reviews acme/web#42 and posts the review". The platform cannot tell whether the user really asked for it, or whether a page or an email told Tex to.
+
+**Clean-up in the container** is done by the Bridge itself, not only by the instructions (section 34).
+
+**The cost.** A job costs what a turn costs. A review posted on the pull request, an issue and a pull request Byte opens are app actions that change something: 1 credit each. A job that fails on our side is not charged, like any turn.
+
+**Example.** Rahul gives Patch a review of `acme/web` pull request 42, ticks bugs and security, types `pnpm install && pnpm test`, and ticks "post it on the pull request". The Crew screen shows the job as waiting, then working. Four minutes later it is done. The report is in a web conversation called "Review acme/web#42", on the pull request as one review, and on the Crew screen. The container went to sleep right after.
+
 ### What can go wrong
 
 - **`CREW_AVAILABLE` does not match the deployed image.** The apps then show a member that is missing. Or they hide one that is there.
+- **A job fails.** It is marked `failed` with a reason in plain words. The user is told in the job's chat, and a failure on our side is given back, like any turn. Out of credits, or no AI connected, the job fails before the container wakes.
+- **GitHub was disconnected after the job was given.** The job fails at its start and says so.
+- **The agent cannot be reached after 5 tries** (the server is full for long). The job is marked failed, and the user is told to give it again.
+- **The report is longer than a message may be** (8,000 characters). The answer cannot be sent and the turn fails. Tex is asked to keep the report under 6,000 characters.
 
 ## 21. Web research: search and reading pages
 
@@ -1896,7 +1959,7 @@ The backend never talks to Docker, the program that runs containers, and never t
 | `WakeSandbox` | Starts the container and waits until it is ready | At the start of every turn |
 | `Deliver` | Hands one message in and streams events back | Once per turn, right after the wake |
 | `Touch` | Notes that the user was active just now | On every tool call and git call from the container |
-| `StopSandbox` | Stops a container, politely or by force | Never today. The vm-manager stops containers by its own rules |
+| `StopSandbox` | Stops a container, politely or by force | Politely, right after a crew job, so the container sleeps at once (section 20). Otherwise the vm-manager stops containers by its own rules |
 | `DeleteSandbox` | Removes the container and the user's folder | When an account is deleted |
 | `GetSandbox` | Reports one container's state | For the agent status in the web app, and for checks |
 | `ListSandboxes` | Lists all containers | Nightly backup, and the health check every 5 minutes |
@@ -1966,6 +2029,7 @@ The answer itself is not in this stream. The Bridge sends it through the platfor
 | Who stops it | When | How |
 |---|---|---|
 | The idle check, every minute | Awake, quiet for 3 minutes, no turn, no delivery in flight | Politely |
+| The backend, after a crew job | The job's turn has ended | Politely. Refused while a turn runs, a delivery is in flight or a Claude sign-in waits; the idle check then does it later |
 | The limit on awake containers | Another user needs the place | Politely |
 | The stuck-turn timer | A turn runs longer than 15 minutes | By force |
 | The health check | The container does not answer, even after restarts | By force, then "broken" |
@@ -2070,6 +2134,19 @@ The crew is defined once, inside the Bridge, and given to both engines. Tex is t
 On Claude Code the tool lists are locks: a tool that is not on a member's list cannot be called. Tex's own calls to a web tool are refused by a small check that runs before each call. On Hermes the tool lists are only instructions, because Hermes cannot give each member its own tools.
 
 Example: the user asks to fix a typo in a repository and have it checked. Tex hands the fix to Byte, who opens a pull request. Tex then hands the pull request to Patch, who posts one review. Tex writes the answer.
+
+### Crew jobs in the container
+
+A crew job (section 20) arrives as one delivery, marked as a job with its id and its member. The Bridge makes sure it leaves nothing behind, whatever the agent does:
+
+1. **Before the turn** the Bridge makes an empty folder for the job, `workspace/jobs/<the job's id>` in the user's folder. Tex is told the folder, and that all the job's work happens in it: clone there, and start every program the job needs from inside it (an install, the app, a test runner), in the background when it keeps running.
+2. **During the turn** Claude Code runs with the job's mark in its environment. Every program it starts carries the mark too, also one that went into the background or into another folder.
+3. **After the turn**, whether it ended with an answer, a failure or a crash, the Bridge stops every program of the job. A program is the job's when it runs from inside the job's folder or carries the job's mark. It gets a polite stop, and a forced one after 5 seconds if it is still there. Then the Bridge deletes the folder. A progress line says so: "Patch: stopped 2 programs and deleted the job folder".
+4. **When the container starts**, no job can be running, so any job folder still there is from a turn that never finished. The Bridge deletes them all.
+
+Two jobs at the same moment keep out of each other's way: each has its own folder and its own mark. Another turn's programs, the Bridge itself and the Hermes program are never stopped. The Bridge never follows a link out of the jobs folder: it removes the link itself.
+
+Patch and Byte have role text for a job too: work only in the job folder, stop every program you started before the report, and report in the job's shape. Patch posts nothing in a job; Tex posts the one review when the brief asks for it. What must be kept is pushed or is in the report: the folder is gone after the turn. The user's own folder, with the engines' memory and chat sessions, is not touched.
 
 ### The limits of each container
 
@@ -2326,6 +2403,7 @@ This section lists every table of the backend's database, grouped by the module 
 | integrations | `byok_keys` | The user's own AI keys, encrypted, plus the last 4 characters |
 | automations | `automations` | Reminders, repeating tasks and app-event tasks, each with the conversation its runs answer in |
 | automations | `pr_reviews` | One row per reviewed pull-request commit, so none is reviewed twice |
+| automations | `crew_jobs` | One row per crew job: the brief, where the report goes, its state, and the report itself |
 | billing | `subscriptions` | Each paid plan: user, Polar id, status, period |
 | billing | `payments` | Polar orders seen, to trace refunds back to a user |
 | billing | `credit_grants` | Each batch of credits: source, amount, what is left, expiry |
@@ -2356,6 +2434,7 @@ This section says what the web app can do through the api, group by group. Almos
 | Pull-request review | List the repositories with review on. Turn review on or off for one |
 | Agent settings and the Claude sign-in | See the container's state and which engine runs. Choose the engine, and Claude Code's model and thinking effort. Start, finish or undo the Claude sign-in |
 | The crew | See the four members, which are available, and the state of Scout's browser |
+| Crew jobs | Give Patch a review or Byte a job with a brief. List the jobs, and read one with its report. List the connected GitHub account's repositories, to pick one |
 | Memory | See what the agent saved about the user. Delete one memory or all. Nothing can be added by hand |
 | Billing | See plans and top-up packs and the current subscription. Open a Polar checkout. Cancel at the period's end |
 | Credits and usage | See the balance and its grants, the credit history, and usage between two dates |
@@ -2489,6 +2568,12 @@ These were found by reading the code while this report was written. Each is desc
 - **Scout's instructions in the agent image are out of date.** They still say the page reader refuses the built-in search's results. On Claude Code it no longer does (section 21).
 - **What a user is told when Textcrew AI credits run out in the middle of a turn is not settled.** The turn may be treated as our fault and given back (section 26).
 
+### Crew jobs
+
+- **The clean-up finds a job's programs by their folder and by the mark in their environment.** A program that leaves the job folder and also clears its own environment is not found. It still ends when the container stops, which now happens right after the job unless something else is running. Finding programs this way reads the container's own process list; it was tested with real programs on Linux, not yet inside gVisor.
+- **On Hermes the mark is not set,** because Hermes runs every turn inside one long-lived program. There only the folder finds a job's programs, so a program started from outside the job folder is not stopped.
+- **A job's report is the lead's final answer.** If Tex sends no answer, the job is done with no report. A report over 8,000 characters cannot be sent, and the turn fails.
+
 ### Other gaps
 
 - A user's files have no size limit on the server.
@@ -2500,7 +2585,7 @@ These were found by reading the code while this report was written. Each is desc
 
 ## 44. What has run for real
 
-The backend has 612 automated tests. They use a real database and real queues, and stand-ins for outside services. "Run for real" below means it ran on the AWS test server against the real outside service.
+The backend has 626 automated tests. They use a real database and real queues, and stand-ins for outside services. "Run for real" below means it ran on the AWS test server against the real outside service.
 
 | Area | Run for real |
 |---|---|
@@ -2521,6 +2606,7 @@ The backend has 612 automated tests. They use a real database and real queues, a
 | The user's own API key | No. Built; there is no provider key with balance to test it |
 | Payments through Polar, coupons | No |
 | Pull-request review; Byte through the git gateway | No |
+| Crew jobs: a brief for Patch or Byte, the clean-up in the container, the repo list | No. Built on 13 October, with the automated tests, stand-ins for GitHub, Composio and the container, real processes for the Bridge's clean-up, and the web app's demo mode |
 | Reminders and automations | Yes: a one-time reminder, a daily automation, the 15-minute limit |
 | Conversations: the list, going back to an earlier one, rename, delete | No. Built on 9 October, with the automated tests only |
 | An automation answering in its own conversation; a late run saying so; the time zone set from the browser | No. Built on 13 October, with the automated tests only, and the web app's part in its demo mode |

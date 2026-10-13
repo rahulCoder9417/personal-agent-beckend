@@ -176,8 +176,9 @@ describe('Phase 6: Jev routing', () => {
     const meta = JSON.parse(
       (vmFake.deliveries[0] as unknown as { metadataJson: string }).metadataJson,
     );
-    // Every delivery also carries the chat's epoch (0: no new chat started yet).
-    expect(meta).toEqual({ apps: ['gmail'], chat_epoch: 0 });
+    // Every delivery also carries the chat's epoch (0: no new chat started yet), and whether the
+    // answer is shown as it is written (web chat only, so not on WhatsApp).
+    expect(meta).toEqual({ apps: ['gmail'], chat_epoch: 0, stream_text: false });
     expect(jevCalls[0]!.apps.map((a) => a.slug)).toEqual(['gmail', 'googlecalendar']);
   });
 

@@ -471,7 +471,7 @@ export function crewJobInstruction(job: CrewJob): string {
       : `check out the branch "${job.branch}"`;
     out.push(
       'Steps:',
-      `1. Get the code into the job folder: clone ${url} and ${checkout}.`,
+      `1. Get the code into the job folder (your instructions name it; without one, make a folder of its own for this job in your workspace, and delete it at the end): clone ${url} and ${checkout}.`,
       '2. Hand the review to Patch with this whole brief and the folder. For a large change you may split it: up to 3 Patch runs at the same time, each with some of the focus areas, all reading the same checkout; only one of them runs the commands.',
       '3. Programs the job needs (installing, the app, the test runner) may run in the background, started from inside the job folder. Every one of them is stopped before the report.',
       '4. Merge the findings: drop duplicates and guesses, keep what points to a file and a line, the most serious first.',
@@ -516,7 +516,7 @@ export function crewJobInstruction(job: CrewJob): string {
         : 'stay on the default branch';
     out.push(
       'Steps:',
-      '1. Hand the whole job to Byte with this brief and the job folder.',
+      '1. Hand the whole job to Byte with this brief and the job folder (your instructions name it; without one, a folder of its own for this job in your workspace, deleted at the end).',
       `2. Byte clones ${url} into the job folder, ${checkout}, and makes a NEW branch named "${branch}" for the change. Never the default branch: pushing to it is refused.`,
       '3. Byte makes the change, runs the commands and every check under "what to test for", and fixes what fails. Programs the job needs (installing, the app, the test runner) may run in the background, started from inside the job folder. Every one of them is stopped before the report.',
       `4. Byte commits with a clear message and pushes the branch with git.${

@@ -199,6 +199,10 @@ There are three kinds:
 
 When one fires, it goes down the same path as a normal message, with the saved instruction. So it wakes the container and costs credits like a message does.
 
+- **Where it answers.** In web chat, in the conversation the automation was made in. If there is none (made from the web app, or made before automations kept one) or it was deleted, in a conversation of its own, named after the automation and used again by later runs. Never in the conversation the user happens to have open. On Telegram, in the chat's current conversation, where the user can answer it.
+- **A late run.** A run that was due while the server was off runs when it is back, never skipped. If it starts more than 10 minutes late, the agent says so and says when it was due.
+- **The user's time zone.** Every account starts on UTC. The web app sets the browser's time zone once, while nobody has set one, and never replaces one the user chose.
+
 An automation pauses itself at zero credits, or after three failures in a row. The shortest allowed interval is 15 minutes.
 
 ### 5.5 A pull request gets reviewed
@@ -401,6 +405,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - A conversation older than 30 days being opened again. Claude Code removes its own saved sessions after 30 days, so such a conversation would start with no context. Your decision (below).
 - The desktop app. It is now a small window around the live web app (`https://app.textcrew.in`), so it always shows the same screens. It reaches the sign-in page, and Clerk's and Google's sign-in pages open inside the window. Nobody has signed in with a real account in it, and the tray icon, the shortcut and "start at login" have not been run. A Linux installer builds; Windows and Mac installers are not built.
 - Web search through Brave. The key works; the path through the app has not run.
+- An automation answering in the conversation it was made in, or in its own; a late run saying so; the web app setting a new account's time zone from the browser. Built on 13 October after the founder's "every morning at 9" summary landed in an unrelated chat at 3:01 PM India time. Checked with the automated tests, and the web app's part in its demo mode.
 
 ### Not finished
 

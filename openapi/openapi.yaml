@@ -2061,10 +2061,18 @@ components:
 
     App:
       type: object
-      required: [slug, name, category, availableOnPlan, connectable, connections]
+      required: [slug, name, provider, description, category, availableOnPlan, connectable, connections]
       properties:
         slug: { type: string, examples: [gmail] }
         name: { type: string, examples: [Gmail] }
+        provider:
+          type: string
+          description: The company whose sign-in screen the user sees when connecting ("Continue to Google").
+          examples: [Google]
+        description:
+          type: string
+          description: In plain words, what the agent can do with the app once it is connected. One sentence.
+          examples: ["Read and search your email, write drafts and send email for you."]
         iconUrl: { type: [string, "null"], format: uri }
         category: { type: string, examples: [email, calendar, notes, tasks, crm, dev, research] }
         availableOnPlan: { type: boolean }

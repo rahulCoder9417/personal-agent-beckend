@@ -111,6 +111,8 @@ export async function appCatalogFor(userId: string, plan: PlanId) {
   return CATALOG.map((app) => ({
     slug: app.slug,
     name: app.name,
+    provider: app.provider,
+    description: app.description,
     iconUrl: null,
     category: app.category,
     availableOnPlan: appAllowedOnPlan(app, plan),

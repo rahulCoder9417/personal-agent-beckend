@@ -107,9 +107,10 @@ describe('contract: system + me', () => {
       timezoneSet: false,
     });
     // The same zone as the default still counts: someone chose it.
-    expect(await expectContract<Me>('updateMe', await me({ timezone: 'UTC' }), 200)).toMatchObject(
-      { timezone: 'UTC', timezoneSet: true },
-    );
+    expect(await expectContract<Me>('updateMe', await me({ timezone: 'UTC' }), 200)).toMatchObject({
+      timezone: 'UTC',
+      timezoneSet: true,
+    });
     expect(
       await expectContract<Me>('updateMe', await me({ timezone: 'Asia/Kolkata' }), 200),
     ).toMatchObject({ timezone: 'Asia/Kolkata', timezoneSet: true });

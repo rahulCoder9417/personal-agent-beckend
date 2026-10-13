@@ -6,12 +6,18 @@ import {
   listAutomations,
   toApiAutomation,
 } from '../../automations/automations.ts';
+import { turnConversationId } from '../../orchestrator/turn.ts';
 import { defineTool, ToolError } from '../registry.ts';
 import { resolveSession } from './core.ts';
 
+/**
+ * Made during a turn in the same chat: the automation remembers the turn's conversation, and its
+ * runs reply there (web chat).
+ */
 async function create(userId: string, input: Parameters<typeof createAutomation>[0]) {
   try {
-    return toApiAutomation(await createAutomation(input));
+    const conversationId = await turnConversationId(userId, input.sessionKey);
+    return toApiAutomation(await createAutomation({ ...input, conversationId }));
   } catch (err) {
     if (err instanceof AutomationError) throw new ToolError(err.message);
     throw err;

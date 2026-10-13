@@ -14,6 +14,8 @@ import {
 } from '../src/modules/automations/pr-review.ts';
 import { automations, prReviews } from '../src/modules/automations/schema.ts';
 import { createGrant, getBalance } from '../src/modules/billing/credits.ts';
+import { activeConversation } from '../src/modules/channels/conversations.ts';
+import { conversations, messages } from '../src/modules/channels/schema.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
 import {
   actionChangesSomething,
@@ -541,6 +543,41 @@ describe('a pull request is opened or gets new commits', () => {
       [12, SHA_B, 'done'],
     ]);
     expect((await listed(u.token))[0]!.lastReviewAt).not.toBeNull();
+  });
+
+  it('in web chat, the verdict is saved in the review’s own conversation, not the one open', async () => {
+    const u = await dev({ telegram: false });
+    await on(u.token, 'acme/site');
+    const trigger = await triggerOf(u.id, 'site');
+    github.set('acme/site', 7, SHA_A);
+    const open = await activeConversation(u.id, 'web');
+    vmFake.state.agent = async (d: Delivery, mcp) => {
+      if (d.kind !== DeliverKind.APP_EVENT) return;
+      await mcp('send_message', { text: `Verdict for #7: fine.`, session_key: d.sessionKey });
+    };
+    const verdict = async () =>
+      waitFor(async () => {
+        const rows = await db()
+          .select()
+          .from(messages)
+          .where(and(eq(messages.userId, u.id), eq(messages.text, 'Verdict for #7: fine.')))
+          .orderBy(messages.id);
+        return rows.length ? rows : undefined;
+      });
+    await prEvent(u.id, trigger, { action: 'opened', number: 7 });
+    const [first] = await verdict();
+    expect(first!.conversationId).not.toBe(open.id);
+    const [own] = await db()
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, first!.conversationId));
+    expect(own).toMatchObject({ title: 'Review pull requests in acme/site', active: false });
+    // The next commit's verdict goes to the same conversation.
+    github.set('acme/site', 7, SHA_B);
+    await prEvent(u.id, trigger, { action: 'synchronize', number: 7 });
+    await waitFor(async () => ((await verdict()).length === 2 ? true : undefined));
+    expect(new Set((await verdict()).map((m) => m.conversationId))).toEqual(new Set([own!.id]));
+    expect((await activeConversation(u.id, 'web')).id).toBe(open.id);
   });
 
   it('two quick pushes give one review, of the newer commit; a closed pull request gives none', async () => {

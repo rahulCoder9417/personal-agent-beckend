@@ -395,8 +395,9 @@ A chat is one place to talk: web chat is one chat, and each linked Telegram chat
 | A conversation has | What it is |
 |---|---|
 | A channel | Web chat or Telegram |
+| A kind | A conversation of a chat, or the Automations chat: the one place where every automation answers (section 18) |
 | A number | Its place in its chat: 0 for the first, then 1, 2 and so on. The code calls it the epoch |
-| A title | The first message the user wrote in it, cut to 60 characters at a word. "New chat" while it has none. The user can rename it |
+| A title | The first message the user wrote in it, cut to 60 characters at a word. "New chat" while it has none. The user can rename it. The Automations chat is called "Automations" and keeps that name |
 | A start time and a last-message time | The list is sorted by the last message, newest first |
 | Active or not | The active one is where the chat's next message goes. Each chat has one |
 
@@ -406,10 +407,10 @@ The rules:
 - **Web chat:** the user can start a new conversation, open any earlier web conversation and keep writing in it. Writing in an earlier one makes it the active one. The agent then continues that conversation's own context, not the latest one's.
 - **Telegram:** a message always goes into the chat's latest conversation. `/new` starts the next one. In the web app, Telegram conversations are listed for reading only. The api answers 409 when the web app tries to open one or write in it.
 - **A reply stays where its question was asked.** What the agent sends during a turn is saved in that turn's conversation, also when the user has opened another conversation meanwhile. An approval's answer goes back to the conversation that asked for it.
-- **An automation answers where it was made.** In web chat a run answers in the conversation the automation was made in, or else in a conversation of its own named after it. That one is added beside the active one and does not become active. Never in the conversation the user happens to have open (section 18).
-- **Renaming:** the user can give any conversation a name of 1 to 80 characters. A later message does not change it back.
+- **Every automation answers in the Automations chat.** Each user has one, in web chat beside the other conversations. It is never the active one: a run never makes it active, and neither does the user writing in it. So the user's next message never goes into it unless they write there. An automation made on Telegram also sends a copy of each answer to that Telegram chat (section 18).
+- **Renaming:** the user can give any conversation a name of 1 to 80 characters. A later message does not change it back. The Automations chat keeps its name: the api answers 409.
 - **Deleting:** the conversation goes, with its messages and their files. They are the user's own data. A file that a message in another conversation still shows is kept. The activity log gets "Deleted a conversation in web chat" or "on Telegram". It never holds the title or the text of a message.
-- **After the active web conversation is deleted,** the newest remaining web conversation becomes the active one. When none is left, an empty one is started. After a Telegram chat's current conversation is deleted, the chat's next message starts a new one.
+- **After the active web conversation is deleted,** the newest remaining web conversation becomes the active one, never the Automations chat. When none is left, an empty one is started. After a Telegram chat's current conversation is deleted, the chat's next message starts a new one. After the Automations chat is deleted, the next run starts a new one.
 - **A number is never used twice.** The table `chat_epochs` keeps, for each chat, the highest number given out. It only goes up, also after a delete. The reason: the engine may still hold the deleted conversation's context under its old number, and a new conversation must not pick that up.
 
 How the context stays separate:
@@ -424,12 +425,12 @@ What the web app calls:
 
 | Call | What it does |
 |---|---|
-| `GET /v1/conversations` | Lists the user's conversations, the one with the newest message first. `channel` narrows it to web or Telegram. Pages of 30 |
+| `GET /v1/conversations` | Lists the user's conversations, the one with the newest message first. `channel` narrows it to web or Telegram. `kind=automations` gives only the Automations chat, `kind=chat` everything else, so the web app can pin it apart. Pages of 30 |
 | `POST /v1/conversations` | Starts a new web conversation and makes it the active one |
-| `PATCH /v1/conversations/{conversationId}` | Renames it, or makes a web conversation the active one |
+| `PATCH /v1/conversations/{conversationId}` | Renames it, or makes a web conversation the active one. Both answer 409 for the Automations chat |
 | `DELETE /v1/conversations/{conversationId}` | Deletes it with its messages and files |
 | `GET /v1/messages` | With a conversation's id: its messages. With `channel=web` only: the active web conversation's messages. With nothing: every message |
-| `POST /v1/messages` | Sends a message. With a conversation's id it goes into that web conversation, which becomes the active one first |
+| `POST /v1/messages` | Sends a message. With a conversation's id it goes into that web conversation, which becomes the active one first. The Automations chat is written in where it is: it stays not active |
 
 Example: Rahul plans a trip to Goa in web chat. He clicks "New chat" and asks "what is a good laptop?". The agent answers about laptops and says nothing about Goa. The next day he opens the Goa conversation in the list and asks "and the hotel?". The agent answers with the trip in mind, and knows nothing of the laptop. In both it still knows he is vegetarian, because that is a saved memory.
 
@@ -519,7 +520,7 @@ The `events` table keeps the webhook and its state: received, queued, then done,
 
 A web message skips the webhook. The web app calls `POST /v1/messages`. The api checks that web chat is on, the 30 a minute limit and the credits. At zero it answers 402. Then it saves the message once and adds the job. The rest is the same. The reply arrives through the live updates.
 
-The web app can name the conversation to write in. Without a name, the message goes into web chat's active conversation. A named conversation that is not active becomes the active one first. The api answers 404 for a conversation that is not the user's, and 409 for a Telegram conversation. The turn then runs in the message's own conversation, also when the user opens another one before the worker gets to it. The same message sent twice is saved once and does not change which conversation is active.
+The web app can name the conversation to write in. Without a name, the message goes into web chat's active conversation. A named conversation that is not active becomes the active one first. The Automations chat is the exception: the message goes into it, and the active conversation stays the one it was. The api answers 404 for a conversation that is not the user's, and 409 for a Telegram conversation. The turn then runs in the message's own conversation, also when the user opens another one before the worker gets to it. The same message sent twice is saved once and does not change which conversation is active.
 
 ### What can go wrong
 
@@ -534,7 +535,7 @@ Every outgoing message takes the same path, whoever wrote it: the agent, the che
 
 ### The path
 
-1. The message is saved in `messages` as outgoing, with the status `queued`. It goes into a conversation: the turn's own while a turn runs in that chat, else the chat's active one. The web app gets a live update.
+1. The message is saved in `messages` as outgoing, with the status `queued`. It goes into a conversation: the turn's own while a turn runs in that chat, else the chat's active one. A message written during a turn is saved with the turn's id, so the turn's reply can be found afterwards. The web app gets a live update.
 2. A `send-message` job is added to outbound. Its id holds the message id.
 3. The worker takes the job. If the message is no longer `queued`, it stops: the message was already sent.
 4. If the channel is switched off, the message becomes `failed` and the job ends.
@@ -543,6 +544,8 @@ Every outgoing message takes the same path, whoever wrote it: the agent, the che
 7. On failure the job is retried, 5 tries in total. After the last one the message becomes `failed`.
 
 The agent names the chat to answer in. Without a name, the reply goes to the chat the user last wrote from. An agent can write only to its own user's chats.
+
+A copy of an automation's answer for Telegram takes the same path. It is marked with the message it copies, and is saved and sent once per message (section 18).
 
 ### Per channel
 
@@ -676,7 +679,7 @@ The web app shows new messages and the agent's state without a reload. It keeps 
 | `conversation.updated` | A conversation starts, gets a message, is renamed, or becomes or stops being the active one |
 | `conversation.deleted` | A conversation is deleted. The event holds only its id |
 
-A message event holds the whole message, with the id of its conversation. So the web app knows which conversation to show it in. Its text is the text as it was written. A reply that went to Telegram as plain text still has its Markdown here (section 10). A conversation event holds the whole conversation: its title, its times and if it is the active one.
+A message event holds the whole message, with the id of its conversation. So the web app knows which conversation to show it in. Its text is the text as it was written. A reply that went to Telegram as plain text still has its Markdown here (section 10). A conversation event holds the whole conversation: its title, its kind, its times and if it is the active one.
 
 ### Progress lines are live only
 
@@ -748,7 +751,7 @@ The Platform MCP is the platform's tool server. MCP is a standard way for an AI 
 | `run_app_action` | Runs one app action, for example "send an email" |
 | `request_approval` | Asks the user to approve a risky action. Answers "pending" at once |
 | `schedule_reminder` | Saves a reminder for one moment in time |
-| `create_automation` | Saves an automation: once, repeating, or on an app event |
+| `create_automation` | Saves an automation: once, repeating, or on an app event. Its answer says where the runs will answer, so the agent can tell the user |
 | `list_automations` | Lists the user's reminders and automations |
 | `cancel_automation` | Deletes one reminder or automation |
 | `web_search` | Searches the web through the platform. Max plan, 1 credit a search |
@@ -979,8 +982,8 @@ An automation is a saved instruction that the agent runs later, without the user
 
 1. The user asks in chat. The agent calls `schedule_reminder` with a text and a time. For the other kinds it calls `create_automation`.
 2. The api checks the request (the list below) and saves it in the table `automations`. The database is the source of truth.
-3. It also saves the conversation the request was made in: the agent's turn's, when the agent makes it during a turn in that chat. An automation made from the web app (pull-request review) has none.
-4. The api sets the timer. For an app event, Composio starts a watch on the app, called a trigger. The agent then confirms to the user.
+3. It also saves the chat the request was made in, web chat or a Telegram chat. That decides only where a copy of each answer goes (below). The answers themselves always go to the Automations chat. If the user has no Automations chat yet, it is started now, so the web app can show where the results will be.
+4. The api sets the timer. For an app event, Composio starts a watch on the app, called a trigger. The agent then confirms to the user. The tool's answer tells the agent where the runs will answer, so it can say so.
 
 - **The plan limit.** Free 1, Pro 5, Max 50. Reminders count, and paused automations count. A finished one-time reminder does not.
 - **The 15-minute minimum.** For a schedule, the next 50 runs must each be at least 15 minutes apart.
@@ -1000,27 +1003,51 @@ The user's container keeps the time zone it was made with, which is usually UTC:
 3. It puts a job in the same queue as the user's messages. So messages and automations run one at a time, in order.
 4. The agent gets a normal turn. A turn is one run of the agent, from input to answer.
 5. The input is the automation's title and instruction. For an app event, the event's data is added. A timer run that starts late gets a line about that first (below).
-6. The agent answers in the chat where the automation was created, in the conversation the next part says. A one-time automation is then marked finished.
+6. The agent answers in the user's Automations chat (the next part). When the automation was made in a Telegram chat, a copy of the answer also goes there. A one-time automation is then marked finished.
 
-**Example.** Rahul texts "every Monday at 9, send me this week's meetings". Each Monday at 9 his time, the agent wakes, reads his calendar and sends the list on Telegram.
+**Example.** Rahul texts on Telegram "every Monday at 9, send me this week's meetings". Each Monday at 9 his time, the agent wakes, reads his calendar and posts the list in his Automations chat, and his Telegram gets a copy.
 
 **The cost.** The automation itself has no price. Each run is a normal turn and costs what a turn costs. That is the AI when Textcrew AI is used, and the time the container is awake. An app action that changes something costs 1 credit. A risky action still needs the user's approval.
 
-### Which conversation a run answers in
+### Which conversation a run answers in: the Automations chat
 
-In web chat:
+Every run of every automation answers in one place, the user's Automations chat. It does not matter where the automation was made: in web chat, on Telegram, or from the web app (pull-request review). Automation results never mix into the user's own conversations.
 
-1. **The conversation the automation was made in,** while it still exists. Also when the user has opened another conversation since. The agent continues that conversation's own context.
-2. **Otherwise, a conversation of its own,** named after the automation. This is for an automation made from the web app, one made before automations kept a conversation, and one whose conversation was deleted. Its first such run starts the conversation beside the active one. The active one stays active. Later runs answer in the same conversation. If the user deletes it, the next run starts another, with a new number.
-3. **Never the conversation the user happens to have open,** only because it is open.
+| The Automations chat | What it is |
+|---|---|
+| One per user | A conversation of its own kind, in web chat, called "Automations" |
+| When it starts | When the user makes an automation and has none yet, or else at the next run. Also after it was deleted |
+| Its number | Web chat's next number, like a new chat. So the agent keeps a context of its own for it: each run sees the runs before it |
+| Never the active one | A run never makes it active. The user's next message goes where it went before |
+| Writing in it | The user can open it in the web app and write there. The agent answers there, with the runs in mind. Writing there does not make it active either |
+| Its name | It keeps it. A rename is refused |
+| Deleting it | Its runs go with it. The next run starts a new one, with a number never used before, so the agent starts afresh there |
 
-The conversation the run answers in moves to the top of the web app's list. The user can open it and answer there, and the agent then has the run in its context.
+What answers there:
 
-On Telegram a run answers in the chat's current conversation, as before. There the user can only write in the latest conversation, so a result kept anywhere else could not be answered with its context.
+- Timer runs, once and repeating.
+- App-event runs.
+- Pull-request review verdicts (section 19).
+- The notices: "out of credits" when a run is due at zero credits, and "paused after 3 failures in a row".
 
-Starting the conversation and saving it on the automation happen in one step. A job that runs twice, or two runs at the same moment, start one conversation, not two.
+The web app shows it pinned at the top of the chat list, apart from the dated list, with a mark when a new run arrived since the user last opened it.
 
-**Example.** Rahul asks in web chat "every morning at 9, summarise my open pull requests". The next morning he is in a new chat about a recipe. At 9 the summary appears in the conversation where he asked for it, which moves to the top of the list. The recipe chat gets nothing.
+**A copy on Telegram.** An automation made in a Telegram chat still runs in the Automations chat. A copy of its answer also goes to that Telegram chat:
+
+1. After the run, the worker finds the run's reply: the last message saved with the run's id that is not an approval's question. That is the agent's answer, or what the platform said instead (out of credits, the run failed).
+2. The copy is plain text, like everything sent to Telegram (section 10). Its first line names the automation, with ⏰ for a timer and ⚡ for an app event: "⏰ Daily open PRs and issues". Its last line says "To follow up, open the Automations chat in the Textcrew web app", with the address that opens it. While web chat is switched off, that line is left out.
+3. The copy is saved in the Telegram chat's current conversation, so the web app shows it there too. It is marked as a copy of the message in the Automations chat.
+4. A copy is never part of the Telegram conversation's context. The router does not see it, and the recap a new engine gets leaves it out. The engine itself never had it: it only knows the turns it ran. So a later Telegram message is answered without the run in mind; the follow-up belongs in the Automations chat.
+5. Once per message: a message can be copied once. A job that runs again after the copy was made sends nothing more.
+6. No copy goes to a chat that is no longer linked to the user, that blocked the bot, or whose channel is switched off.
+
+The notice "paused after 3 failures" is copied the same way. What the agent says after the user answers an approval that a run asked for stays in the Automations chat only: the user answered in the web app, where the follow-up is.
+
+Starting the Automations chat is safe to repeat: two runs at the same moment start one between them. If the user deletes it while a run is going on, the run's answer starts a new one. It never falls back to the conversation the user has open.
+
+**Example.** Rahul asks on Telegram "every morning at 9, list my open pull requests and issues". Each morning at 9 the list appears in his Automations chat. His Telegram gets "⏰ Daily open PRs and issues", the list, and "To follow up, open the Automations chat in the Textcrew web app". At lunch he opens the web app and asks in the Automations chat "which one is oldest?". The agent has the list in mind. Meanwhile his Telegram chat with Tex is untouched: if he writes "hi" there, the agent answers without the list.
+
+**Before this change.** Until 13 October a run in web chat answered in the conversation the automation was made in, or else in a conversation named after it, and a Telegram run answered in the chat's current conversation. Those conversations stay as they are, as ordinary chats. The column that remembered them is no longer used.
 
 ### A run that starts late
 
@@ -1045,12 +1072,13 @@ The worker's start used to drop such a run at times. On start the worker sets ev
 ### What can go wrong
 
 - **The plan limit is reached.** The tool says how many the plan allows. Nothing is saved.
-- **No credits when it fires.** No turn runs. The user gets the out-of-credits message, in the conversation the run would have answered in, and the automation is paused.
+- **No credits when it fires.** No turn runs. The user gets the out-of-credits message in the Automations chat, with a copy on Telegram when the automation was made there, and the automation is paused. The copy names the web app instead of the purchase link (section 10).
+- **The user deletes the Automations chat during a run.** The run's answer starts a new Automations chat. It never lands in the conversation the user has open.
 - **The automation is deleted while it runs.** The run stops before the agent gets it. The job is tried again, finds no automation and ends.
 
 ## 19. Pull-request review
 
-The user can switch on automatic code review for chosen GitHub repositories. When a pull request opens or changes, the crew member Patch reviews it and posts one review on GitHub. The user gets a short verdict in chat.
+The user can switch on automatic code review for chosen GitHub repositories. When a pull request opens or changes, the crew member Patch reviews it and posts one review on GitHub. The user gets a short verdict in the Automations chat.
 
 ### Turning it on per repo
 
@@ -1058,7 +1086,7 @@ The user can switch on automatic code review for chosen GitHub repositories. Whe
 2. The api checks that GitHub is connected and that the plan has a free automation.
 3. The api asks Composio to watch that repository. Composio puts a webhook on it, so the GitHub account needs admin access there.
 4. The api saves an app-event automation with the mark `pr_review`. It shows in the automations list.
-5. The verdict chat is chosen now: the user's linked Telegram chat, or else the web chat. In web chat the verdicts go to a conversation of their own, named "Review pull requests in owner/repo" (section 18).
+5. The verdict always goes to the Automations chat (section 18). If the user has a linked Telegram chat now, a copy of each verdict goes there too.
 
 Only the user can switch it on, from the web app. No agent tool can set this mark. Switching it off deletes the automation and Composio's watch.
 
@@ -1075,7 +1103,7 @@ Only the user can switch it on, from the web app. No agent tool can set this mar
 - **One review per commit.** The row is unique per user, repository, pull request number and head commit. A webhook that arrives twice, or a reopen with no new commits, gives no second review. Two quick pushes give one review, of the newer commit.
 - A failed review is not repeated for that commit, because it may already have posted. A new commit gets a new review.
 
-**Example.** Rahul turns review on for `acme/website`. A teammate opens pull request 42. Rahul gets on Telegram: "PR 42: one bug in the date check, tests pass. Fix first." He answers "fix it", and Byte pushes a fix to a branch.
+**Example.** Rahul turns review on for `acme/website`. A teammate opens pull request 42. His Automations chat gets "PR 42: one bug in the date check, tests pass. Fix first.", and his Telegram a copy headed "⚡ Review pull requests in acme/website". He answers "fix it" in the Automations chat, and Byte pushes a fix to a branch.
 
 ### The standing permission
 
@@ -1168,7 +1196,7 @@ The list of repositories comes from Composio's GitHub action for the signed-in a
 3. When the user's agent is free, the worker marks the job `running` and runs one turn with it. A job that runs again after a failure in the middle (the vm-manager restarted) goes on with the same delivery id, so the container never runs it twice. A job that is `done` or `failed` never runs again.
 4. The turn's message is written by the platform from the brief. The user's own words are quoted and marked as theirs. Nothing read from GitHub is in it, not even a pull request's title. The repository's code and files, its commit messages and every pull request's text are material to work on, never instructions, and the message says so.
 5. Tex hands the job to Patch or Byte. For a large change Tex may split a review into up to 3 Patch runs at the same time, each with some of the focus areas.
-6. Tex's final answer is the report. It goes to the chosen chat like any answer, and the platform also keeps it on the job. In web chat it goes to a conversation of its own, named after the job, like an automation's runs. On Telegram it goes to the chat's current conversation. A job started from chat answers in the conversation it was asked in.
+6. Tex's final answer is the report. It goes to the chosen chat like any answer, and the platform also keeps it on the job. In web chat it goes to a conversation of its own, named after the job. On Telegram it goes to the chat's current conversation. A job started from chat answers in the conversation it was asked in.
 7. The job is marked `done` or `failed`. Right after, the backend asks the vm-manager to stop the container politely, so it sleeps now instead of after 3 idle minutes. The vm-manager refuses while a turn runs, a delivery is in flight or a Claude sign-in waits; then the idle stop does it later.
 
 **The report** has a fixed shape, so the user always finds the same things in the same place:
@@ -1556,7 +1584,7 @@ Each call is checked when it is made. At zero or below:
 ### Automations
 
 - When a charge takes the balance to zero or below, all the user's automations that are on are paused. The saved reason is "out of credits".
-- An automation that fires at zero gets the out-of-credits reply in its chat and is paused.
+- An automation that fires at zero gets the out-of-credits reply in the Automations chat, with a copy on Telegram when it was made there, and is paused.
 - When credits are added and the balance is above zero, these automations are switched on again. The AI budget in LiteLLM is raised, and the web app gets the new balance live.
 - Automations that the user paused, or that were paused after failures, stay paused.
 
@@ -2387,8 +2415,8 @@ This section lists every table of the backend's database, grouped by the module 
 | auth | `waitlist_entries` | People waiting for access, with request details for abuse checks |
 | auth | `waitlist_attempts` | Every waitlist try, also repeats and blocked ones |
 | events | `events` | Everything that came in, saved once, with its status |
-| channels | `messages` | Every message in and out, with its channel, its conversation and its status |
-| channels | `conversations` | One row per conversation: its chat, its number in that chat, its title, its start and last-message times, and if it is the active one |
+| channels | `messages` | Every message in and out, with its channel, its conversation and its status. A message written during a turn keeps the turn's id. A copy sent to Telegram keeps the id of the message it copies |
+| channels | `conversations` | One row per conversation: its chat, its kind (a chat, or the user's one Automations chat), its number in that chat, its title, its start and last-message times, and if it is the active one |
 | channels | `chat_epochs` | Each chat's counter: the highest conversation number given out in it. It only goes up, so a number is never used twice |
 | channels | `attachments` | Files uploaded in the web app or received in a chat |
 | orchestrator | `sandbox_tokens` | The hash of each container's token and the user it belongs to |
@@ -2401,7 +2429,7 @@ This section lists every table of the backend's database, grouped by the module 
 | integrations | `user_mcp_servers` | The user's own MCP servers, with the secret encrypted |
 | integrations | `composio_triggers` | Made for app triggers. No code reads or writes it today |
 | integrations | `byok_keys` | The user's own AI keys, encrypted, plus the last 4 characters |
-| automations | `automations` | Reminders, repeating tasks and app-event tasks, each with the conversation its runs answer in |
+| automations | `automations` | Reminders, repeating tasks and app-event tasks, each with the chat it was made in. Its runs answer in the Automations chat. A column that held a conversation per automation until 13 October is no longer used |
 | automations | `pr_reviews` | One row per reviewed pull-request commit, so none is reviewed twice |
 | automations | `crew_jobs` | One row per crew job: the brief, where the report goes, its state, and the report itself |
 | billing | `subscriptions` | Each paid plan: user, Polar id, status, period |
@@ -2425,7 +2453,7 @@ This section says what the web app can do through the api, group by group. Almos
 |---|---|
 | Profile | Read the user's name, plan and credit summary, and whether a time zone was ever set. Change the name and time zone. The app sets the time zone from the browser once, while nobody has set one |
 | Channels and linking | See linked chat apps and which channels are on. Get a one-time code to link Telegram. Unlink a chat |
-| Chat and the live stream | List the conversations. Start a new web conversation, open an earlier one, rename or delete one. Read the messages of one conversation, or of all. Send a message into the active web conversation or into one the app names. Upload a file up to 10 MB. Keep a live stream open |
+| Chat and the live stream | List the conversations, with the Automations chat apart if asked. Start a new web conversation, open an earlier one, rename or delete one (the Automations chat keeps its name). Read the messages of one conversation, or of all. Send a message into the active web conversation or into one the app names. Upload a file up to 10 MB. Keep a live stream open |
 | Approvals | List approvals, the waiting ones by default. Approve or reject one |
 | Apps | See the app list with status and plan, and which apps can be connected on this server. Start connecting an app. Disconnect one |
 | MCP servers | List the user's own MCP servers. Add one (Max plan), rename it, switch it on or off, remove it |
@@ -2552,6 +2580,7 @@ On Hermes, the page reader opens only an address already seen for that user. On 
 
 These were found by reading the code while this report was written. Each is described in its own section too.
 
+- **A Telegram user who answers a run's copy on Telegram.** The copy says to follow up in the Automations chat. If the user replies on Telegram instead ("do it"), the agent there does not have the run in mind: the copy is kept out of that chat's context on purpose (section 18). The agent may ask what is meant.
 - **The user's own API key has not run against a real provider.** It is built: every model call of the user goes to their provider with their key, through LiteLLM. It was checked only with a stand-in provider, because there is no key with balance (section 30).
 - **The AI of a failed turn's last seconds may stay charged.** LiteLLM writes a key's total in batches, every 10 to 15 seconds. The sync right after the turn can miss the newest cost. A later sync charges it, in a period that starts after the turn. The refund gives back only what was charged in periods that overlap the turn, so that part is not given back. This was not seen on the server: no AI goes through LiteLLM there yet (section 25).
 - **When LiteLLM cannot say what a failed turn's AI cost on any of 5 tries, the AI is not refunded,** although the user was told they were not charged. Awake time, browser time, app actions and paid tools are still given back (section 25).
@@ -2609,7 +2638,8 @@ The backend has 626 automated tests. They use a real database and real queues, a
 | Crew jobs: a brief for Patch or Byte, the clean-up in the container, the repo list | No. Built on 13 October, with the automated tests, stand-ins for GitHub, Composio and the container, real processes for the Bridge's clean-up, and the web app's demo mode |
 | Reminders and automations | Yes: a one-time reminder, a daily automation, the 15-minute limit |
 | Conversations: the list, going back to an earlier one, rename, delete | No. Built on 9 October, with the automated tests only |
-| An automation answering in its own conversation; a late run saying so; the time zone set from the browser | No. Built on 13 October, with the automated tests only, and the web app's part in its demo mode |
+| The Automations chat: every run answering there, and the copy on Telegram | No. Built on 13 October, with the automated tests only, and the web app's part in its demo mode |
+| A late run saying so; the time zone set from the browser | No. Built on 13 October, with the automated tests only, and the web app's part in its demo mode |
 | Replies to a chat app as plain text, with the formatting kept for the web app | No. Built on 9 October, with the automated tests only |
 | Connecting straight to the provider with our own sign-in app, apps the server sets up at Composio by itself, `/oauth/callback` | No. Built on 13 October, with the automated tests only and a stand-in for Composio. No own sign-in app exists yet, and `COMPOSIO_MANAGED_APPS` is not set on the server |
 | Web search through Brave | No. The key answers a direct call |

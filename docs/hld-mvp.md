@@ -200,7 +200,8 @@ There are three kinds:
 
 When one fires, it goes down the same path as a normal message, with the saved instruction. So it wakes the container and costs credits like a message does.
 
-- **Where it answers.** In web chat, in the conversation the automation was made in. If there is none (made from the web app, or made before automations kept one) or it was deleted, in a conversation of its own, named after the automation and used again by later runs. Never in the conversation the user happens to have open. On Telegram, in the chat's current conversation, where the user can answer it.
+- **Where it answers: the Automations chat.** Every run of every automation answers in one conversation of its own, the user's Automations chat, wherever the automation was made. That covers timers, app events, pull-request review verdicts, and the notices (out of credits, paused after three failures). It is never made the active conversation, so it never mixes into the user's own chats. The web app pins it at the top of the chat list, with a mark when a new run arrived. The user can write there to follow up: the agent keeps a context of its own for it, with the runs in mind. If the user deletes it, the next run starts a new one.
+- **A copy on Telegram.** An automation made in a Telegram chat also sends a copy of each answer there, as plain text: the automation's name on the first line, and on the last line that the follow-up happens in the Automations chat. The copy is shown in the Telegram conversation but is not part of its context. Each answer is copied once, also when a job runs again.
 - **A late run.** A run that was due while the server was off runs when it is back, never skipped. If it starts more than 10 minutes late, the agent says so and says when it was due.
 - **The user's time zone.** Every account starts on UTC. The web app sets the browser's time zone once, while nobody has set one, and never replaces one the user chose.
 
@@ -213,7 +214,7 @@ An automation pauses itself at zero credits, or after three failures in a row. T
 3. Composio tells our server.
 4. The worker wakes the user's container and tells Tex to have Patch review that pull request.
 5. Patch reads the changes and posts one review with its comments on the pull request.
-6. The user gets a short verdict in chat.
+6. The user gets a short verdict in the Automations chat, with a copy on Telegram when it is linked.
 
 Each commit is reviewed once. Patch never merges and never approves. Turning review on is the user's standing permission for these comments, on that repo only.
 
@@ -421,7 +422,8 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - Textcrew's own connect screen in the web app, and the page after a sign-in that says "connected" or "didn't connect". Checked in the web app's demo mode only.
 - Connecting straight to the provider's page with our own sign-in app (no Composio page), and `/oauth/callback`, the way back through our own address. No own sign-in app is registered yet.
 - The server setting up an app at Composio by itself on the first connect (`COMPOSIO_MANAGED_APPS`). Not switched on on the server.
-- An automation answering in the conversation it was made in, or in its own; a late run saying so; the web app setting a new account's time zone from the browser. Built on 13 October after the founder's "every morning at 9" summary landed in an unrelated chat at 3:01 PM India time. Checked with the automated tests, and the web app's part in its demo mode.
+- A late run saying so, and the web app setting a new account's time zone from the browser. Built on 13 October after the founder's "every morning at 9" summary landed in an unrelated chat at 3:01 PM India time. Checked with the automated tests, and the web app's part in its demo mode.
+- The Automations chat: every run, verdict and automation notice answering there, pinned in the web app's chat list with a mark for a new run, and a copy of each answer on Telegram for an automation made there. Built on 13 October, after your decision for a separate automation chat. Checked with the automated tests, and the web app's part in its demo mode in a browser. No real run has gone through it yet. The conversations that automations made for themselves earlier that day stay as ordinary chats.
 
 ### Not finished
 
@@ -452,6 +454,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - **The page reader on Claude Code:** keep it open to any public address, or go back to the strict rule (see `backend-report.md`, section 43).
 - **The page reader on Hermes:** it refuses a redirect to an address it has not seen, even on the same site. Keep that, or allow redirects inside one site?
 - **Signing in to websites in Scout's browser:** wanted as the next step. Open: how long a sign-in is kept, which sites, and what Scout may do there without asking.
+- **Answering a run's copy on Telegram:** the copy says to follow up in the Automations chat. A user who answers on Telegram instead reaches an agent without the run in mind. Leave it, or later let such an answer go to the Automations chat?
 - **The waitlist form** still asks about WhatsApp and iMessage. Keep it as a signal of demand, or change it.
 - **Composio and the GitHub token:** the git gateway and pull-request review need the user's GitHub token from Composio. The plan was to switch off the project setting "mask connected account secrets". Composio's change note of 22 April 2026 says the token is always hidden for its shared sign-in, whatever that setting says. So Byte pushing code, and Patch reading the code for a review, may need our own GitHub app registered at Composio. Not confirmed: neither has run for real. `composio.md`, section 11, has the details.
 - **Pull-request review** needs admin access to the repo, because Composio puts a webhook on it.

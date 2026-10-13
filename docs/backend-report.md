@@ -145,7 +145,7 @@ The code is split into nine modules, so every area has one owner. A module is a 
 | events | Saves everything that comes in. Owns the queues | `events` |
 | orchestrator | Runs one agent turn. Also approvals, agent settings and memory | `sandbox_tokens`, `approvals`, `agent_settings`, `memories`, `chat_engines` |
 | platform-mcp | The tool server that agents call | None. It keeps short-lived data in Redis |
-| integrations | Composio apps, the user's own tool servers and API keys, the git gateway, web search | `connections`, `user_mcp_servers`, `composio_triggers`, `byok_keys` |
+| integrations | Composio apps, the user's own tool servers and API keys, the git gateway, web search | `connections`, `composio_auth_configs`, `user_mcp_servers`, `composio_triggers`, `byok_keys` |
 | billing | Plans, subscriptions, credits, coupons, Polar, LiteLLM keys | `subscriptions`, `credit_grants`, `credit_ledger`, `usage_periods`, `coupons`, `coupon_codes`, `coupon_redemptions`, `litellm_keys`, `payments` |
 | automations | Reminders, repeating tasks, pull-request review | `automations`, `pr_reviews` |
 | admin | The activity log, alerts, metrics, the health check, backups | `audit_log` |
@@ -751,16 +751,31 @@ Composio is an outside service. It keeps the user's sign-ins to apps such as Gma
 
 - The catalog is a fixed list of 25 apps in the code. Pro and Max may connect all 25.
 - Free may connect 10 of them: Gmail, Google Calendar, Drive, Docs, Sheets, Notion, Todoist, Slack, GitHub and Exa Search.
-- An app also needs a Composio setup on the server, named in the setting `COMPOSIO_AUTH_CONFIGS`. Without one, the api answers that the app is not configured yet.
-- The app list says for each app if it can be connected on this server. The field is called `connectable`. The web app shows an app that cannot be connected as "Not available yet", with no Connect button. Today the test server has a setup for Gmail and GitHub.
+- For each app the catalog also says whose sign-in page comes next (`provider`, for example Google for Gmail) and, in one sentence, what the agent can do with it (`description`). The web app's connect screen shows both.
+- An app also needs a Composio setup ("auth config") before it can be connected. The api looks for one in this order:
+  1. the setting `COMPOSIO_AUTH_CONFIGS`, which names a setup per app. Our own sign-in app at a provider goes here;
+  2. the table `composio_auth_configs`, which keeps the setups the server made itself;
+  3. the setting `COMPOSIO_MANAGED_APPS`. It names the apps the server may set up by itself, or says `all`. Then the server makes the setup on the first connect, with Composio's shared sign-in, and keeps its id in the table. If the Composio project already has an enabled shared setup for that app, the server uses that one instead of making another.
+- With none of the three, the api answers that the app is not configured yet.
+- Exa Search signs in with an API key, not with a sign-in page, so the server never sets it up by itself.
+- The app list says for each app if it can be connected on this server. The field is called `connectable`. It is true when one of the three ways above gives a setup, or would. The web app shows an app that cannot be connected as "Not available yet", with no Connect button. Today the test server has a setup for Gmail and GitHub only, and `COMPOSIO_MANAGED_APPS` is empty.
 
 ### How a user connects an app
 
-1. The user picks an app in the web app. The web app calls `POST /v1/apps/{appSlug}/connect`.
-2. The api checks the plan. A Free user who picks a paid app gets a "plan limit" error.
-3. The api asks Composio for a connect link, and gives Composio our own user id.
-4. The api saves the connection as `pending` in the table `connections`, and returns the link.
-5. The user's browser opens the app's own sign-in page. The user signs in and allows access. The platform never sees the password. Then the browser returns to the web app.
+1. The user presses Connect in the web app. The web app first shows its own connect screen: the app, what Tex can do with it, the rules for every app, and "Continue to Google" (or the app's own provider). Cancel there changes nothing.
+2. On Continue the web app calls `POST /v1/apps/{appSlug}/connect`, with the page to come back to.
+3. The api checks the plan. A Free user who picks a paid app gets a "plan limit" error. The plan is checked before any setup is made.
+4. The api finds the app's setup, or makes it (see above).
+5. The api asks Composio which kind of setup it is, once per setup, and remembers the answer while it runs:
+   - **Our own sign-in app** (Composio calls it a custom auth config, with OAuth). The api asks Composio for a link that goes straight to the provider's own page. Composio's word for this is `initiate()` with "long redirect URL". The user sees no Composio page and no Composio address on the way out.
+   - **Composio's shared sign-in**, or a setup that asks for an API key. The api asks for a Composio Connect Link. Composio's page comes first, then the provider's. Composio no longer allows the first way for its shared sign-in, since 3 July 2026.
+   - If Composio cannot say which kind it is, or the direct link fails, the api uses a Connect Link. It works for every kind.
+6. The api gives Composio our own user id and the page to come back to. That page must be on our web app's own address. Anything else, also an address that only starts the same way, is replaced by the Apps page.
+7. The api saves the connection as `pending` in the table `connections`, and returns the link.
+8. The user signs in on the provider's page and allows access. The platform never sees the password. Composio sends the browser back to the web app and adds `status=success` or `status=failed` to the address. The web app says "Gmail is connected" or "Gmail didn't connect".
+9. A user may connect a second account of the same app ("Add account").
+
+**The way back through our own address.** With our own sign-in app, the provider sends the browser back to Composio's address after the user allows access. To keep our own address there too, the sign-in app's redirect address can be `https://api.textcrew.in/oauth/callback`. The api answers that address with a redirect to Composio's own, with the same query. It saves nothing, adds no job and never writes the query to a log, because it holds a one-time code. `docs/composio.md`, section 9, has the steps.
 
 ### How the platform checks that the connection became active
 
@@ -793,6 +808,8 @@ A connection becomes `active`, `expired` or `error` in one of three ways. The fi
 
 - **The app is not connected or not on the plan.** The tool says so. Nothing runs.
 - **Composio or the app is down.** The agent is told to try later. Nothing is charged.
+- **Composio is down while a user connects, or will not make a setup** (for example, the Composio key may not make setups). The api answers 503: "Gmail can't be connected right now". Nothing is saved, and the next try asks again.
+- **Two users connect a new app at the same moment.** Each may make a setup at Composio. The first one saved is used by everyone. The other stays unused at Composio, with no connections on it.
 
 ## 15. Approvals
 
@@ -2233,6 +2250,7 @@ This section lists every table of the backend's database, grouped by the module 
 | orchestrator | `memories` | Short facts about the user that every engine gets |
 | orchestrator | `chat_engines` | Which engine last finished a turn in each conversation |
 | integrations | `connections` | A user's connected app accounts and their status |
+| integrations | `composio_auth_configs` | The Composio setups the server made itself, one per app. Not per user |
 | integrations | `user_mcp_servers` | The user's own MCP servers, with the secret encrypted |
 | integrations | `composio_triggers` | Made for app triggers. No code reads or writes it today |
 | integrations | `byok_keys` | The user's own AI keys, encrypted, plus the last 4 characters |
@@ -2276,7 +2294,7 @@ This section says what the web app can do through the api, group by group. Almos
 | Waitlist | Join the waitlist. The answer is always the same, so nobody can test an email |
 | Admin | Manage coupons, adjust a user's credits, see free-credit totals, and handle the waitlist |
 
-The live stream pushes new messages, message status, conversation changes, approvals, the agent's state, progress lines and credit changes. Long lists come in pages of 30 by default, and 100 at most. Every error has the same shape: a code, a message, and sometimes details. Some addresses are not for the web app. Webhooks are for outside services. `/mcp` and `/git` are for containers only. `/metrics` is for monitoring. Admins also have a page that shows the job queues.
+The live stream pushes new messages, message status, conversation changes, approvals, the agent's state, progress lines and credit changes. Long lists come in pages of 30 by default, and 100 at most. Every error has the same shape: a code, a message, and sometimes details. Some addresses are not for the web app. Webhooks are for outside services. `/oauth/callback` is the way back from an app's sign-in, for a provider to send the browser to. `/mcp` and `/git` are for containers only. `/metrics` is for monitoring. Admins also have a page that shows the job queues.
 
 Example: linking Telegram takes three steps. The app asks for a link code and shows it. The user sends the code to the bot. The app reads the channel list again and shows the new chat.
 
@@ -2301,7 +2319,9 @@ This section lists the backend's settings by group. They are environment setting
 | | `TELEGRAM_WEBHOOK_SECRET` | Checks Telegram's webhooks | Every Telegram message is refused |
 | Apps | `COMPOSIO_API_KEY` | Connects apps and runs app actions | Apps cannot be connected or used |
 | | `COMPOSIO_WEBHOOK_SECRET` | Checks Composio's webhooks | App events do not arrive |
-| | `COMPOSIO_AUTH_CONFIGS` | Maps each app to its Composio setup | An app without an entry cannot be connected |
+| | `COMPOSIO_AUTH_CONFIGS` | Maps each app to its Composio setup. Our own sign-in app for an app goes here | An app without an entry can be connected only if the next setting allows it |
+| | `COMPOSIO_MANAGED_APPS` | `all`, or app names such as `googlecalendar,notion`: apps the server may set up at Composio by itself, with Composio's shared sign-in, on the first connect | None |
+| | `COMPOSIO_API_URL` | Composio's address. `/oauth/callback` sends the browser on to it | `https://backend.composio.dev` |
 | Routing | `JEV_API_KEY` | Turns the router on | Every message goes to the agent |
 | Payments | `POLAR_ACCESS_TOKEN` | Opens checkouts and cancels subscriptions | No checkout can be opened |
 | | `POLAR_WEBHOOK_SECRET` | Checks Polar's webhooks | No payment reaches the system |
@@ -2410,7 +2430,7 @@ These were found by reading the code while this report was written. Each is desc
 
 ## 44. What has run for real
 
-The backend has 568 automated tests. They use a real database and real queues, and stand-ins for outside services. "Run for real" below means it ran on the AWS test server against the real outside service.
+The backend has 590 automated tests. They use a real database and real queues, and stand-ins for outside services. "Run for real" below means it ran on the AWS test server against the real outside service.
 
 | Area | Run for real |
 |---|---|
@@ -2434,6 +2454,7 @@ The backend has 568 automated tests. They use a real database and real queues, a
 | Reminders and automations | Yes: a one-time reminder, a daily automation, the 15-minute limit |
 | Conversations: the list, going back to an earlier one, rename, delete | No. Built on 9 October, with the automated tests only |
 | Replies to a chat app as plain text, with the formatting kept for the web app | No. Built on 9 October, with the automated tests only |
+| Connecting straight to the provider with our own sign-in app, apps the server sets up at Composio by itself, `/oauth/callback` | No. Built on 13 October, with the automated tests only and a stand-in for Composio. No own sign-in app exists yet, and `COMPOSIO_MANAGED_APPS` is not set on the server |
 | Web search through Brave | No. The key answers a direct call |
 | The page reader on Claude Code | Yes |
 | Voice, images and documents | No |

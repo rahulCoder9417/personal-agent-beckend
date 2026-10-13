@@ -390,9 +390,12 @@ export async function devUser(argv: string[]): Promise<string[]> {
     }
     case 'connect-app': {
       const user = await activeUser(flags);
-      const url = await startConnect(user.id, user.plan, need(flags, 'app'));
+      const { redirectUrl, direct } = await startConnect(user.id, user.plan, need(flags, 'app'));
       return [
-        `open ${url}`,
+        `open ${redirectUrl}`,
+        direct
+          ? "sign-in: straight to the provider's page (our own sign-in app)"
+          : "sign-in: Composio's connect page first, then the provider's",
         'the worker checks Composio over the next minutes; `status` also asks right away',
       ];
     }

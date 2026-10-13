@@ -1,8 +1,13 @@
-// The ~25 apps we offer (HLD 7.1). `free: true` marks the 10 available on the Free plan.
-// `toolkit` is the Composio toolkit slug; auth config ids come from COMPOSIO_AUTH_CONFIGS.
+// The 25 apps we offer (HLD 7.1). `free: true` marks the 10 available on the Free plan.
+// `toolkit` is the Composio toolkit slug. An app's Composio setup (auth config) comes from
+// COMPOSIO_AUTH_CONFIGS, or is made by the server itself (COMPOSIO_MANAGED_APPS, see apps.ts).
 export interface CatalogApp {
   slug: string;
   name: string;
+  /** The company whose sign-in screen the user sees ("Continue to Google"). */
+  provider: string;
+  /** What the agent can do with the app, in plain words, for the connect screen. One sentence. */
+  description: string;
   category:
     | 'email'
     | 'calendar'
@@ -16,13 +21,30 @@ export interface CatalogApp {
     | 'social';
   toolkit: string;
   free: boolean;
+  /**
+   * Composio has its own shared sign-in app for this toolkit ("Composio managed"), so the server
+   * can make the setup itself. False for Exa, which signs in with an API key (docs/composio.md).
+   */
+  managedAuth: boolean;
 }
 
-export const CATALOG: CatalogApp[] = [
-  { slug: 'gmail', name: 'Gmail', category: 'email', toolkit: 'gmail', free: true },
+type Entry = Omit<CatalogApp, 'managedAuth'> & { managedAuth?: boolean };
+
+const APPS: Entry[] = [
+  {
+    slug: 'gmail',
+    name: 'Gmail',
+    provider: 'Google',
+    description: 'Read and search your email, write drafts and send email for you.',
+    category: 'email',
+    toolkit: 'gmail',
+    free: true,
+  },
   {
     slug: 'googlecalendar',
     name: 'Google Calendar',
+    provider: 'Google',
+    description: 'See your events, find free time, and add or change events.',
     category: 'calendar',
     toolkit: 'googlecalendar',
     free: true,
@@ -30,45 +52,214 @@ export const CATALOG: CatalogApp[] = [
   {
     slug: 'googledrive',
     name: 'Google Drive',
+    provider: 'Google',
+    description: 'Find and read the files in your Drive, and add or organize files.',
     category: 'files',
     toolkit: 'googledrive',
     free: true,
   },
-  { slug: 'googledocs', name: 'Google Docs', category: 'notes', toolkit: 'googledocs', free: true },
+  {
+    slug: 'googledocs',
+    name: 'Google Docs',
+    provider: 'Google',
+    description: 'Read your documents, and write new ones or edit them.',
+    category: 'notes',
+    toolkit: 'googledocs',
+    free: true,
+  },
   {
     slug: 'googlesheets',
     name: 'Google Sheets',
+    provider: 'Google',
+    description: 'Read your spreadsheets, and add or update rows.',
     category: 'files',
     toolkit: 'googlesheets',
     free: true,
   },
-  { slug: 'notion', name: 'Notion', category: 'notes', toolkit: 'notion', free: true },
-  { slug: 'todoist', name: 'Todoist', category: 'tasks', toolkit: 'todoist', free: true },
-  { slug: 'slack', name: 'Slack', category: 'chat', toolkit: 'slack', free: true },
-  { slug: 'github', name: 'GitHub', category: 'dev', toolkit: 'github', free: true },
-  { slug: 'exa', name: 'Exa Search', category: 'research', toolkit: 'exa', free: true },
-  { slug: 'outlook', name: 'Outlook', category: 'email', toolkit: 'outlook', free: false },
+  {
+    slug: 'notion',
+    name: 'Notion',
+    provider: 'Notion',
+    description: 'Search and read your pages, and write new ones.',
+    category: 'notes',
+    toolkit: 'notion',
+    free: true,
+  },
+  {
+    slug: 'todoist',
+    name: 'Todoist',
+    provider: 'Todoist',
+    description: 'See your tasks, add new ones and tick them off.',
+    category: 'tasks',
+    toolkit: 'todoist',
+    free: true,
+  },
+  {
+    slug: 'slack',
+    name: 'Slack',
+    provider: 'Slack',
+    description: 'Read your channels and messages, and send messages for you.',
+    category: 'chat',
+    toolkit: 'slack',
+    free: true,
+  },
+  {
+    slug: 'github',
+    name: 'GitHub',
+    provider: 'GitHub',
+    description: 'Read your repos, issues and pull requests, and open or comment on them.',
+    category: 'dev',
+    toolkit: 'github',
+    free: true,
+  },
+  {
+    slug: 'exa',
+    name: 'Exa Search',
+    provider: 'Exa',
+    description: 'Search the web and read what it finds, with your Exa account.',
+    category: 'research',
+    toolkit: 'exa',
+    free: true,
+    managedAuth: false,
+  },
+  {
+    slug: 'outlook',
+    name: 'Outlook',
+    provider: 'Microsoft',
+    description: 'Read and search your email and calendar, and send email for you.',
+    category: 'email',
+    toolkit: 'outlook',
+    free: false,
+  },
   {
     slug: 'microsoft_teams',
     name: 'Microsoft Teams',
+    provider: 'Microsoft',
+    description: 'Read your chats and channels, and send messages for you.',
     category: 'chat',
     toolkit: 'microsoft_teams',
     free: false,
   },
-  { slug: 'onedrive', name: 'OneDrive', category: 'files', toolkit: 'one_drive', free: false },
-  { slug: 'dropbox', name: 'Dropbox', category: 'files', toolkit: 'dropbox', free: false },
-  { slug: 'trello', name: 'Trello', category: 'tasks', toolkit: 'trello', free: false },
-  { slug: 'asana', name: 'Asana', category: 'tasks', toolkit: 'asana', free: false },
-  { slug: 'linear', name: 'Linear', category: 'dev', toolkit: 'linear', free: false },
-  { slug: 'jira', name: 'Jira', category: 'dev', toolkit: 'jira', free: false },
-  { slug: 'clickup', name: 'ClickUp', category: 'tasks', toolkit: 'clickup', free: false },
-  { slug: 'airtable', name: 'Airtable', category: 'files', toolkit: 'airtable', free: false },
-  { slug: 'hubspot', name: 'HubSpot', category: 'crm', toolkit: 'hubspot', free: false },
-  { slug: 'salesforce', name: 'Salesforce', category: 'crm', toolkit: 'salesforce', free: false },
-  { slug: 'calendly', name: 'Calendly', category: 'calendar', toolkit: 'calendly', free: false },
-  { slug: 'zoom', name: 'Zoom', category: 'calendar', toolkit: 'zoom', free: false },
-  { slug: 'linkedin', name: 'LinkedIn', category: 'social', toolkit: 'linkedin', free: false },
+  {
+    slug: 'onedrive',
+    name: 'OneDrive',
+    provider: 'Microsoft',
+    description: 'Find and read the files in your OneDrive, and add or organize files.',
+    category: 'files',
+    toolkit: 'one_drive',
+    free: false,
+  },
+  {
+    slug: 'dropbox',
+    name: 'Dropbox',
+    provider: 'Dropbox',
+    description: 'Find and read the files in your Dropbox, and add or organize files.',
+    category: 'files',
+    toolkit: 'dropbox',
+    free: false,
+  },
+  {
+    slug: 'trello',
+    name: 'Trello',
+    provider: 'Trello',
+    description: 'See your boards and cards, and add or move cards.',
+    category: 'tasks',
+    toolkit: 'trello',
+    free: false,
+  },
+  {
+    slug: 'asana',
+    name: 'Asana',
+    provider: 'Asana',
+    description: 'See your projects and tasks, and add or update tasks.',
+    category: 'tasks',
+    toolkit: 'asana',
+    free: false,
+  },
+  {
+    slug: 'linear',
+    name: 'Linear',
+    provider: 'Linear',
+    description: 'See your issues and projects, and open or update issues.',
+    category: 'dev',
+    toolkit: 'linear',
+    free: false,
+  },
+  {
+    slug: 'jira',
+    name: 'Jira',
+    provider: 'Atlassian',
+    description: 'See your issues and projects, and open or update issues.',
+    category: 'dev',
+    toolkit: 'jira',
+    free: false,
+  },
+  {
+    slug: 'clickup',
+    name: 'ClickUp',
+    provider: 'ClickUp',
+    description: 'See your tasks and lists, and add or update tasks.',
+    category: 'tasks',
+    toolkit: 'clickup',
+    free: false,
+  },
+  {
+    slug: 'airtable',
+    name: 'Airtable',
+    provider: 'Airtable',
+    description: 'Read your bases, and add or update records.',
+    category: 'files',
+    toolkit: 'airtable',
+    free: false,
+  },
+  {
+    slug: 'hubspot',
+    name: 'HubSpot',
+    provider: 'HubSpot',
+    description: 'Look up contacts, companies and deals, and add or update them.',
+    category: 'crm',
+    toolkit: 'hubspot',
+    free: false,
+  },
+  {
+    slug: 'salesforce',
+    name: 'Salesforce',
+    provider: 'Salesforce',
+    description: 'Look up accounts, contacts and opportunities, and add or update them.',
+    category: 'crm',
+    toolkit: 'salesforce',
+    free: false,
+  },
+  {
+    slug: 'calendly',
+    name: 'Calendly',
+    provider: 'Calendly',
+    description: 'See your event types and bookings, and share your booking links.',
+    category: 'calendar',
+    toolkit: 'calendly',
+    free: false,
+  },
+  {
+    slug: 'zoom',
+    name: 'Zoom',
+    provider: 'Zoom',
+    description: 'See your meetings and recordings, and schedule meetings.',
+    category: 'calendar',
+    toolkit: 'zoom',
+    free: false,
+  },
+  {
+    slug: 'linkedin',
+    name: 'LinkedIn',
+    provider: 'LinkedIn',
+    description: 'See your profile, and write posts for you.',
+    category: 'social',
+    toolkit: 'linkedin',
+    free: false,
+  },
 ];
+
+export const CATALOG: CatalogApp[] = APPS.map((app) => ({ managedAuth: true, ...app }));
 
 export function findApp(slug: string): CatalogApp | undefined {
   return CATALOG.find((a) => a.slug === slug);

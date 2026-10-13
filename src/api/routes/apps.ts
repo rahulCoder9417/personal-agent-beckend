@@ -1,4 +1,5 @@
 import { appCatalogFor, disconnect, startConnect } from '../../modules/integrations/apps.ts';
+import { composioCallbackUrl } from '../../modules/integrations/composio.ts';
 import {
   createMcpServer,
   deleteMcpServer,
@@ -17,8 +18,17 @@ export const appRoutes = [
 
   route('connectApp', async (c, { params, body }) => {
     const user = c.get('user');
-    const redirectUrl = await startConnect(user.id, user.plan, params.appSlug, body?.returnUrl);
+    const { redirectUrl } = await startConnect(user.id, user.plan, params.appSlug, body?.returnUrl);
     return c.json({ redirectUrl }, 200);
+  }),
+
+  // The provider's way back, through our own address, on to Composio. It only redirects: the
+  // query holds a one-time code, so it is not read, saved or logged (the access log has the route
+  // only).
+  route('oauthCallback', (c) => {
+    c.header('cache-control', 'no-store');
+    c.header('referrer-policy', 'no-referrer');
+    return c.redirect(composioCallbackUrl(new URL(c.req.url).search), 302);
   }),
 
   route('disconnectApp', async (c, { params }) => {

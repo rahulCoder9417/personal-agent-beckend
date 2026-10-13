@@ -347,7 +347,7 @@ Other companies' rules decide part of what we can launch. These were read on 2 O
 | **Telegram** | AI bots are allowed. Digital goods sold inside Telegram must be paid with Telegram Stars | Our launch channel. The bot never sends a purchase link. Plans are bought on the website |
 | **Apple (iMessage)** | No safe route for a bot with no human behind it | Not at launch. Maybe later, clearly labelled as a beta |
 | **Anthropic (Claude plans)** | Running Claude Code for users is allowed with conditions: the program is not modified, each user signs in with their own plan, and we never pay for or resell their usage | Offered as a beta. Two things to do: accept Anthropic's Commercial Terms, and ask them in writing whether our setup is within the rule |
-| **Google (Gmail)** | An app that reads Gmail must be verified by Google. Until then it stops at 100 new users | The beta uses Composio's shared Google app. Our own verification must start before we grow |
+| **Google (Gmail)** | An app that reads Gmail must be verified by Google, with a yearly security review by an outside firm. Until then it shows an "unverified app" warning and stops at 100 new users | The beta uses Composio's shared Google app, so Google's "Allow" screen names Composio. Our own Google app shows "Textcrew", but its verification must start well before we grow (`composio.md`, section 9) |
 | **Polar** | Sellers in India are supported. AI tools get a closer review | Expect a review when the account is created |
 | **India** | The data protection law asks for a clear consent notice and a way to handle access and deletion requests. Sales to Indian users carry 18% GST | The privacy page and the prices must cover this |
 
@@ -401,6 +401,9 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - A conversation older than 30 days being opened again. Claude Code removes its own saved sessions after 30 days, so such a conversation would start with no context. Your decision (below).
 - The desktop app. It is now a small window around the live web app (`https://app.textcrew.in`), so it always shows the same screens. It reaches the sign-in page, and Clerk's and Google's sign-in pages open inside the window. Nobody has signed in with a real account in it, and the tray icon, the shortcut and "start at login" have not been run. A Linux installer builds; Windows and Mac installers are not built.
 - Web search through Brave. The key works; the path through the app has not run.
+- Textcrew's own connect screen in the web app, and the page after a sign-in that says "connected" or "didn't connect". Checked in the web app's demo mode only.
+- Connecting straight to the provider's page with our own sign-in app (no Composio page), and `/oauth/callback`, the way back through our own address. No own sign-in app is registered yet.
+- The server setting up an app at Composio by itself on the first connect (`COMPOSIO_MANAGED_APPS`). Not switched on on the server.
 
 ### Not finished
 
@@ -418,7 +421,8 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 ### Decisions waiting on you
 
 - **The browser's Google contacts:** (a) use Playwright's smaller "headless shell" browser, which makes none of them, (b) block the two Google hosts in the browser's proxy rule, or (c) accept them.
-- **More apps than Gmail and GitHub:** every other app shows "Not available yet" in the web app, because the server has no Composio setup for it. Each app you want (Google Calendar first?) needs its setup made in Composio's dashboard, then its id added to the server's settings.
+- **More apps than Gmail and GitHub:** every other app shows "Not available yet" in the web app, because the server has no Composio setup for it. One setting now switches them on: `COMPOSIO_MANAGED_APPS=all` (or a list, such as `googlecalendar,notion,slack`), then a restart. The server makes each app's setup at Composio on its first connect. These apps use Composio's shared sign-in, so the provider's "Allow" screen names Composio. `composio.md`, section 8.
+- **Composio's name on the connect pages:** the web app now shows its own connect screen first. What users still see of Composio depends on steps only you can do: our logo and name on Composio's connect page (a dashboard setting, five minutes), and our own GitHub sign-in app (no review needed, about twenty minutes). Google needs a review of several weeks before our own Google app can replace Composio's. `composio.md`, section 9, has every step.
 - **Old conversations:** keep Claude Code's 30-day clean-up of saved sessions (an older conversation then starts afresh when opened), or keep sessions for as long as the conversation exists (more disk per user).
 - **Codex and other engines:** see `engines-proposal.md`, section 10. A ChatGPT plan cannot be used yet; OpenAI must approve first.
 - **A Clerk production instance on `textcrew.in`:** needed before a public launch, and it makes the first visit about a second faster.
@@ -431,7 +435,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - **The page reader on Hermes:** it refuses a redirect to an address it has not seen, even on the same site. Keep that, or allow redirects inside one site?
 - **Signing in to websites in Scout's browser:** wanted as the next step. Open: how long a sign-in is kept, which sites, and what Scout may do there without asking.
 - **The waitlist form** still asks about WhatsApp and iMessage. Keep it as a signal of demand, or change it.
-- **Composio and the GitHub token:** the git gateway and pull-request review need the user's GitHub token from Composio. The plan was to switch off the project setting "mask connected account secrets". Composio's change note of 22 April 2026 says the token is always hidden for its shared sign-in, whatever that setting says. So Byte pushing code, and Patch reading the code for a review, may need our own GitHub app registered at Composio. Not confirmed: neither has run for real. `composio.md`, section 10, has the details.
+- **Composio and the GitHub token:** the git gateway and pull-request review need the user's GitHub token from Composio. The plan was to switch off the project setting "mask connected account secrets". Composio's change note of 22 April 2026 says the token is always hidden for its shared sign-in, whatever that setting says. So Byte pushing code, and Patch reading the code for a review, may need our own GitHub app registered at Composio. Not confirmed: neither has run for real. `composio.md`, section 11, has the details.
 - **Pull-request review** needs admin access to the repo, because Composio puts a webhook on it.
 - **Small gaps the web app found in the API:** no history of past reviews, no list of repos to pick from, no way to add or edit a memory, and progress lines are not shown again after a page reload.
 

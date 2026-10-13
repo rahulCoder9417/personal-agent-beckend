@@ -8,3 +8,5 @@ rules:
   # Public endpoints (healthz, plans) have no 4xx.
   operation-4xx-response: off
   no-server-example.com: off
+  # /oauth/callback only ever sends the browser on (302).
+  operation-2xx-response: off

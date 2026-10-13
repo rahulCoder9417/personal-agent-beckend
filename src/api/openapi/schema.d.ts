@@ -384,6 +384,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/oauth/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The way back from an app's sign-in, through our own address, on to Composio
+         * @description For an app set up with our own sign-in app at the provider (our own GitHub or Google OAuth
+         *     app), when that sign-in app's redirect address is `https://<api domain>/oauth/callback`.
+         *     After the user allows access, the provider sends the browser here, and this answers 302 to
+         *     Composio's callback (`COMPOSIO_API_URL` + `/api/v3/toolkits/auth/callback`) with the query
+         *     string unchanged. Composio then finishes the connection and sends the browser back to the
+         *     web app. It saves nothing, adds no job and never logs the query (it holds a one-time code).
+         */
+        get: operations["oauthCallback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/mcp-servers": {
         parameters: {
             query?: never;
@@ -2690,6 +2715,25 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    oauthCallback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description On to Composio's callback, with the same query string */
+            302: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     listMcpServers: {

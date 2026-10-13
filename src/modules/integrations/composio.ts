@@ -321,3 +321,12 @@ export function authConfigFor(appSlug: string): string | undefined {
     return undefined;
   }
 }
+
+/**
+ * Where `/oauth/callback` sends the browser on to: Composio's own callback, with the provider's
+ * query string unchanged (`search` starts with "?" or is empty). Used for a sign-in app of our
+ * own whose redirect address is ours (Composio's white-labeling guide, "the return redirect").
+ */
+export function composioCallbackUrl(search: string): string {
+  return `${config().COMPOSIO_API_URL.replace(/\/+$/, '')}/api/v3/toolkits/auth/callback${search}`;
+}

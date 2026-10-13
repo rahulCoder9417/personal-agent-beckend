@@ -2,9 +2,11 @@
 // - an app set up with our own sign-in app goes straight to the provider's page (`initiate()`
 //   with the long redirect URL); Composio's shared sign-in keeps the Connect Link;
 // - the server may make an app's Composio setup itself (COMPOSIO_MANAGED_APPS);
+// - /oauth/callback sends the provider's way back on to Composio from our own address;
 // - the catalog says who signs the user in and what Tex can do with each app.
+import { Writable } from 'node:stream';
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeQueues } from '../src/modules/events/queues.ts';
 import {
   appCatalogFor,
@@ -17,6 +19,7 @@ import { CATALOG, findApp } from '../src/modules/integrations/catalog.ts';
 import { composioAuthConfigs, connections } from '../src/modules/integrations/tables.ts';
 import { loadConfig, resetConfig } from '../src/shared/config.ts';
 import { db } from '../src/shared/db/client.ts';
+import { buildLogger, setLogger } from '../src/shared/logger.ts';
 import { wireModules } from '../src/wiring.ts';
 import { installFakeComposio, installFakeVm } from './fakes.ts';
 import { call, chatUser, expectContract } from './helpers.ts';
@@ -298,6 +301,51 @@ describe('the server makes an app setup itself (COMPOSIO_MANAGED_APPS)', () => {
     );
     expect(res.error.code).toBe('plan_limit');
     expect(composio.state.managedSetups).toEqual([]);
+  });
+});
+
+describe('/oauth/callback: the way back through our own address', () => {
+  afterEach(() => setLogger(undefined));
+
+  it('sends the browser on to Composio with the same query, and logs no part of it', async () => {
+    const lines: string[] = [];
+    setLogger(
+      buildLogger(
+        new Writable({
+          write(chunk, _enc, cb) {
+            lines.push(String(chunk));
+            cb();
+          },
+        }),
+        'trace',
+      ),
+    );
+    const query = 'code=4%2F0secret-one-time-code&state=st_abc&scope=repo%20read%3Auser';
+    const res = await call(`/oauth/callback?${query}`); // no session: the provider sends it
+    await expectContract('oauthCallback', res, 302);
+    expect(res.headers.get('location')).toBe(
+      `https://backend.composio.dev/api/v3/toolkits/auth/callback?${query}`,
+    );
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(res.headers.get('referrer-policy')).toBe('no-referrer');
+    const logged = lines.join('');
+    expect(logged).toContain('"route":"/oauth/callback"'); // the capture works
+    expect(logged).not.toMatch(/secret-one-time-code|st_abc/);
+  });
+
+  it('follows COMPOSIO_API_URL, and passes an empty query as it is', async () => {
+    process.env.COMPOSIO_API_URL = 'https://composio.example/';
+    resetConfig();
+    try {
+      const res = await call('/oauth/callback');
+      expect(res.status).toBe(302);
+      expect(res.headers.get('location')).toBe(
+        'https://composio.example/api/v3/toolkits/auth/callback',
+      );
+    } finally {
+      delete process.env.COMPOSIO_API_URL;
+      resetConfig();
+    }
   });
 });
 

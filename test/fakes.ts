@@ -363,9 +363,15 @@ export async function installFakeComposio() {
     /** The next connectDirect / connectLink fails with this (used once). */
     directError: null as Error | null,
     linkError: null as Error | null,
+    /** Setups the server made with Composio's shared sign-in, by toolkit. */
+    managedSetups: [] as Array<{ toolkit: string; name: string; id: string }>,
+    /** The next setUpManagedAuthConfig fails with this (used once). */
+    setupError: null as Error | null,
   };
   let n = 0;
-  const once = <K extends 'authConfigError' | 'directError' | 'linkError'>(key: K) => {
+  const once = <K extends 'authConfigError' | 'directError' | 'linkError' | 'setupError'>(
+    key: K,
+  ) => {
     const err = state[key];
     state[key] = null;
     if (err) throw err;
@@ -391,6 +397,12 @@ export async function installFakeComposio() {
       state.authConfigLookups.push(authConfigId);
       once('authConfigError');
       return state.authConfigs.get(authConfigId) ?? { composioManaged: true, authScheme: 'OAUTH2' };
+    },
+    async setUpManagedAuthConfig(toolkit, name) {
+      once('setupError');
+      const id = `ac_made_${toolkit}_${n++}`;
+      state.managedSetups.push({ toolkit, name, id });
+      return { id };
     },
     async listAccounts(userId) {
       state.accountLookups.push(userId);

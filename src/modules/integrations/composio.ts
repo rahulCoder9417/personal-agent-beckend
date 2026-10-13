@@ -59,6 +59,11 @@ export interface ComposioApi {
   ): Promise<{ accountId: string; redirectUrl: string }>;
   /** One app setup, as Composio describes it (see `authConfigInfo` below, which caches it). */
   authConfig(authConfigId: string): Promise<AuthConfigInfo>;
+  /**
+   * An enabled setup with Composio's shared sign-in for a toolkit: one already in the project, or
+   * a new one named `name`. Needs a Composio key that may make setups (the default "full access").
+   */
+  setUpManagedAuthConfig(toolkit: string, name: string): Promise<{ id: string }>;
   listAccounts(userId: string): Promise<ComposioAccount[]>;
   deleteAccount(accountId: string): Promise<void>;
   /**
@@ -128,6 +133,16 @@ const realApi: ComposioApi = {
     // Composio leaves the flag out on some setups; reading that as "shared" is the safe side,
     // because a Connect Link works for both kinds.
     return { composioManaged: ac.isComposioManaged !== false, authScheme: ac.authScheme ?? null };
+  },
+  async setUpManagedAuthConfig(toolkit, name) {
+    const found = await sdk().authConfigs.list({ toolkit, isComposioManaged: true });
+    const ready = found.items.find((ac) => ac.status === 'ENABLED');
+    if (ready) return { id: ready.id };
+    const made = await sdk().authConfigs.create(toolkit, {
+      type: 'use_composio_managed_auth',
+      name,
+    });
+    return { id: made.id };
   },
   async listAccounts(userId) {
     const res = (await sdk().connectedAccounts.list({ userIds: [userId] })) as unknown as {
@@ -273,6 +288,11 @@ export async function authConfigInfo(authConfigId: string): Promise<AuthConfigIn
   }
 }
 
+/** Tells the cache about a setup the server just made itself (Composio's shared sign-in). */
+export function rememberAuthConfig(authConfigId: string, info: AuthConfigInfo): void {
+  authConfigCache.set(authConfigId, info);
+}
+
 /** A tool's Composio tags, or null when Composio can't be asked right now (nothing is cached). */
 export async function toolTags(slug: string): Promise<string[] | null> {
   const key = slug.toUpperCase();
@@ -287,7 +307,11 @@ export async function toolTags(slug: string): Promise<string[] | null> {
   }
 }
 
-/** Composio auth config id per app slug (COMPOSIO_AUTH_CONFIGS = {"gmail":"ac_…", …}). */
+/**
+ * The setup id named for an app in the server's settings (COMPOSIO_AUTH_CONFIGS =
+ * {"gmail":"ac_…", …}). A setup the server made itself is in the `composio_auth_configs` table
+ * instead (apps.ts).
+ */
 export function authConfigFor(appSlug: string): string | undefined {
   const raw = config().COMPOSIO_AUTH_CONFIGS;
   if (!raw) return undefined;

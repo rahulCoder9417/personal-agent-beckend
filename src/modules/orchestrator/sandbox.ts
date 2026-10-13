@@ -106,3 +106,19 @@ export function touch(userId: string): void {
     .touch({ userId })
     .catch((err: unknown) => logger().debug({ userId, err: String(err) }, 'touch failed'));
 }
+
+/**
+ * Asks the vm-manager to stop the user's container now, politely (Hermes saves to the user's
+ * folder first), instead of after the 3 idle minutes: after a crew job, whose work is over. The
+ * vm-manager refuses a polite stop while a turn runs, a delivery is in flight or a Claude sign-in
+ * waits for its code; then the idle stop does it later. Never fails: false when it didn't stop.
+ */
+export async function sleepNow(userId: string, reason: string): Promise<boolean> {
+  try {
+    await vm().stopSandbox({ userId, force: false, reason });
+    return true;
+  } catch (err) {
+    logger().info({ userId, reason, err: String(err) }, 'container left to the idle stop');
+    return false;
+  }
+}

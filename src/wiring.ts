@@ -8,6 +8,7 @@ import {
   resumeAfterCredits,
   setAutomationLimit,
 } from './modules/automations/automations.ts';
+import { deleteUserCrewJobs } from './modules/automations/crew-jobs.ts';
 import {
   chargeAppAction,
   chargePaidTool,
@@ -174,6 +175,7 @@ export function wireModules(): void {
       await deleteUserConnections(userId);
       await deleteUserMcpServers(userId);
       await deleteUserAutomations(userId);
+      await deleteUserCrewJobs(userId);
     },
   });
 }

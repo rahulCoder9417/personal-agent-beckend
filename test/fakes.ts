@@ -17,6 +17,8 @@ export interface Delivery {
   kind: number;
   approvalId: string;
   approved: boolean;
+  /** What the platform adds to the delivery (JSON), e.g. `chat_epoch` or a crew job. */
+  metadataJson?: string;
 }
 
 /**
@@ -73,6 +75,8 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
   /** The priority each WakeSandbox call asked for (the plan's: HLD 7.1). */
   const wakePriorities: Array<{ userId: string; priority: number | undefined }> = [];
   const touches: string[] = [];
+  /** Every StopSandbox call. */
+  const stops: Array<{ userId: string; force: boolean; reason: string }> = [];
   const allowlists: Array<{
     userId: string;
     domains: string[];
@@ -97,6 +101,8 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
     turnErrorAfterAgent: null as { message: string; platformFault: boolean } | null,
     /** Awake/browser seconds GetUsage reports per user. */
     usage: new Map<string, { awakeSeconds: bigint; browserSeconds: bigint }>(),
+    /** StopSandbox fails with this while it is set (e.g. a polite stop refused mid-turn). */
+    stopError: null as Error | null,
     /**
      * Progress lines and drafts are streamed while the agent works, like the real Bridge (so a
      * draft comes before the answer's send_message). Off: they come after the agent is done.
@@ -195,6 +201,12 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
       }
       yield { type: DeliverEventType.TURN_DONE, message: '', platformFault: false };
     },
+    async stopSandbox(req: { userId: string; force?: boolean; reason?: string }) {
+      stops.push({ userId: req.userId, force: req.force ?? false, reason: req.reason ?? '' });
+      if (state.stopError) throw state.stopError;
+      if (!tokens.has(req.userId)) throw new ConnectError('sandbox not found', Code.NotFound);
+      return { sandbox: sandboxView(req.userId, SandboxState.STOPPED) };
+    },
     async touch(req: { userId: string }) {
       touches.push(req.userId);
       return {};
@@ -279,6 +291,7 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
     wakes,
     wakePriorities,
     touches,
+    stops,
     allowlists,
     state,
     runtimes,
@@ -370,6 +383,8 @@ export async function installFakeComposio() {
     tagsError: null as Error | null,
     /** The next execute returns this failure, or throws it (used once). */
     executeFailure: null as string | Error | null,
+    /** What execute returns as `data` for an action (default `{ ok: true }`). */
+    executeData: new Map<string, unknown>(),
     /** The next createTrigger throws this (used once). */
     triggerError: null as Error | null,
     /**
@@ -477,7 +492,8 @@ export async function installFakeComposio() {
       if (failure instanceof Error) throw failure;
       if (failure) return { successful: false, data: null, error: failure };
       executed.push({ slug, ...input });
-      return { successful: true, data: { ok: true }, error: null };
+      const data = state.executeData.has(slug) ? state.executeData.get(slug) : { ok: true };
+      return { successful: true, data, error: null };
     },
     async createTrigger(userId, slug, _connectedAccountId, config) {
       const err = state.triggerError;

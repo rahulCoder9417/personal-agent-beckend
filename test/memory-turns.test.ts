@@ -146,7 +146,7 @@ describe('the memory block on every delivered turn', () => {
     expect(lines(next.got).at(-1)).toBe('make it shorter');
   });
 
-  it('reaches approval answers, scheduled automations and app events too', async () => {
+  it('reaches approval answers, scheduled automations, app events and crew jobs too', async () => {
     const { user, token } = await agent();
     await remember(token, 'Wants summaries as three bullet points', 'preference');
     const texts: Record<Exclude<TurnKind, 'message'>, string> = {
@@ -154,6 +154,7 @@ describe('the memory block on every delivered turn', () => {
       automation: '[Automation "Morning brief"] Summarise my inbox',
       app_event:
         '[Automation "Boss mail"] Tell me\n\nEvent GMAIL_NEW_GMAIL_MESSAGE: {"from":"boss"}',
+      crew_job: '[Crew job crj_1] Review acme/web#42.',
     };
     for (const [kind, text] of Object.entries(texts) as Array<[TurnKind, string]>) {
       const outcome = await runTurn({

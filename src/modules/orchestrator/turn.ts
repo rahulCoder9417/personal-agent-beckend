@@ -26,7 +26,7 @@ import { ensureSandbox } from './sandbox.ts';
 import { recordEngineTurn, turnText } from './turn-context.ts';
 import { DeliverEventType, DeliverKind, planPriority, vm } from './vm.ts';
 
-export type TurnKind = 'message' | 'approval_answer' | 'automation' | 'app_event';
+export type TurnKind = 'message' | 'approval_answer' | 'automation' | 'app_event' | 'crew_job';
 
 export interface TurnInput {
   userId: string;
@@ -102,6 +102,9 @@ const KIND: Record<TurnKind, DeliverKind> = {
   approval_answer: DeliverKind.APPROVAL_ANSWER,
   automation: DeliverKind.AUTOMATION,
   app_event: DeliverKind.APP_EVENT,
+  // A crew job is the user's own request, written down by the platform from their brief. The
+  // Bridge knows it is a job from the delivery's metadata (`crew_job`), so no new kind is needed.
+  crew_job: DeliverKind.MESSAGE,
 };
 
 /** Retryable: the job waits (server full, vm-manager down). */

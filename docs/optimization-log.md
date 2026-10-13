@@ -60,6 +60,33 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 4. The log
 
+### 13 October 2026: side panels that fold away, each with a close button
+
+- **Where it is:** on `main` since 13 October. The web app only, so it reaches app.textcrew.in when Vercel builds `main`.
+- **Why:** the chat history appeared and disappeared with no movement, and the left menu and the right "Tex is awake" panel could not be closed.
+- **What the user notices:**
+  - **The left menu** folds down to a slim rail of icons with one button, and opens again with the same button. On the rail, waiting approvals show as a number on their icon, and the credits card shrinks to the balance (for example "1.9K").
+  - **The chat history and the right panel** slide away and back. Each has its own close button, and a button in the chat's header brings it back.
+  - **Chats** slide into the history when started, and fold shut when deleted.
+  - **On a phone**, the chat drawer now slides out as well as in.
+  - **Remembered:** the browser remembers what was closed.
+  - **Reduce motion:** with "reduce motion" switched on in the device's settings, nothing moves.
+- **Backend:** no change.
+- **vm-manager:** no change.
+- **Cost and speed:** none. All of it is done with the browser's own styling, with no new library.
+- **Contracts:** none.
+- **Database:** none.
+- **How it was checked:**
+  - Lint, the type check and all 465 web app tests pass.
+  - In the web app's demo mode, each panel's width was measured frame by frame while it moved, and the keyboard was walked through every button.
+  - It was checked that nothing slides when a page first loads, and that nothing moves with reduce motion on.
+  - Screenshots were taken at phone, tablet and desktop widths.
+- **Still open:**
+  - A panel that was closed shows open for a split second when a page is first loaded, until the app has started.
+  - The phone drawer's slide-out needs a recent browser. On an older one it simply closes at once.
+- **Docs updated:** the web app's README.
+- **Commits:** web app `7d1ac68`, `873a51b`, `e400593`, `9f6b181`, `bc36b60`, `69e6b6c`, merged in `c66a4b9`.
+
 ### 13 October 2026: every Claude model in Settings
 
 - **Where it is:** on `main` since 13 October. Not on the server yet: the agent image has to be rebuilt there.

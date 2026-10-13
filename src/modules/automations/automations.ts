@@ -4,11 +4,8 @@ import { db } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import { logger } from '../../shared/logger.ts';
 import { getActiveUser, isValidTimezone, type PlanId } from '../auth/users.ts';
-import {
-  getConversation,
-  startConversationAside,
-  titleFromText,
-} from '../channels/conversations.ts';
+import { automationsChat } from '../channels/conversations.ts';
+import { WEB_APP_NAME } from '../channels/purchase-links.ts';
 import { publish } from '../channels/stream.ts';
 import { parseSessionKey } from '../channels/types.ts';
 import { queue } from '../events/queues.ts';
@@ -142,12 +139,6 @@ export interface CreateInput {
   trigger?: { app: string; event: string; config?: Record<string, unknown> };
   /** Set only by the platform itself (pr-review.ts), never from the agent's tools. */
   preset?: NonNullable<Automation['preset']>;
-  /**
-   * The conversation it is made in: the agent's turn's, when the agent makes it during a turn in
-   * the same chat. Left out (made from the web app, or no turn in that chat): none, and its first
-   * run starts a conversation of its own.
-   */
-  conversationId?: string | null;
 }
 
 /** Checks plan limit, 15-minute minimum and timezone → saves → registers the timer. */
@@ -211,13 +202,30 @@ export async function createAutomation(input: CreateInput): Promise<Automation> 
       triggerRef,
       preset: input.preset ?? null,
       sessionKey: input.sessionKey,
-      conversationId: input.conversationId ?? null,
       nextRunAt,
     })
     .returning();
   await registerTimer(row!);
   await emit(row!);
+  // Its runs answer in the Automations chat: started now if the user has none yet, so the web app
+  // can show where the results will be. The first run starts it otherwise.
+  await automationsChat(input.userId).catch((err: unknown) =>
+    logger().warn({ userId: input.userId, err: String(err) }, 'automations chat not started'),
+  );
   return row!;
+}
+
+/**
+ * Where an automation's runs answer, in words for the agent to tell the user: always the
+ * Automations chat; made in a chat app (Telegram), a copy of each answer there too.
+ */
+export function whereRunsAnswer(a: Pick<Automation, 'sessionKey'>): string {
+  const chat = parseSessionKey(a.sessionKey)?.channel;
+  const app = chat === 'telegram' ? 'Telegram' : chat === 'whatsapp' ? 'WhatsApp' : 'iMessage';
+  return (
+    `Each run answers in the Automations chat in ${WEB_APP_NAME}, never in the user's other chats` +
+    (chat && chat !== 'web' ? `, and a copy of each answer is sent to this ${app} chat.` : '.')
+  );
 }
 
 export async function listAutomations(userId: string): Promise<Automation[]> {
@@ -300,59 +308,6 @@ export async function resumeAfterCredits(userId: string): Promise<void> {
       ),
     );
   for (const a of rows) await setEnabled(userId, a.id, true);
-}
-
-/** Another run saved a conversation on the automation first. */
-class ConversationTaken extends Error {}
-
-/**
- * The conversation a run of `a` replies in. Web chat: the one it was made in while that is still
- * there; else a conversation of its own, titled after it, started once and saved on the
- * automation, so later runs reuse it. Never web chat's active one for want of another. Safe to
- * run again: the conversation is started and saved in one transaction, and a run that finds one
- * saved meanwhile uses that one.
- *
- * A chat app (Telegram): undefined, the chat's active conversation. There the user can only write
- * in the chat's latest conversation, so a result kept anywhere else could not be answered with
- * its context.
- */
-export async function runConversation(a: Automation): Promise<string | undefined> {
-  if (parseSessionKey(a.sessionKey)?.channel !== 'web') return undefined;
-  let current: Automation | undefined = a;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    // Deleted during its run: the job fails, and its next try finds nothing to run.
-    if (!current) throw new Error(`automation ${a.id} is gone`);
-    const saved = current.conversationId;
-    if (saved) {
-      const c = await getConversation(current.userId, saved);
-      if (c?.sessionKey === current.sessionKey) return c.id;
-    }
-    const { id, userId } = current;
-    try {
-      const own = await startConversationAside(userId, current.sessionKey, {
-        title: titleFromText(current.title) ?? current.title,
-        onStarted: async (tx, c) => {
-          const claimed = await tx
-            .update(automations)
-            .set({ conversationId: c.id })
-            .where(
-              and(
-                eq(automations.userId, userId),
-                eq(automations.id, id),
-                saved ? eq(automations.conversationId, saved) : isNull(automations.conversationId),
-              ),
-            )
-            .returning({ id: automations.id });
-          if (!claimed.length) throw new ConversationTaken();
-        },
-      });
-      return own.id;
-    } catch (err) {
-      if (!(err instanceof ConversationTaken)) throw err;
-      current = await getAutomation(userId, id);
-    }
-  }
-  throw new Error(`no conversation for automation ${a.id}`);
 }
 
 export async function findByTriggerRef(triggerRef: string): Promise<Automation | undefined> {

@@ -32,9 +32,10 @@ export const automations = pgTable(
     /** Where results are sent. */
     sessionKey: text().notNull(),
     /**
-     * The conversation a run replies in (web chat): the one the agent made it in, or, when there
-     * was none or it was deleted, the automation's own conversation, started by its first run.
-     * Null until one is known. No foreign key: the conversation is the channels module's.
+     * No longer used: every run now answers in the user's Automations chat (the channels
+     * module's). Until 13 October it held the conversation a run replied in. Kept, unread and
+     * unwritten, so a server still running the older code during a deploy keeps working; a later
+     * migration can drop it.
      */
     conversationId: text(),
     enabled: boolean().notNull().default(true),

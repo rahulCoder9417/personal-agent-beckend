@@ -9,6 +9,7 @@ import { DeliverKind } from '../proto-gen/vm/v1/vm_pb.ts';
 import { channelLinks } from '../src/modules/auth/schema.ts';
 import {
   createAutomation,
+  reregisterAll,
   runConversation,
   setMinIntervalMs,
   type Automation,
@@ -339,6 +340,32 @@ describe('a timer run that starts late', () => {
       );
       expect(late!.split('\n').at(-1)).toBe('tick');
       expect(onTime).toBe('[Automation "Ticker"] tick');
+      await call(`/v1/automations/${a.id}`, { method: 'DELETE', token: user.token });
+    } finally {
+      setLateAfterMs(LATE_AFTER_MS);
+      if (!workers.length) start();
+    }
+  });
+
+  it('setting the timers again when the worker starts keeps a run that came due meanwhile', async () => {
+    const user = await chatUser({ plan: 'pro' });
+    setLateAfterMs(1500);
+    try {
+      await stop();
+      const a = await createAutomation({
+        userId: user.id,
+        title: 'Restart',
+        instruction: 'tick',
+        sessionKey: 'web',
+        cron: '*/2 * * * * *',
+      });
+      await new Promise((r) => setTimeout(r, 4000));
+      // What the worker does at start, here before any job is picked up.
+      await reregisterAll();
+      start();
+      await waitFor(async () => (await runReplies(user.id, 'Restart')).length >= 1, 15_000);
+      const [first] = automationTurns().filter((d) => d.userId === user.id);
+      expect(automationText(first!.text)).toMatch(/^\[Automation "Restart"\] \[This run is late\./);
       await call(`/v1/automations/${a.id}`, { method: 'DELETE', token: user.token });
     } finally {
       setLateAfterMs(LATE_AFTER_MS);

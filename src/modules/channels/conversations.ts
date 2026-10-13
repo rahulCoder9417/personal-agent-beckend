@@ -7,12 +7,22 @@
 // chat: the one the user has open to write in (they can go back to an earlier one). Any other
 // channel: the chat's latest. Everything that changes which conversations a chat has, or which is
 // active, runs in a transaction that holds a lock for that chat.
+//
+// The Automations chat (`kind` automations) is where every run of every automation answers: one
+// per user, a web conversation beside the others, titled "Automations". It is never the active
+// one, so the user's next message never goes into it unless they write in it.
 import { rm } from 'node:fs/promises';
 import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm';
 import { db, type Tx } from '../../shared/db/client.ts';
 import { badRequest } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
-import { attachments, chatEpochs, conversations, messages } from './schema.ts';
+import {
+  attachments,
+  chatEpochs,
+  conversations,
+  messages,
+  type ConversationKind,
+} from './schema.ts';
 import { publish } from './stream.ts';
 import { parseSessionKey, type Channel } from './types.ts';
 
@@ -20,6 +30,12 @@ export type ConversationRow = typeof conversations.$inferSelect;
 
 /** What a conversation is called while it has no title. */
 export const NEW_CHAT_TITLE = 'New chat';
+/** The Automations chat's name. It keeps it: the user cannot rename it. */
+export const AUTOMATIONS_TITLE = 'Automations';
+/** The chat the Automations chat belongs to: web chat, so the user can open it and write in it. */
+const AUTOMATIONS_SESSION = 'web';
+
+export const isAutomationsChat = (c: { kind: ConversationKind }) => c.kind === 'automations';
 /** A title made from a message is cut to this many characters, at a word. */
 export const TITLE_MAX_CHARS = 60;
 
@@ -41,6 +57,7 @@ export function toApiConversation(c: ConversationRow) {
   return {
     id: c.id,
     channel: c.channel,
+    kind: c.kind,
     epoch: c.epoch,
     startedAt: c.startedAt.toISOString(),
     lastMessageAt: c.lastMessageAt.toISOString(),
@@ -187,17 +204,21 @@ export async function activeConversation(
 /**
  * The conversation a message to `sessionKey` is saved in: the one named, when it is this user's
  * and of that chat (a reply written during a turn stays in the turn's conversation even if the
- * user has opened another one since), else the chat's active one.
+ * user has opened another one since), else the chat's active one. With `automations` (the one
+ * named is the Automations chat), else the Automations chat: when the user deleted it during a
+ * run, the run's reply starts a new one rather than landing in the conversation they have open.
  */
 export async function conversationFor(
   userId: string,
   sessionKey: string,
   conversationId?: string | null,
+  opts: { automations?: boolean } = {},
 ): Promise<ConversationRow> {
   if (conversationId) {
     const named = await getConversation(userId, conversationId);
     if (named?.sessionKey === sessionKey) return named;
   }
+  if (opts.automations && sessionKey === AUTOMATIONS_SESSION) return automationsChat(userId);
   return activeConversation(userId, sessionKey);
 }
 
@@ -238,41 +259,95 @@ export async function startConversationAside(
   sessionKey: string,
   opts: { title: string; onStarted?: (tx: Tx, c: ConversationRow) => Promise<void> },
 ): Promise<ConversationRow> {
-  const channel = parseSessionKey(sessionKey)?.channel;
-  if (!channel) throw new Error(`bad session key ${sessionKey}`);
   const conversation = await db().transaction(async (tx) => {
     await lockChat(tx, userId, sessionKey);
-    // One start time for both columns (and the counter, when the chat had none).
-    const { rows } = await tx.execute<{ ms: number }>(
-      sql`select round(extract(epoch from ${START}) * 1000)::float8 as ms`,
-    );
-    const at = new Date(rows[0]!.ms);
-    const [counter] = await tx
-      .insert(chatEpochs)
-      .values({ userId, sessionKey, epoch: 1, startedAt: at, startKey: null })
-      .onConflictDoUpdate({
-        target: [chatEpochs.userId, chatEpochs.sessionKey],
-        set: { epoch: sql`${chatEpochs.epoch} + 1` },
-      })
-      .returning();
-    const [row] = await tx
-      .insert(conversations)
-      .values({
-        id: newId('cnv'),
-        userId,
-        sessionKey,
-        channel,
-        epoch: counter!.epoch,
-        title: opts.title,
-        active: false,
-        startedAt: at,
-        lastMessageAt: at,
-      })
-      .returning();
-    await opts.onStarted?.(tx, row!);
-    return row!;
+    const row = await addConversationAside(tx, userId, sessionKey, { title: opts.title });
+    await opts.onStarted?.(tx, row);
+    return row;
   });
   await announce(conversation);
+  return conversation;
+}
+
+/**
+ * Adds a conversation that is not the active one to a chat, with the chat's next number. The
+ * caller holds the chat's lock. The chat's counter keeps its start time and start key: those
+ * belong to the chat's latest "New chat".
+ */
+async function addConversationAside(
+  tx: Tx,
+  userId: string,
+  sessionKey: string,
+  values: { title: string; kind?: ConversationKind },
+): Promise<ConversationRow> {
+  const channel = parseSessionKey(sessionKey)?.channel;
+  if (!channel) throw new Error(`bad session key ${sessionKey}`);
+  // One start time for both columns (and the counter, when the chat had none).
+  const { rows } = await tx.execute<{ ms: number }>(
+    sql`select round(extract(epoch from ${START}) * 1000)::float8 as ms`,
+  );
+  const at = new Date(rows[0]!.ms);
+  const [counter] = await tx
+    .insert(chatEpochs)
+    .values({ userId, sessionKey, epoch: 1, startedAt: at, startKey: null })
+    .onConflictDoUpdate({
+      target: [chatEpochs.userId, chatEpochs.sessionKey],
+      set: { epoch: sql`${chatEpochs.epoch} + 1` },
+    })
+    .returning();
+  const [row] = await tx
+    .insert(conversations)
+    .values({
+      id: newId('cnv'),
+      userId,
+      sessionKey,
+      channel,
+      kind: values.kind ?? 'chat',
+      epoch: counter!.epoch,
+      title: values.title,
+      active: false,
+      startedAt: at,
+      lastMessageAt: at,
+    })
+    .returning();
+  return row!;
+}
+
+/** The user's Automations chat, if they have one. Never starts one. */
+export async function findAutomationsChat(
+  userId: string,
+  tx: Tx = db(),
+): Promise<ConversationRow | undefined> {
+  const [row] = await tx
+    .select()
+    .from(conversations)
+    .where(and(eq(conversations.userId, userId), eq(conversations.kind, 'automations')));
+  return row;
+}
+
+/**
+ * The user's Automations chat: where every run of every automation answers. Started the first
+ * time it is needed (a run, or the first automation made), in web chat beside the active
+ * conversation, which stays the active one. It gets web chat's next number, so the agent keeps a
+ * context of its own for it, and it is never made the active one. One per user: two runs at the
+ * same moment start one between them (the web chat's lock, and a unique index behind it). After
+ * the user deletes it, the next call starts a new one, with a number never used before.
+ */
+export async function automationsChat(userId: string): Promise<ConversationRow> {
+  const found = await findAutomationsChat(userId);
+  if (found) return found;
+  const { conversation, added } = await db().transaction(async (tx) => {
+    await lockChat(tx, userId, AUTOMATIONS_SESSION);
+    // Another run may have started it while this one waited for the lock.
+    const now = await findAutomationsChat(userId, tx);
+    if (now) return { conversation: now, added: false };
+    const row = await addConversationAside(tx, userId, AUTOMATIONS_SESSION, {
+      title: AUTOMATIONS_TITLE,
+      kind: 'automations',
+    });
+    return { conversation: row, added: true };
+  });
+  if (added) await announce(conversation);
   return conversation;
 }
 
@@ -293,6 +368,8 @@ export async function activateConversation(
     const [current] = await tx.select().from(conversations).where(mine(userId, id)).for('update');
     if (!current) return null;
     if (current.active) return { conversation: current, replaced: [], switched: false };
+    // The Automations chat is never the active one: it is written in where it is.
+    if (isAutomationsChat(current)) return { conversation: current, replaced: [], switched: false };
     const replaced = await tx
       .update(conversations)
       .set({ active: false })
@@ -375,11 +452,16 @@ export async function deleteConversation(
 
     let nowActive: ConversationRow | null = null;
     if (deleted.active && deleted.channel === 'web') {
+      // Never the Automations chat: it is not a conversation the user's next message goes into.
       const [newest] = await tx
         .select()
         .from(conversations)
         .where(
-          and(eq(conversations.userId, userId), eq(conversations.sessionKey, deleted.sessionKey)),
+          and(
+            eq(conversations.userId, userId),
+            eq(conversations.sessionKey, deleted.sessionKey),
+            eq(conversations.kind, 'chat'),
+          ),
         )
         .orderBy(desc(conversations.lastMessageAt), desc(conversations.id))
         .limit(1);
@@ -416,10 +498,11 @@ function parseCursor(cursor: string): { at: Date; id: string } {
 /** The user's conversations, the one with the newest message first. */
 export async function listConversations(
   userId: string,
-  opts: { channel?: Channel; cursor?: string; limit: number },
+  opts: { channel?: Channel; kind?: ConversationKind; cursor?: string; limit: number },
 ) {
   const where = [eq(conversations.userId, userId)];
   if (opts.channel) where.push(eq(conversations.channel, opts.channel));
+  if (opts.kind) where.push(eq(conversations.kind, opts.kind));
   if (opts.cursor) {
     const { at, id } = parseCursor(opts.cursor);
     where.push(

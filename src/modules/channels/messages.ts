@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, gte, inArray, lt } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, inArray, isNull, lt } from 'drizzle-orm';
 import { db } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import {
@@ -192,7 +192,8 @@ export async function getInboundByEvent(eventId: string): Promise<MessageRow | u
 
 /**
  * The last messages of one chat, oldest first, whichever conversations they are in. `after`: only
- * messages saved after that time.
+ * messages saved after that time. A copy of a message kept elsewhere (an automation's answer sent
+ * to Telegram) is left out: it is not part of this chat's context.
  */
 export async function recentSessionMessages(
   userId: string,
@@ -207,6 +208,7 @@ export async function recentSessionMessages(
       and(
         eq(messages.userId, userId),
         eq(messages.sessionKey, sessionKey),
+        isNull(messages.copyOf),
         ...(after ? [gt(messages.createdAt, after)] : []),
       ),
     )
@@ -217,7 +219,9 @@ export async function recentSessionMessages(
 
 /**
  * The last messages of one conversation, oldest first (the context for routing, and the recap a
- * new engine gets). `after`: only messages saved after that time.
+ * new engine gets). `after`: only messages saved after that time. A copy of a message kept
+ * elsewhere (an automation's answer sent to Telegram) is left out: the agent never had it in this
+ * conversation, and the user follows it up in the Automations chat.
  */
 export async function recentConversationMessages(
   userId: string,
@@ -232,12 +236,36 @@ export async function recentConversationMessages(
       and(
         eq(messages.userId, userId),
         eq(messages.conversationId, conversationId),
+        isNull(messages.copyOf),
         ...(after ? [gt(messages.createdAt, after)] : []),
       ),
     )
     .orderBy(desc(messages.id))
     .limit(limit);
   return rows.reverse();
+}
+
+/**
+ * A turn's reply: the last message saved with the turn's id (its delivery id) that is not an
+ * approval's question. The agent's answer when the turn ended well (the Bridge sends it once, at
+ * the end), else what the platform said instead (out of credits, the turn failed).
+ */
+export async function turnReply(userId: string, turnId: string): Promise<MessageRow | undefined> {
+  const [row] = await db()
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.userId, userId),
+        eq(messages.eventId, turnId),
+        eq(messages.direction, 'out'),
+        isNull(messages.approvalId),
+        isNull(messages.copyOf),
+      ),
+    )
+    .orderBy(desc(messages.id))
+    .limit(1);
+  return row;
 }
 
 /** The conversation the approval's question was asked in, while that message exists. */

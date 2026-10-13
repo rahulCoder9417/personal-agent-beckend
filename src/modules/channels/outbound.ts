@@ -1,4 +1,5 @@
 import type { Job } from 'bullmq';
+import { and, eq } from 'drizzle-orm';
 import { isChannelEnabled } from '../../shared/config.ts';
 import { db } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
@@ -29,7 +30,28 @@ export interface OutboundInput {
    * Left out (or no longer there): the chat's active one.
    */
   conversationId?: string | null;
+  /**
+   * `conversationId` is the Automations chat: when it is gone (the user deleted it during a run),
+   * a new Automations chat rather than the chat's active conversation.
+   */
+  inAutomationsChat?: boolean;
+  /** The turn it is written in (its delivery id): saved with it, so the turn's reply is found. */
+  turnId?: string | null;
+  /**
+   * It is a copy of that message, which is kept in another conversation. Saved and sent once:
+   * asked again, the copy already made is returned and nothing is sent twice. A copy never
+   * becomes part of the agent's context in its conversation.
+   */
+  copyOf?: string;
 }
+
+const sendJob = (row: MessageRow, input: Pick<OutboundInput, 'buttons' | 'template'>) =>
+  addJob(
+    'outbound',
+    'send-message',
+    { messageId: row.id, buttons: input.buttons ?? null, template: input.template ?? null },
+    { jobId: `send-${row.id}` },
+  );
 
 /**
  * Saves an outgoing message in its conversation and queues it (always via the outbound queue).
@@ -38,7 +60,9 @@ export interface OutboundInput {
 export async function queueOutbound(input: OutboundInput): Promise<MessageRow> {
   const parsed = parseSessionKey(input.sessionKey);
   if (!parsed) throw new Error(`bad session key ${input.sessionKey}`);
-  const conversation = await conversationFor(input.userId, input.sessionKey, input.conversationId);
+  const conversation = await conversationFor(input.userId, input.sessionKey, input.conversationId, {
+    automations: input.inAutomationsChat === true,
+  });
   const [row] = await db()
     .insert(messages)
     .values({
@@ -51,17 +75,25 @@ export async function queueOutbound(input: OutboundInput): Promise<MessageRow> {
       status: 'queued',
       approvalId: input.approvalId ?? null,
       sessionKey: input.sessionKey,
+      eventId: input.turnId ?? null,
+      copyOf: input.copyOf ?? null,
     })
+    .onConflictDoNothing({ target: [messages.userId, messages.copyOf] })
     .returning();
-  await publish(input.userId, 'message.created', toApiMessage(row!));
-  await noteMessage(row!);
-  await addJob(
-    'outbound',
-    'send-message',
-    { messageId: row!.id, buttons: input.buttons ?? null, template: input.template ?? null },
-    { jobId: `send-${row!.id}` },
-  );
-  return row!;
+  if (!row) {
+    // A copy made before (the job ran again). Its send is queued again only while it is still
+    // waiting to go: the queue knows the job by the message's id, and a sent one is skipped.
+    const [made] = await db()
+      .select()
+      .from(messages)
+      .where(and(eq(messages.userId, input.userId), eq(messages.copyOf, input.copyOf!)));
+    if (made?.status === 'queued') await sendJob(made, input);
+    return made!;
+  }
+  await publish(input.userId, 'message.created', toApiMessage(row));
+  await noteMessage(row);
+  await sendJob(row, input);
+  return row;
 }
 
 /** Sends to a chat that isn't linked to anyone (link instructions). No message row. */

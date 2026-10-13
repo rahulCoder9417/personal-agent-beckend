@@ -134,6 +134,13 @@
       "when": 1791890222849,
       "tag": "0018_crew_jobs",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1791898962572,
+      "tag": "0019_automations_chat",
+      "breakpoints": true
     }
   ]
 }

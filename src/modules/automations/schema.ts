@@ -72,3 +72,61 @@ export const prReviews = pgTable(
   },
   (t) => [uniqueIndex().on(t.userId, t.owner, t.repo, t.prNumber, t.headSha)],
 );
+
+/**
+ * A crew job: a brief the user gave Patch (a review) or Byte (a change), run as one turn of the
+ * agent (docs/backend-report.md, "The crew"). The row is the job's state and its claim: a job
+ * moves queued → running → done | failed once, so a re-run of its queue job never starts it twice.
+ */
+export const crewJobs = pgTable(
+  'crew_jobs',
+  {
+    id: text().primaryKey(),
+    userId: text().notNull(),
+    member: text({ enum: ['patch', 'byte'] }).notNull(),
+    status: text({ enum: ['queued', 'running', 'done', 'failed'] })
+      .notNull()
+      .default('queued'),
+    /** `app`: given in the web app. `chat`: the lead started it with the start_crew_job tool. */
+    source: text({ enum: ['app', 'chat'] }).notNull(),
+    owner: text().notNull(),
+    repo: text().notNull(),
+    pullNumber: integer(),
+    branch: text(),
+    /** The user's own words (Byte: what to fix or build). */
+    instructions: text().notNull().default(''),
+    /** Patch only. */
+    focus: jsonb().$type<string[]>().notNull().default([]),
+    /** Byte only: what to test for. */
+    acceptance: text().notNull().default(''),
+    commands: text().notNull().default(''),
+    /** Byte only: open a pull request, or only push the branch. */
+    finish: text({ enum: ['pull_request', 'branch'] }),
+    /** The chat the report goes to (`web`, or `telegram:<chat id>`). */
+    sessionKey: text().notNull(),
+    reportPullRequest: boolean().notNull().default(false),
+    reportIssue: boolean().notNull().default(false),
+    /**
+     * The conversation the report goes to (web chat): the one a chat-started job was asked in,
+     * or the job's own, started by its run. No foreign key: the conversation is the channels
+     * module's.
+     */
+    conversationId: text(),
+    /** The REST api's idempotency key. Null for a job the lead started from chat. */
+    clientRequestId: text(),
+    /** The inbound event that runs it: also the turn's delivery id. */
+    eventId: text(),
+    /** The final report: the agent's final answer of the job's turn. */
+    report: text(),
+    error: text(),
+    /**
+     * When the one review the brief allowed (`reportPullRequest`) was posted on the pull request.
+     * Set in the same step as the permission check, so it covers one review only.
+     */
+    postedAt: timestamp({ withTimezone: true }),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp({ withTimezone: true }),
+    finishedAt: timestamp({ withTimezone: true }),
+  },
+  (t) => [index().on(t.userId, t.status), uniqueIndex().on(t.userId, t.clientRequestId)],
+);

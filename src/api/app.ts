@@ -15,6 +15,7 @@ import { adminRoutes } from './routes/admin.ts';
 import { billingRoutes } from './routes/billing.ts';
 import { byokRoutes } from './routes/byok.ts';
 import { couponRoutes } from './routes/coupons.ts';
+import { crewJobRoutes } from './routes/crew-jobs.ts';
 import { creditRoutes } from './routes/credits.ts';
 import { agentRoutes } from './routes/agent.ts';
 import { agentSettingsRoutes } from './routes/agent-settings.ts';
@@ -42,6 +43,7 @@ export const allRoutes: RouteDef[] = [
   ...approvalRoutes,
   ...appRoutes,
   ...automationRoutes,
+  ...crewJobRoutes,
   ...memoryRoutes,
   ...webhookRoutes,
   ...channelWebhookRoutes,

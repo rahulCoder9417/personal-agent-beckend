@@ -327,9 +327,9 @@ export async function runConversation(a: Automation): Promise<string | undefined
       const c = await getConversation(current.userId, saved);
       if (c?.sessionKey === current.sessionKey) return c.id;
     }
-    const id = current.id;
+    const { id, userId } = current;
     try {
-      const own = await startConversationAside(current.userId, current.sessionKey, {
+      const own = await startConversationAside(userId, current.sessionKey, {
         title: titleFromText(current.title) ?? current.title,
         onStarted: async (tx, c) => {
           const claimed = await tx
@@ -337,6 +337,7 @@ export async function runConversation(a: Automation): Promise<string | undefined
             .set({ conversationId: c.id })
             .where(
               and(
+                eq(automations.userId, userId),
                 eq(automations.id, id),
                 saved ? eq(automations.conversationId, saved) : isNull(automations.conversationId),
               ),
@@ -348,7 +349,7 @@ export async function runConversation(a: Automation): Promise<string | undefined
       return own.id;
     } catch (err) {
       if (!(err instanceof ConversationTaken)) throw err;
-      current = await getAutomation(current.userId, id);
+      current = await getAutomation(userId, id);
     }
   }
   throw new Error(`no conversation for automation ${a.id}`);

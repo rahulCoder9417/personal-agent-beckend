@@ -4,7 +4,11 @@ import { Code, ConnectError } from '@connectrpc/connect';
 import { setLiteLLMClient } from '../src/modules/billing/litellm.ts';
 import { sha256Hex } from '../src/shared/crypto.ts';
 import { setTelegramApi } from '../src/modules/channels/adapters/telegram.ts';
-import type { AuthConfigInfo, ComposioAccount } from '../src/modules/integrations/composio.ts';
+import type {
+  AuthConfigInfo,
+  ComposioAccount,
+  ComposioTool,
+} from '../src/modules/integrations/composio.ts';
 import { setVmClient, type VmClient } from '../src/modules/orchestrator/vm.ts';
 import { AgentRuntime, DeliverEventType, SandboxState } from '../proto-gen/vm/v1/vm_pb.ts';
 import { testApp } from './helpers.ts';
@@ -369,12 +373,33 @@ export async function installFakeComposio() {
     config: Record<string, unknown>;
   }> = [];
   const state = {
-    /** What Composio reports for a user's connected accounts (listAccounts). */
+    /** What Composio reports for a user's connected accounts (listAccounts, account). */
     accounts: new Map<string, ComposioAccount[]>(),
     /** listAccounts calls, by user id. */
     accountLookups: [] as string[],
-    /** The next listAccounts call fails with this (used once). */
+    /** account calls (one connected account, asked by its id), by account id. */
+    accountGets: [] as string[],
+    /**
+     * Composio answers the list of a user's accounts in pages, oldest first. Null: one page holds
+     * them all. A number: listAccounts returns only that many (the SDK call asks for no page size).
+     */
+    accountsPage: null as number | null,
+    /** The next listAccounts or account call fails with this (used once). */
     accountsError: null as Error | null,
+    /**
+     * The tools of a toolkit, when a test sets them. Otherwise every toolkit has two: a send and a
+     * list action.
+     */
+    tools: new Map<string, ComposioTool[]>(),
+    /** listTools calls: the toolkits of each request. */
+    toolRequests: [] as string[][],
+    /**
+     * Like Composio's tool list: one request for several toolkits answers at most this many tools
+     * in all (the request's `limit`), toolkit by toolkit in name order.
+     */
+    toolsLimit: 200,
+    /** The next listTools call for this toolkit fails (used once). */
+    toolsError: new Map<string, Error>(),
     /** Composio's tags per tool slug (e.g. `readOnlyHint`). */
     tags: new Map<string, string[]>(),
     /** toolTags calls, by slug. */
@@ -453,31 +478,55 @@ export async function installFakeComposio() {
       const err = state.accountsError;
       state.accountsError = null;
       if (err) throw err;
-      return state.accounts.get(userId) ?? [];
+      const all = state.accounts.get(userId) ?? [];
+      return state.accountsPage === null ? all : all.slice(0, state.accountsPage);
+    },
+    async account(accountId) {
+      state.accountGets.push(accountId);
+      const err = state.accountsError;
+      state.accountsError = null;
+      if (err) throw err;
+      for (const list of state.accounts.values()) {
+        const found = list.find((a) => a.id === accountId);
+        if (found) return found;
+      }
+      return null;
     },
     async deleteAccount() {},
     async accessToken(accountId) {
       return `gho_fake_token_for_${accountId}`;
     },
     async listTools(toolkits) {
-      return toolkits.flatMap((t) => [
-        {
-          slug: `${t.toUpperCase()}_SEND_EMAIL`,
-          toolkit: t,
-          name: 'Send',
-          description: 'Send an email',
-          inputParameters: {},
-          tags: [],
-        },
-        {
-          slug: `${t.toUpperCase()}_LIST_EMAILS`,
-          toolkit: t,
-          name: 'List',
-          description: 'List emails',
-          inputParameters: {},
-          tags: ['readOnlyHint'],
-        },
-      ]);
+      state.toolRequests.push([...toolkits]);
+      for (const t of toolkits) {
+        const err = state.toolsError.get(t);
+        state.toolsError.delete(t);
+        if (err) throw err;
+      }
+      return [...toolkits]
+        .sort()
+        .flatMap(
+          (t) =>
+            state.tools.get(t) ?? [
+              {
+                slug: `${t.toUpperCase()}_SEND_EMAIL`,
+                toolkit: t,
+                name: 'Send',
+                description: 'Send an email',
+                inputParameters: {},
+                tags: [],
+              },
+              {
+                slug: `${t.toUpperCase()}_LIST_EMAILS`,
+                toolkit: t,
+                name: 'List',
+                description: 'List emails',
+                inputParameters: {},
+                tags: ['readOnlyHint'],
+              },
+            ],
+        )
+        .slice(0, state.toolsLimit);
     },
     async toolTags(slug) {
       state.tagLookups.push(slug);

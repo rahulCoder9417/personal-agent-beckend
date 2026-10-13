@@ -1,7 +1,7 @@
 // Starts one real Postgres (embedded binaries) and one Redis for the whole test run.
 // Each test file gets its own database and its own BullMQ key prefix (see test/setup.ts).
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -56,6 +56,9 @@ function keepFailureExitCode(): void {
 export default async function setup(project: TestProject) {
   keepFailureExitCode();
   const dir = mkdtempSync(join(tmpdir(), 'pa-test-'));
+  // As root (a cloud container), embedded-postgres runs Postgres as the `postgres` user, who must
+  // be able to create the data folder here.
+  if (process.getuid?.() === 0) chmodSync(dir, 0o777);
   const pgPort = await freePort();
   const pg = new EmbeddedPostgres({
     databaseDir: join(dir, 'pg'),

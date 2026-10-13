@@ -13,6 +13,7 @@ import {
   chatCounter,
   deleteConversation,
   getConversation,
+  isAutomationsChat,
   renameConversation,
   startConversation,
   type ConversationRow,
@@ -97,10 +98,13 @@ async function webConversation(userId: string, id: string): Promise<Conversation
 
 /**
  * Makes a web conversation the active one: web chat's next message goes there, and the agent
- * continues that conversation's own context. 404 if not this user's; 409 for another channel's.
+ * continues that conversation's own context. 404 if not this user's; 409 for another channel's,
+ * and for the Automations chat, which is never the active one.
  */
 export async function openWebConversation(userId: string, id: string): Promise<ConversationRow> {
   const c = await webConversation(userId, id);
+  if (isAutomationsChat(c))
+    throw conflict('The Automations chat is never the active one. Write in it to continue there');
   if (c.active) return c;
   const opened = await activateConversation(userId, id);
   if (!opened) throw notFound(NOT_FOUND);
@@ -109,23 +113,30 @@ export async function openWebConversation(userId: string, id: string): Promise<C
 
 /**
  * The web conversation a message is written in: the one named (made the active one first if it
- * isn't), or web chat's active one.
+ * isn't), or web chat's active one. The Automations chat is written in where it is: it never
+ * becomes the active one, so the user's next message elsewhere does not go into it.
  */
 export async function webConversationToWriteIn(
   userId: string,
   conversationId?: string,
 ): Promise<ConversationRow> {
-  return conversationId
-    ? openWebConversation(userId, conversationId)
-    : activeConversation(userId, 'web');
+  if (!conversationId) return activeConversation(userId, 'web');
+  const c = await webConversation(userId, conversationId);
+  return isAutomationsChat(c) ? c : openWebConversation(userId, conversationId);
 }
 
-/** The user renames a conversation (any channel). 404 if not this user's. */
+/**
+ * The user renames a conversation (any channel). 404 if not this user's; 409 for the Automations
+ * chat, which keeps its name (a Telegram copy of a run points to it by that name).
+ */
 export async function renameUserConversation(
   userId: string,
   id: string,
   title: string,
 ): Promise<ConversationRow> {
+  const found = await getConversation(userId, id);
+  if (!found) throw notFound(NOT_FOUND);
+  if (isAutomationsChat(found)) throw conflict('The Automations chat keeps its name');
   const renamed = await renameConversation(userId, id, title);
   if (!renamed) throw notFound(NOT_FOUND);
   return renamed;

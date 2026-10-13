@@ -69,6 +69,7 @@ export const chatRoutes = [
       limit: query.limit ?? 30,
       ...(query.cursor ? { cursor: query.cursor } : {}),
       ...(query.channel ? { channel: query.channel } : {}),
+      ...(query.kind ? { kind: query.kind } : {}),
     });
     return c.json({ items: page.items.map(toApiConversation), nextCursor: page.nextCursor }, 200);
   }),

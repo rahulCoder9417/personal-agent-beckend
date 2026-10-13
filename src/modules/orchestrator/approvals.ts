@@ -11,7 +11,7 @@ import type { InboundMessage } from '../channels/types.ts';
 import { ingestEvent } from '../events/intake.ts';
 import { IGNORED } from '../../worker/ignored.ts';
 import { approvals } from './schema.ts';
-import { runTurn, turnConversationId } from './turn.ts';
+import { runTurn, turnMessageFields } from './turn.ts';
 
 export type Approval = typeof approvals.$inferSelect;
 export const APPROVAL_TTL_MS = 24 * 3600 * 1000;
@@ -72,7 +72,7 @@ export async function requestApproval(input: {
     userId: input.userId,
     sessionKey: input.sessionKey,
     // Asked during a turn: the question belongs to that turn's conversation.
-    conversationId: await turnConversationId(input.userId, input.sessionKey),
+    ...(await turnMessageFields(input.userId, input.sessionKey)),
     text: `Approval needed: ${a.summary}`,
     approvalId: a.id,
     template: 'approval',

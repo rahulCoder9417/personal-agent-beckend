@@ -6,7 +6,7 @@ import { redis } from '../../shared/redis.ts';
 import { alert } from '../admin/alerts.ts';
 import { audit } from '../admin/audit.ts';
 import { getActiveUser } from '../auth/users.ts';
-import { conversationFor } from '../channels/conversations.ts';
+import { conversationFor, isAutomationsChat } from '../channels/conversations.ts';
 import { signedFileUrl } from '../channels/files.ts';
 import { setMessageStatus } from '../channels/messages.ts';
 import { queueOutbound } from '../channels/outbound.ts';
@@ -40,11 +40,16 @@ export interface TurnInput {
   approval?: { id: string; approved: boolean };
   inboundMessageId?: string;
   /**
-   * The conversation the turn belongs to: the inbound message's own, or the one an automation's
-   * runs reply in. Left out (an automation on a chat app) or no longer there: the chat's active
-   * one.
+   * The conversation the turn belongs to: the inbound message's own, or the Automations chat for
+   * an automation's run. Left out or no longer there: the chat's active one (but see
+   * `inAutomationsChat`).
    */
   conversationId?: string;
+  /**
+   * An automation's run: `conversationId` is the Automations chat, and if the user deleted it
+   * meanwhile the run starts a new one. Never the conversation the user has open.
+   */
+  inAutomationsChat?: boolean;
   metadata?: Record<string, unknown>;
 }
 
@@ -150,21 +155,32 @@ export async function turnEngine(userId: string): Promise<RuntimeName | null> {
 
 // --- the conversation of the turn in progress ---------------------------------------------------
 // What the agent sends during a turn belongs to the turn's conversation, also when the user has
-// opened another web conversation meanwhile. The agent's tools only know the chat (the session
-// key), so the worker records the turn's conversation when it delivers it, like the engine above.
+// opened another web conversation meanwhile, and it is saved with the turn's id, so the turn's
+// reply can be found afterwards (an automation copies it to Telegram). The agent's tools only know
+// the chat (the session key), so the worker records the turn when it delivers it, like the engine
+// above.
 
 const turnConversationKey = (userId: string) => `turn-conversation:${userId}`;
+
+/** The turn in progress in a chat, as the agent's tools need it. */
+export interface CurrentTurn {
+  conversationId: string;
+  /** The turn's delivery id. */
+  turnId: string;
+  /** The conversation is the Automations chat (an automation's run, or the user writing there). */
+  inAutomationsChat: boolean;
+}
 
 /** Never fails the turn: without the record a reply goes to the chat's active conversation. */
 async function recordTurnConversation(
   userId: string,
   sessionKey: string,
-  conversationId: string,
+  turn: CurrentTurn,
 ): Promise<void> {
   try {
     await redis().set(
       turnConversationKey(userId),
-      JSON.stringify({ sessionKey, conversationId }),
+      JSON.stringify({ sessionKey, ...turn }),
       'EX',
       TURN_ENGINE_TTL_SECONDS,
     );
@@ -182,6 +198,27 @@ async function clearTurnConversation(userId: string): Promise<void> {
 }
 
 /**
+ * The user's turn in progress, when that turn is in this chat. Null: no turn in progress, another
+ * chat's turn, or not known.
+ */
+export async function currentTurn(userId: string, sessionKey: string): Promise<CurrentTurn | null> {
+  try {
+    const raw = await redis().get(turnConversationKey(userId));
+    if (!raw) return null;
+    const record = JSON.parse(raw) as Partial<CurrentTurn> & { sessionKey?: string };
+    if (record.sessionKey !== sessionKey || !record.conversationId) return null;
+    return {
+      conversationId: record.conversationId,
+      turnId: record.turnId ?? '',
+      inAutomationsChat: record.inAutomationsChat === true,
+    };
+  } catch (err) {
+    logger().warn({ userId, err: String(err) }, 'conversation of the turn not readable');
+    return null;
+  }
+}
+
+/**
  * The conversation of the user's turn in progress, when that turn is in this chat. Null: no turn
  * in progress, another chat's turn, or not known.
  */
@@ -189,15 +226,25 @@ export async function turnConversationId(
   userId: string,
   sessionKey: string,
 ): Promise<string | null> {
-  try {
-    const raw = await redis().get(turnConversationKey(userId));
-    if (!raw) return null;
-    const record = JSON.parse(raw) as { sessionKey?: string; conversationId?: string };
-    return record.sessionKey === sessionKey && record.conversationId ? record.conversationId : null;
-  } catch (err) {
-    logger().warn({ userId, err: String(err) }, 'conversation of the turn not readable');
-    return null;
-  }
+  return (await currentTurn(userId, sessionKey))?.conversationId ?? null;
+}
+
+/**
+ * What a message the agent sends to `sessionKey` is saved with: the conversation of the turn in
+ * progress in that chat, the turn's id, and whether that is the Automations chat. Empty when no
+ * turn of that chat is in progress (the chat's active conversation then).
+ */
+export async function turnMessageFields(
+  userId: string,
+  sessionKey: string,
+): Promise<{ conversationId: string | null; turnId?: string; inAutomationsChat?: boolean }> {
+  const turn = await currentTurn(userId, sessionKey);
+  if (!turn) return { conversationId: null };
+  return {
+    conversationId: turn.conversationId,
+    ...(turn.turnId ? { turnId: turn.turnId } : {}),
+    ...(turn.inAutomationsChat ? { inAutomationsChat: true } : {}),
+  };
 }
 
 /** A progress line is short; anything longer is cut. */
@@ -274,21 +321,34 @@ async function publishDraft(
   }
 }
 
+/**
+ * Where what the platform itself says during a turn goes (out of credits, the turn failed): the
+ * turn's conversation, saved with the turn's id, like the agent's own reply.
+ */
+const turnSays = (input: TurnInput) => ({
+  sessionKey: input.sessionKey,
+  conversationId: input.conversationId ?? null,
+  turnId: input.deliveryId,
+  inAutomationsChat: input.inAutomationsChat === true,
+});
+
 export async function runTurn(given: TurnInput): Promise<TurnOutcome> {
   const { userId } = given;
   const log = logger().child({ userId, deliveryId: given.deliveryId });
-  // The turn's conversation: the message's own, else the chat's active one. Everything the turn
-  // saves and everything the agent is given comes from this one conversation.
-  const conversation = await conversationFor(userId, given.sessionKey, given.conversationId);
-  const input: TurnInput = { ...given, conversationId: conversation.id };
+  // The turn's conversation: the message's own (or the Automations chat), else the chat's active
+  // one. Everything the turn saves and everything the agent is given comes from this conversation.
+  const conversation = await conversationFor(userId, given.sessionKey, given.conversationId, {
+    automations: given.inAutomationsChat === true,
+  });
+  const input: TurnInput = {
+    ...given,
+    conversationId: conversation.id,
+    inAutomationsChat: isAutomationsChat(conversation),
+  };
+  const said = turnSays(input);
 
   if (!(await hooks.hasCredits(userId))) {
-    await queueOutbound({
-      userId,
-      sessionKey: input.sessionKey,
-      conversationId: conversation.id,
-      text: outOfCreditsText(input.channel),
-    });
+    await queueOutbound({ userId, ...said, text: outOfCreditsText(input.channel) });
     if (input.inboundMessageId) await setMessageStatus(input.inboundMessageId, 'delivered');
     return 'out_of_credits';
   }
@@ -299,12 +359,7 @@ export async function runTurn(given: TurnInput): Promise<TurnOutcome> {
     return 'spam';
   }
   if (decision.kind === 'simple') {
-    await queueOutbound({
-      userId,
-      sessionKey: input.sessionKey,
-      conversationId: conversation.id,
-      text: decision.reply,
-    });
+    await queueOutbound({ userId, ...said, text: decision.reply });
     if (input.inboundMessageId) await setMessageStatus(input.inboundMessageId, 'delivered');
     await hooks.afterTurn(userId, 'simple');
     return 'simple';
@@ -349,7 +404,11 @@ export async function runTurn(given: TurnInput): Promise<TurnOutcome> {
   // From here until the turn ends, read_page knows which engine is calling it (HLD 5.1), and what
   // the agent sends to this chat is saved in the turn's conversation.
   await recordTurnEngine(userId, engine);
-  await recordTurnConversation(userId, input.sessionKey, conversation.id);
+  await recordTurnConversation(userId, input.sessionKey, {
+    conversationId: conversation.id,
+    turnId: input.deliveryId,
+    inAutomationsChat: input.inAutomationsChat === true,
+  });
   const outcome = await deliverTurn(input, { text, apps: decision.apps, metadata, log }).finally(
     () => Promise.all([clearTurnEngine(userId), clearTurnConversation(userId)]),
   );
@@ -455,12 +514,7 @@ async function deliverTurn(
           // The user is told first. The refund is a job of its own (retried, given once): it
           // never holds back the reply or the message's last state.
           const endedAt = new Date();
-          await queueOutbound({
-            userId,
-            sessionKey: input.sessionKey,
-            conversationId: input.conversationId,
-            text: PLATFORM_FAULT_TEXT,
-          });
+          await queueOutbound({ userId, ...turnSays(input), text: PLATFORM_FAULT_TEXT });
           await refundFailedTurn(userId, {
             startedAt,
             endedAt,
@@ -469,16 +523,14 @@ async function deliverTurn(
         } else {
           await queueOutbound({
             userId,
-            sessionKey: input.sessionKey,
-            conversationId: input.conversationId,
+            ...turnSays(input),
             text: `I couldn't finish that: ${ev.message}`,
           });
           // Claude Code whose sign-in stopped working: forget it, Hermes answers next time.
           if (await fallBackIfClaudeSignedOut(userId)) {
             await queueOutbound({
               userId,
-              sessionKey: input.sessionKey,
-              conversationId: input.conversationId,
+              ...turnSays(input),
               text: `Your Claude plan is no longer connected, so I've switched back to the standard agent. Reconnect it at ${config().WEB_APP_URL}/settings/ai`,
             });
           }

@@ -1363,6 +1363,16 @@ export interface components {
             slug: string;
             /** @example Gmail */
             name: string;
+            /**
+             * @description The company whose sign-in screen the user sees when connecting ("Continue to Google").
+             * @example Google
+             */
+            provider: string;
+            /**
+             * @description In plain words, what the agent can do with the app once it is connected. One sentence.
+             * @example Read and search your email, write drafts and send email for you.
+             */
+            description: string;
             /** Format: uri */
             iconUrl?: string | null;
             /**

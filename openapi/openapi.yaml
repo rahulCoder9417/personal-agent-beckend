@@ -561,6 +561,12 @@ paths:
       operationId: connectApp
       tags: [apps]
       summary: Start connecting an app (returns the provider login URL)
+      description: |
+        `redirectUrl` is the provider's own sign-in page when the app is set up with our own sign-in
+        app at the provider, and Composio's connect page otherwise. After signing in, the browser
+        comes back to `returnUrl` (default: the web app's `/apps?connected=<appSlug>`) with
+        `status=success` or `status=failed` added by Composio. Only the app list says for sure that
+        the connection is active.
       parameters:
         - name: appSlug
           in: path
@@ -591,6 +597,11 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/PlanLimit" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "503":
+          description: Composio could not be reached. Nothing was saved. Retry later
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /v1/connections/{connectionId}:
     delete:

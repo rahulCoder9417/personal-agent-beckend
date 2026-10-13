@@ -17,7 +17,7 @@ export const appRoutes = [
 
   route('connectApp', async (c, { params, body }) => {
     const user = c.get('user');
-    const redirectUrl = await startConnect(user.id, user.plan, params.appSlug, body?.returnUrl);
+    const { redirectUrl } = await startConnect(user.id, user.plan, params.appSlug, body?.returnUrl);
     return c.json({ redirectUrl }, 200);
   }),
 

@@ -4,7 +4,7 @@ import { Code, ConnectError } from '@connectrpc/connect';
 import { setLiteLLMClient } from '../src/modules/billing/litellm.ts';
 import { sha256Hex } from '../src/shared/crypto.ts';
 import { setTelegramApi } from '../src/modules/channels/adapters/telegram.ts';
-import type { ComposioAccount } from '../src/modules/integrations/composio.ts';
+import type { AuthConfigInfo, ComposioAccount } from '../src/modules/integrations/composio.ts';
 import { setVmClient, type VmClient } from '../src/modules/orchestrator/vm.ts';
 import { AgentRuntime, DeliverEventType, SandboxState } from '../proto-gen/vm/v1/vm_pb.ts';
 import { testApp } from './helpers.ts';
@@ -343,14 +343,54 @@ export async function installFakeComposio() {
     executeFailure: null as string | Error | null,
     /** The next createTrigger throws this (used once). */
     triggerError: null as Error | null,
+    /**
+     * What Composio says about each setup (auth config). One not listed here is Composio's
+     * shared sign-in, as the real setups made in the dashboard are by default.
+     */
+    authConfigs: new Map<string, AuthConfigInfo>(),
+    /** authConfig calls, by id. */
+    authConfigLookups: [] as string[],
+    /** The next authConfig call fails with this (used once). */
+    authConfigError: null as Error | null,
+    /** Every sign-in started: the way it went and the page to come back to. */
+    signIns: [] as Array<{
+      kind: 'link' | 'direct';
+      userId: string;
+      authConfigId: string;
+      authScheme?: string;
+      callbackUrl: string;
+    }>,
+    /** The next connectDirect / connectLink fails with this (used once). */
+    directError: null as Error | null,
+    linkError: null as Error | null,
   };
   let n = 0;
+  const once = <K extends 'authConfigError' | 'directError' | 'linkError'>(key: K) => {
+    const err = state[key];
+    state[key] = null;
+    if (err) throw err;
+  };
   setComposioApi({
-    async connectLink(userId, authConfigId) {
+    async connectLink(userId, authConfigId, callbackUrl) {
+      once('linkError');
+      state.signIns.push({ kind: 'link', userId, authConfigId, callbackUrl });
       return {
         accountId: `ca_${userId}_${authConfigId}_${n++}`,
         redirectUrl: `https://composio.test/connect/${authConfigId}`,
       };
+    },
+    async connectDirect(userId, authConfigId, authScheme, callbackUrl) {
+      once('directError');
+      state.signIns.push({ kind: 'direct', userId, authConfigId, authScheme, callbackUrl });
+      return {
+        accountId: `ca_${userId}_${authConfigId}_${n++}`,
+        redirectUrl: `https://provider.test/oauth/authorize?config=${authConfigId}`,
+      };
+    },
+    async authConfig(authConfigId) {
+      state.authConfigLookups.push(authConfigId);
+      once('authConfigError');
+      return state.authConfigs.get(authConfigId) ?? { composioManaged: true, authScheme: 'OAUTH2' };
     },
     async listAccounts(userId) {
       state.accountLookups.push(userId);

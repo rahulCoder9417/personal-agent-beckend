@@ -87,6 +87,33 @@ describe('contract: system + me', () => {
       400,
     );
   });
+
+  it('timezoneSet: false until a time zone is given, then true; a name alone or a bad zone leaves it', async () => {
+    const u = await createUser();
+    const me = (body?: unknown) =>
+      body === undefined
+        ? call('/v1/me', { token: u.token })
+        : call('/v1/me', { method: 'PATCH', token: u.token, body });
+    type Me = { timezone: string; timezoneSet: boolean };
+    expect(await expectContract<Me>('getMe', await me(), 200)).toMatchObject({
+      timezone: 'UTC',
+      timezoneSet: false,
+    });
+    expect(await expectContract<Me>('updateMe', await me({ name: 'Asha' }), 200)).toMatchObject({
+      timezoneSet: false,
+    });
+    await expectContract('updateMe', await me({ timezone: 'Mars/Base' }), 400);
+    expect(await expectContract<Me>('getMe', await me(), 200)).toMatchObject({
+      timezoneSet: false,
+    });
+    // The same zone as the default still counts: someone chose it.
+    expect(await expectContract<Me>('updateMe', await me({ timezone: 'UTC' }), 200)).toMatchObject(
+      { timezone: 'UTC', timezoneSet: true },
+    );
+    expect(
+      await expectContract<Me>('updateMe', await me({ timezone: 'Asia/Kolkata' }), 200),
+    ).toMatchObject({ timezone: 'Asia/Kolkata', timezoneSet: true });
+  });
 });
 
 describe('Bull Board', () => {

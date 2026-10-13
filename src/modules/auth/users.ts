@@ -97,11 +97,16 @@ export async function markUserDeleted(clerkId: string): Promise<User | undefined
   return row;
 }
 
+/** A time zone given here counts as set: the web app never replaces it with the browser's. */
 export async function updateProfile(
   userId: string,
   patch: { name?: string; timezone?: string },
 ): Promise<User> {
-  const [row] = await db().update(users).set(patch).where(eq(users.id, userId)).returning();
+  const [row] = await db()
+    .update(users)
+    .set({ ...patch, ...(patch.timezone !== undefined ? { timezoneSet: true } : {}) })
+    .where(eq(users.id, userId))
+    .returning();
   return row!;
 }
 

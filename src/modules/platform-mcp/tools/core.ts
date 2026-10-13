@@ -6,7 +6,7 @@ import { ownsChat } from '../../auth/links.ts';
 import { lastInboundSession } from '../../channels/messages.ts';
 import { queueOutbound } from '../../channels/outbound.ts';
 import { parseSessionKey } from '../../channels/types.ts';
-import { turnConversationId } from '../../orchestrator/turn.ts';
+import { turnMessageFields } from '../../orchestrator/turn.ts';
 import { defineTool, ToolError } from '../registry.ts';
 
 /** Where the agent's messages may go: only this user's own sessions. */
@@ -45,8 +45,8 @@ defineTool({
       userId,
       sessionKey,
       text: args.text,
-      // Sent during a turn in this chat: it belongs to the turn's conversation.
-      conversationId: await turnConversationId(userId, sessionKey),
+      // Sent during a turn in this chat: it belongs to the turn's conversation, with the turn's id.
+      ...(await turnMessageFields(userId, sessionKey)),
     });
     // During a crew job's turn this is the lead's final answer: the job's report.
     await recordCrewJobReport(userId, sessionKey, args.text);

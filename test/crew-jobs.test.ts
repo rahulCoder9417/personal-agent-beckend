@@ -7,6 +7,7 @@ import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DeliverKind } from '../proto-gen/vm/v1/vm_pb.ts';
 import { channelLinks } from '../src/modules/auth/schema.ts';
+import type { toApiCrewJob } from '../src/modules/automations/crew-jobs.ts';
 import {
   checkBrief,
   CrewJobError,
@@ -44,7 +45,7 @@ const REVIEW = 'GITHUB_CREATE_A_REVIEW_FOR_A_PULL_REQUEST';
 const ISSUE_COMMENT = 'GITHUB_CREATE_AN_ISSUE_COMMENT';
 const NEEDS_APPROVAL = /needs the user's approval/;
 
-type ApiJob = ReturnType<typeof import('../src/modules/automations/crew-jobs.ts').toApiCrewJob>;
+type ApiJob = ReturnType<typeof toApiCrewJob>;
 
 let workers: Worker[] = [];
 let vmFake: ReturnType<typeof installFakeVm>;

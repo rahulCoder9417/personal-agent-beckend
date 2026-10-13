@@ -22,6 +22,13 @@ export type MediaRef = {
 const CHANNELS = ['whatsapp', 'telegram', 'imessage', 'web'] as const;
 
 /**
+ * `chat`: a conversation of a chat. `automations`: the Automations chat, where every run of every
+ * automation answers (one per user, in web chat, never the active one).
+ */
+export const CONVERSATION_KINDS = ['chat', 'automations'] as const;
+export type ConversationKind = (typeof CONVERSATION_KINDS)[number];
+
+/**
  * A chat is one channel thread, named by its session key (`web`, `telegram:<chat id>`). This is
  * the chat's counter: `epoch` is the highest conversation number given out in it so far, and it
  * only goes up, so a number is never used again (not even after its conversation is deleted: the
@@ -53,6 +60,11 @@ export const conversations = pgTable(
     userId: text().notNull(),
     sessionKey: text().notNull(),
     channel: text({ enum: CHANNELS }).notNull(),
+    /**
+     * `automations`: the user's Automations chat. A web conversation with a number of its own in
+     * web chat (so the agent keeps its own context), titled "Automations", never the active one.
+     */
+    kind: text({ enum: CONVERSATION_KINDS }).notNull().default('chat'),
     epoch: integer().notNull(),
     /** The user's name for it, else the first incoming message's text, cut. Null: "New chat". */
     title: text(),
@@ -68,6 +80,9 @@ export const conversations = pgTable(
     uniqueIndex('conversations_one_active_per_chat')
       .on(t.userId, t.sessionKey)
       .where(sql`${t.active}`),
+    uniqueIndex('conversations_one_automations_chat')
+      .on(t.userId)
+      .where(sql`${t.kind} = 'automations'`),
     index().on(t.userId, t.lastMessageAt, t.id),
   ],
 );
@@ -88,6 +103,10 @@ export const messages = pgTable(
     status: text({ enum: ['queued', 'processing', 'sent', 'delivered', 'read', 'failed'] })
       .notNull()
       .default('queued'),
+    /**
+     * Incoming: the event it came with, which is also its turn's delivery id. Outgoing: the turn
+     * it was written in (its delivery id), when it was written during one.
+     */
     eventId: text(),
     approvalId: text(),
     /** Web idempotency key. */
@@ -96,12 +115,22 @@ export const messages = pgTable(
     externalId: text(),
     /** Where outbound messages go, e.g. telegram chat id. */
     sessionKey: text(),
+    /**
+     * A copy, sent to a chat app, of a message kept in another conversation: that message's id.
+     * An automation made in a Telegram chat answers in the Automations chat, and its answer is
+     * also sent to the Telegram chat this way. A copy is shown with its chat's messages, but it is
+     * never part of the agent's context there (the recap, the router). One copy per message.
+     */
+    copyOf: text(),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index().on(t.userId, t.id),
     index().on(t.conversationId, t.id),
     uniqueIndex().on(t.userId, t.clientMessageId),
+    uniqueIndex().on(t.userId, t.copyOf),
+    /** A turn's messages (its reply is found by the turn's id). */
+    index().on(t.userId, t.eventId),
     index().on(t.channel, t.externalId),
   ],
 );

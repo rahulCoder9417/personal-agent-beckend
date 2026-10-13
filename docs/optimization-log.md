@@ -60,6 +60,73 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 4. The log
 
+### 13 October 2026: our own connect screen, straight to Google or GitHub, and more apps
+
+- **Where it is:** on `main` since 13 October (backend and web app). The backend part reaches the server with `deploy.sh`.
+- **Why:** connecting an app showed Composio's logo and name. Only Gmail and GitHub could be connected.
+- **What the user notices:**
+  - Before any sign-in page, a Textcrew screen shows Tex and the app, says in plain words what Tex will be able to do with it, and gives the rules for approvals, credits and the sign-in. It then offers "Continue to Google" (or GitHub, and so on), or Cancel. It is used for Connect, Add account and Reconnect on the Apps page, and in onboarding.
+  - Back from the sign-in, the page and the Apps screen say clearly "connected" or "didn't connect".
+  - More apps can be connected once you switch them on (see "Still open").
+- **Backend:**
+  - **Our own sign-in app:** when an app's Composio setup uses our own sign-in app (a Google or GitHub app registered by us), the user now goes straight to Google's or GitHub's own page, with no Composio page on the way. Composio's shared sign-in still goes through Composio's page: Composio forces that since July.
+  - **More apps:** a new setting, `COMPOSIO_MANAGED_APPS`, lets the server make an app's Composio setup by itself the first time someone connects it. It is off until you turn it on. The setups it makes are kept in a new table.
+  - **The way back:** a new address, `api.textcrew.in/oauth/callback`, can carry users back from a sign-in through our own domain. It only forwards to Composio and saves nothing.
+  - **Fixes on the way:**
+    - The address users return to after a sign-in must now be exactly our web app. Before, any address that only started with it was accepted, which a bad link could misuse.
+    - A second account of the same app now works.
+    - Composio failing during a connect is now a clear "try again" (503) instead of a server error.
+- **Cost and speed:** no change for apps that already work. Apps on Composio's shared sign-in count against Composio's smaller free limits.
+- **Contracts:** `openapi.yaml` gained two fields on each app (whose sign-in comes next, and what Tex can do with it), a 503 answer on connect, and the `/oauth/callback` address. The web app follows. `vm.proto` did not change.
+- **Database:** a new table, `composio_auth_configs`, for the app setups the server made itself.
+- **How it was checked:**
+  - 22 new backend tests, with Composio stood in for: there is no Composio key on the cloud machine.
+  - Backend, web app and demo walk-through checks pass.
+  - Nothing has run against the real Composio yet.
+- **Still open, your steps** (written out in `composio.md`, sections 8 and 9):
+  1. **More apps:** set `COMPOSIO_MANAGED_APPS=all` in the server's `beckend/.env`, then restart the api and the worker.
+  2. **Our logo on Composio's page:** in Composio's dashboard, Project Settings → White Labeling → Branding, set the title "Textcrew" and our logo.
+  3. **No Composio at all for GitHub:**
+     - Register our own GitHub sign-in app. GitHub needs no review.
+     - Make a Composio setup that uses it.
+     - Put its id under `github` in `COMPOSIO_AUTH_CONFIGS`, then restart.
+  4. **Gmail the same way** needs Google's review and a yearly outside security check, six weeks or more. Until then Google shows an "unverified app" warning and allows at most 100 users.
+  5. **Existing users** keep the old setup until they disconnect and reconnect.
+- **Docs updated:** `composio.md` (new sections 8 and 9), `backend-report.md` (sections 2, 14, 40, 41, 42 and 44), `hld-mvp.md` (sections 10 and 12), the web app's README.
+- **Commits:** backend `51c80a6`, `15fc42c`, `36cdf6f`, `292726c`, `202afa3`; web app `a0ccb19`, `0d6d0af`, `80edc3d`, `1e62789`, `3633019`.
+
+### 13 October 2026: a calmer Settings screen and our own dropdowns
+
+- **Where it is:** on `main` since 13 October. The web app only.
+- **Why:** Settings was crowded, and the browser's own dropdowns looked poor and out of place.
+- **What the user notices:**
+  - Settings reads top to bottom in one column of grouped cards. Each setting has its name and a line of help on the left and its control on the right; on a phone the control goes underneath.
+  - On a laptop, a menu of the sections sits on the left. On smaller screens there is a tab strip.
+  - "Agent & AI" is split into two groups:
+    - **Engine:** the choice of agent, plus Claude Code's model and effort.
+    - **AI access:** your API key, your Claude plan and Textcrew AI.
+
+    The rules that decide which AI runs are folded away under "How it's decided".
+  - Every dropdown in the app looks like the rest of the app and works with the keyboard. On a phone, a list opens as a sheet from the bottom with big rows.
+  - The time zone can be found by typing a city or an offset such as "5:30".
+- **Backend:** no change.
+- **vm-manager:** no change.
+- **Cost and speed:** none. No new library.
+- **Contracts:** none.
+- **Database:** none.
+- **How it was checked:**
+  - New tests cover the dropdowns' keys, search and placement, and every Settings group drawn from the demo data.
+  - The screens were driven in a real browser at phone, laptop and desktop widths.
+  - All web app checks pass.
+- **Still open:**
+  - The app has no dark theme yet.
+  - Nobody has tried the dropdowns on a real phone or with a screen reader.
+  - **Two choices you may want to change:**
+    - The section menu only appears from 1280 pixels wide, because below that it squeezed the Credits table.
+    - Pressing Tab closes a list without choosing, because on Agent & AI a choice saves at once.
+- **Docs updated:** the web app's README (the "Width" rule now makes Settings the exception, plus new sections on Settings and the dropdowns).
+- **Commits:** web app `628b476`, `b6ad656`, `be4c02e`, `bff7d94`, `a713f67`, `e7101da`, `6f667e3`, `ea091a3`, `88b0f53`, `b99ca3f`, merged in `0cdd79c`.
+
 ### 13 October 2026: side panels that fold away, each with a close button
 
 - **Where it is:** on `main` since 13 October. The web app only, so it reaches app.textcrew.in when Vercel builds `main`.

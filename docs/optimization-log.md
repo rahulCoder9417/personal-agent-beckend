@@ -62,6 +62,36 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 4. The log
 
+### 13 October 2026: a separate Automations chat for every automation
+
+- **Where it is:** on `main` since 13 October, in the backend. It reaches the server with `deploy.sh`.
+- **Why:** you decided that automation results should not mix into the user's normal chats at all: "we can have a separate automation chat channel". Until now a run in web chat answered in the conversation the automation was made in (or one named after it), and a Telegram run answered in the chat's current conversation.
+- **What the user notices:**
+  - Every run answers in one conversation of its own, the Automations chat: reminders, repeating automations, app events, pull-request review verdicts, and the notices "out of credits" and "paused after 3 failures". Wherever the automation was made.
+  - The Automations chat is never made the active conversation, so the user's next message never goes into it by accident. The user can open it and write there; the agent then answers with the runs in mind.
+  - An automation made on Telegram still reaches Telegram: a copy of each answer arrives there, with the automation's name on the first line ("⏰ Daily open PRs and issues") and, on the last line, that the follow-up happens in the Automations chat of the web app, with a link that opens it.
+  - The Automations chat keeps its name. If the user deletes it, the next run starts a new one.
+- **Backend:**
+  - **The Automations chat:** a conversation of its own kind, one per user, in web chat with a number of its own, so the agent keeps a separate context for it. It is started when the user makes an automation and has none, or at the next run. Two runs at the same moment start one between them.
+  - **Writing in it:** a message sent into it does not make it active. Renaming it, or making it active, is refused.
+  - **The copy on Telegram:** after a run, the worker finds the run's reply (every message written during a turn now carries the turn's id) and sends a copy to the Telegram chat the automation was made in. The copy is saved in that chat's current conversation, marked as a copy, and is left out of everything that gives the agent context there (the router and the recap). A message is copied once, so a job that runs again sends no second copy. No copy goes to a chat that is unlinked, blocked or switched off.
+  - **If the user deletes the Automations chat during a run,** the run's answer starts a new one; it never falls back to the conversation the user has open.
+  - **The agent is told** where the runs of an automation it makes will answer, so it can say so.
+  - This morning's conversation per automation is gone. The conversations it made stay as ordinary chats.
+- **Cost and speed:** no extra AI cost. One more database lookup per run, and one more short message to Telegram for an automation made there. Not measured.
+- **Contracts:** `openapi.yaml` gained a `kind` on each conversation (`chat` or `automations`) and a `kind` filter on the conversation list, and says that renaming or activating the Automations chat answers 409. Only additions. `vm.proto` did not change.
+- **Database:** one migration that only adds: the kind of a conversation (at most one Automations chat per user), and on a message the message it copies (usable once) and an index to find a turn's messages. The automation's conversation column from this morning stays, unused, so a server still on the older code during a deploy keeps working; a later change can drop it.
+- **How it was checked:**
+  - New and changed backend tests: runs from automations made in web chat, on Telegram and from the web app all answer in the one Automations chat; it is never made active and the next message goes where it went before; a deleted one is started again with a new number; two runs at once start one; the user's message there continues its context; renaming and activating it are refused; the Telegram copy is sent once, also when the job runs again, and is not in the Telegram conversation's context; no copy to an unlinked chat; pull-request verdicts and both notices go there.
+  - Lint and the type check pass. 629 of 630 backend tests pass; the one failure is the Hindi title test, which already failed before.
+  - Not yet on the server.
+- **Still open:**
+  - No real run has gone through it on the server, on Telegram or with a real model.
+  - A user who answers a run's copy on Telegram reaches an agent without the run in mind. Your decision: leave it, or later carry such an answer into the Automations chat (`hld-mvp.md`, section 12).
+  - The unused column `automations.conversation_id` can be dropped in a later change.
+- **Docs updated:** `backend-report.md` sections 8, 9, 10, 12, 13, 18, 19, 20, 26, 40, 41, 43 and 44; `hld-mvp.md` sections 5.4, 5.5 and 12.
+- **Commits:** backend `9d41814`, `cd73229`, `2ad3ace`, `8211146`, `69d294e`.
+
 ### 13 October 2026: proper jobs for Patch and Byte
 
 - **Where it is:** on `main` since 13 October, in the backend and the vm-manager. It reaches the server with `deploy.sh`.
@@ -137,7 +167,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 - **Database:** two new columns: whether the user's time zone was ever set, and the automation's conversation. Every account whose time zone is not UTC was marked as set.
 - **How it was checked:** 14 new backend tests; all backend checks pass. Not yet on the server.
 - **Still open:**
-  - **Replaced next:** you chose a separate Automations chat for every run (13 October). That change gets its own entry when it is done.
+  - **Replaced:** you chose a separate Automations chat for every run (13 October). See the entry "a separate Automations chat for every automation", above.
   - The container's own clock stays on UTC. Automations use the account's time zone, so this does not change when they run.
   - Someone who chose UTC in Settings before this change gets the browser's time zone once.
 - **Docs updated:** `backend-report.md` sections 8, 18, 19, 40, 41 and 44; `hld-mvp.md` sections 5.4 and 12.

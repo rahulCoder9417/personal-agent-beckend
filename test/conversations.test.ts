@@ -390,9 +390,9 @@ describe('each conversation has its own context', () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const quick = vm.state.agent;
-    vm.state.agent = async (d, mcp, progress) => {
+    vm.state.agent = async (d, mcp, progress, draft) => {
       if (d.text.endsWith('slow question')) await gate;
-      await quick(d, mcp, progress);
+      await quick(d, mcp, progress, draft);
     };
     const slow = await sendWebMessage(user.id, {
       text: 'slow question',

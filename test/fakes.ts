@@ -23,12 +23,15 @@ export interface Delivery {
 
 /**
  * What the fake "agent" does with a delivered message. Default: echo it back via send_message.
- * `progress` reports a progress line, as the Bridge does (a WORKING event).
+ * `progress` reports a progress line, as the Bridge does (a WORKING event). `draft` reports the
+ * whole draft of the answer so far (a TEXT_DELTA event), as the Bridge does when the delivery's
+ * metadata has `stream_text: true`.
  */
 export type AgentBehaviour = (
   d: Delivery,
   mcp: (tool: string, args: Record<string, unknown>) => Promise<McpResult>,
   progress: (text: string) => void,
+  draft: (text: string) => void,
 ) => Promise<void>;
 
 export interface McpResult {
@@ -100,6 +103,11 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
     usage: new Map<string, { awakeSeconds: bigint; browserSeconds: bigint }>(),
     /** StopSandbox fails with this while it is set (e.g. a polite stop refused mid-turn). */
     stopError: null as Error | null,
+    /**
+     * Progress lines and drafts are streamed while the agent works, like the real Bridge (so a
+     * draft comes before the answer's send_message). Off: they come after the agent is done.
+     */
+    live: false,
   };
   // Agent runtime + the in-container Claude Code sign-in (the code Anthropic shows the user).
   const runtimes = new Map<string, AgentRuntime>();
@@ -156,14 +164,35 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
         yield { type: DeliverEventType.ERROR, ...failure };
         return;
       }
-      const lines: string[] = [];
-      await state.agent(
-        req,
-        (tool, args) => mcpCall(token, tool, args),
-        (text) => void lines.push(text),
-      );
-      for (const message of lines)
-        yield { type: DeliverEventType.WORKING, message, platformFault: false };
+      type Ev = { type: DeliverEventType; message: string; platformFault: boolean };
+      const lines: Ev[] = [];
+      let wake: (() => void) | undefined;
+      let finished = false;
+      const add = (type: DeliverEventType) => (message: string) => {
+        lines.push({ type, message, platformFault: false });
+        wake?.();
+      };
+      const run = state
+        .agent(
+          req,
+          (tool, args) => mcpCall(token, tool, args),
+          add(DeliverEventType.WORKING),
+          add(DeliverEventType.TEXT_DELTA),
+        )
+        .finally(() => {
+          finished = true;
+          wake?.();
+        });
+      if (state.live) {
+        for (;;) {
+          const next = lines.shift();
+          if (next) yield next;
+          else if (finished) break;
+          else await new Promise<void>((r) => (wake = r));
+        }
+      }
+      await run;
+      yield* lines;
       const late = state.turnErrorAfterAgent;
       state.turnErrorAfterAgent = null;
       if (late) {

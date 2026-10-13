@@ -60,6 +60,56 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 4. The log
 
+### 13 October 2026: replies appear in web chat as they are written
+
+- **Where it is:** on `main` since 13 October, in the backend, the vm-manager and the web app. It works only once the server is deployed: the web app on its own shows nothing new.
+- **Why:** web chat showed "Tex is working…" and then the whole answer at once, which felt slow.
+- **What the user notices:**
+  - In web chat, Tex's answer appears a few words at a time, then becomes the normal formatted message.
+  - A sentence Tex writes just before using a tool ("Let me check your calendar.") shows briefly, then "Tex is working" comes back while the tool runs.
+  - Only Tex's own answer streams, not the crew's work.
+  - Telegram is unchanged: it still gets one finished message.
+- **Backend:** for web chat turns only, the worker asks the container for the answer as it is written and passes each version to the web app's live stream. It saves nothing extra: the final answer is saved exactly as before. If a turn fails, the half-written answer is cleared before the apology. A slow connection gets only the latest version.
+- **vm-manager:**
+  - **The Bridge:** about four times a second, it reports the whole text so far of the lead's answer. It reads it from Claude Code's partial messages, or from Hermes's own text events. The text starts over at a new message, a tool call, a crew round or a restarted session. Hermes's "connection dropped, reconnecting" notice is left out.
+  - **The vm-manager:** passes these reports on to the backend.
+- **Cost and speed:** no extra AI cost. A little more traffic inside the server during web chat turns. Not measured.
+- **Contracts:** `vm.proto` gained the event type `TEXT_DELTA` (value 5). `openapi.yaml` gained the live-stream event `message.draft`. Both only add.
+- **Database:** none.
+- **How it was checked:**
+  - New tests in all three repos, and all checks pass.
+  - The real Claude Code program (2.1.296, the version now pinned) ran through the Bridge against a stand-in AI service: the text grew in steps until it equalled the final answer, with none of the model's thinking in it.
+  - The web app's demo mode was checked in a browser: the answer grows, then becomes the formatted message.
+- **Still open:** not yet run on the server, with a real model, or with Hermes itself. Hermes's text events were read in its source code only.
+- **Docs updated:** `hld-mvp.md` sections 5.2 and 12; `backend-report.md` sections 9, 12 and 34; the vm-manager's README and build report (section 15); the web app's README.
+- **Commits:** backend `9d66044`, `252b9d9`, `2e441cd`, `31eac52`, `332cd83`, merged in `6f7b746`; vm-manager `8736533`, `909508d`, `bcc6576`, `4cb3e82`, `4cea44c`, merged in `ed9e2c3`; web app `0536bba`, `c0aa97b`, `6f8584f`, `ae63a23`, merged in `1176fbc`.
+
+### 13 October 2026: automations answer in their own conversation, say when they are late, and use your time zone
+
+- **Where it is:** on `main` since 13 October (backend and web app). The backend part reaches the server with `deploy.sh`.
+- **Why:** on 13 October an "every morning at 9" summary of open pull requests appeared in the middle of an unrelated web chat ("hlo") at 3:01 PM India time. Three things caused it:
+  1. An automation answered in whatever conversation was open at the time.
+  2. Every account was on UTC, so "9 in the morning" meant 2:30 PM in India.
+  3. The run was late because the server had been off, and nothing said so.
+- **What the user notices:**
+  - In web chat, an automation now answers in the conversation it was made in. If there is none, or it was deleted, it answers in a conversation of its own named after the automation. It never answers in the conversation that happens to be open.
+  - A run that starts more than 10 minutes after it was due says so, and says when it was due.
+  - A new account takes the browser's time zone once, so "9 in the morning" means 9 where the user is. A time zone the user chose in Settings is never replaced.
+- **Backend:**
+  - An automation remembers the conversation it was made in.
+  - **Fixed a bug where a missed run could be dropped:** when the worker started, setting an automation's timer again replaced a run that had come due while the worker was off. Such a run now runs late instead of being dropped.
+  - A run rebuilt after the job queue lost its jobs still knows its automation and when it was due.
+- **Cost and speed:** none worth measuring: one more database lookup per run.
+- **Contracts:** `openapi.yaml` gained one field in the account answer (`timezoneSet`). The change only adds a field. `vm.proto` did not change.
+- **Database:** two new columns: whether the user's time zone was ever set, and the automation's conversation. Every account whose time zone is not UTC was marked as set.
+- **How it was checked:** 14 new backend tests, all backend and web app checks pass, and the web app's part was tried in demo mode in a browser. Not yet on the server.
+- **Still open:**
+  - **On Telegram, a run still answers in the chat's current conversation.** On Telegram the user can only write in the latest conversation, so an answer kept anywhere else could not be followed up with its context. Say if you want it the same as web chat.
+  - The container's own clock stays on UTC. Automations use the account's time zone, so this does not change when they run.
+  - Someone who chose UTC in Settings before this change gets the browser's time zone once.
+- **Docs updated:** `backend-report.md` sections 8, 18, 19, 40, 41 and 44; `hld-mvp.md` sections 5.4 and 12; the web app's README.
+- **Commits:** backend `e86c91b`, `bc6f342`, `e6470a1`, `27eb459`, `243fa22`, `61570bb`, merged in `dfff18d` (its database change renumbered to 0017); web app `c6d6864`, `0151bb7`, merged in `76db6ef`.
+
 ### 13 October 2026: our own connect screen, straight to Google or GitHub, and more apps
 
 - **Where it is:** on `main` since 13 October (backend and web app). The backend part reaches the server with `deploy.sh`.

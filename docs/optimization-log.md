@@ -60,6 +60,32 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 4. The log
 
+### 13 October 2026: automations answer in their own conversation, say when they are late, and use your time zone
+
+- **Where it is:** on `main` since 13 October (backend and web app). The backend part reaches the server with `deploy.sh`.
+- **Why:** on 13 October an "every morning at 9" summary of open pull requests appeared in the middle of an unrelated web chat ("hlo") at 3:01 PM India time. Three things caused it:
+  1. An automation answered in whatever conversation was open at the time.
+  2. Every account was on UTC, so "9 in the morning" meant 2:30 PM in India.
+  3. The run was late because the server had been off, and nothing said so.
+- **What the user notices:**
+  - In web chat, an automation now answers in the conversation it was made in. If there is none, or it was deleted, it answers in a conversation of its own named after the automation. It never answers in the conversation that happens to be open.
+  - A run that starts more than 10 minutes after it was due says so, and says when it was due.
+  - A new account takes the browser's time zone once, so "9 in the morning" means 9 where the user is. A time zone the user chose in Settings is never replaced.
+- **Backend:**
+  - An automation remembers the conversation it was made in.
+  - **Fixed a bug where a missed run could be dropped:** when the worker started, setting an automation's timer again replaced a run that had come due while the worker was off. Such a run now runs late instead of being dropped.
+  - A run rebuilt after the job queue lost its jobs still knows its automation and when it was due.
+- **Cost and speed:** none worth measuring: one more database lookup per run.
+- **Contracts:** `openapi.yaml` gained one field in the account answer (`timezoneSet`). The change only adds a field. `vm.proto` did not change.
+- **Database:** two new columns: whether the user's time zone was ever set, and the automation's conversation. Every account whose time zone is not UTC was marked as set.
+- **How it was checked:** 14 new backend tests, all backend and web app checks pass, and the web app's part was tried in demo mode in a browser. Not yet on the server.
+- **Still open:**
+  - **On Telegram, a run still answers in the chat's current conversation.** On Telegram the user can only write in the latest conversation, so an answer kept anywhere else could not be followed up with its context. Say if you want it the same as web chat.
+  - The container's own clock stays on UTC. Automations use the account's time zone, so this does not change when they run.
+  - Someone who chose UTC in Settings before this change gets the browser's time zone once.
+- **Docs updated:** `backend-report.md` sections 8, 18, 19, 40, 41 and 44; `hld-mvp.md` sections 5.4 and 12; the web app's README.
+- **Commits:** backend `e86c91b`, `bc6f342`, `e6470a1`, `27eb459`, `243fa22`, `61570bb`, merged in `dfff18d` (its database change renumbered to 0017); web app `c6d6864`, `0151bb7`, merged in `76db6ef`.
+
 ### 13 October 2026: our own connect screen, straight to Google or GitHub, and more apps
 
 - **Where it is:** on `main` since 13 October (backend and web app). The backend part reaches the server with `deploy.sh`.

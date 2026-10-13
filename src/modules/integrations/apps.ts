@@ -78,33 +78,60 @@ export async function scheduleConnectionCheck(input: {
   return true;
 }
 
+/** Our status for an account Composio describes, or null while it is not finished there. */
+export function statusFromComposio(composioStatus: string): Connection['status'] | null {
+  if (composioStatus === 'ACTIVE') return 'active';
+  if (composioStatus === 'EXPIRED') return 'expired';
+  if (composioStatus === 'FAILED') return 'error';
+  return null;
+}
+
+/** At most this many pending connections of a user are asked about at once: the newest ones. */
+export const REFRESH_AT_MOST = 10;
+
 /**
  * Pending connections finish on the provider's page; this copies their status from Composio.
- * Used when the apps are listed and by the check-connection job. Safe to repeat.
+ * Used when the apps are listed (by the web app or by the agent's tools) and by the
+ * check-connection job. Safe to repeat.
+ *
+ * Composio is asked about each pending connection's own account, by its id. Not the user's whole
+ * list of accounts: Composio answers that in pages, so a user with many accounts (other apps, old
+ * attempts) could have the new one on a later page, and it would stay pending for good.
  */
 export async function refreshPendingConnections(userId: string): Promise<void> {
-  const rows = await listConnections(userId);
-  if (!rows.some((r) => r.status === 'pending')) return;
-  try {
-    const accounts = await composio().listAccounts(userId);
-    for (const acc of accounts) {
-      const status =
-        acc.status === 'ACTIVE'
-          ? 'active'
-          : acc.status === 'EXPIRED'
-            ? 'expired'
-            : acc.status === 'FAILED'
-              ? 'error'
-              : null;
-      if (!status) continue;
-      await db()
-        .update(connections)
-        .set({ status, accountLabel: acc.label })
-        .where(and(eq(connections.userId, userId), eq(connections.composioAccountId, acc.id)));
-    }
-  } catch (err) {
-    logger().warn({ userId, err: String(err) }, 'composio refresh failed');
-  }
+  const pending = (await listConnections(userId))
+    .filter((r) => r.status === 'pending')
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+    .slice(0, REFRESH_AT_MOST);
+  await Promise.all(
+    pending.map(async (row) => {
+      try {
+        const acc = await composio().account(row.composioAccountId);
+        const status = acc ? statusFromComposio(acc.status) : null;
+        if (!acc || !status) return;
+        await db()
+          .update(connections)
+          .set({ status, accountLabel: acc.label ?? row.accountLabel })
+          .where(
+            and(
+              eq(connections.userId, userId),
+              eq(connections.id, row.id),
+              eq(connections.status, 'pending'),
+            ),
+          );
+      } catch (err) {
+        logger().warn(
+          { userId, connectionId: row.id, err: String(err) },
+          'composio refresh failed',
+        );
+      }
+    }),
+  );
+}
+
+/** The web app's Apps page, where the user connects apps. */
+export function appsPageUrl(): string {
+  return `${config().WEB_APP_URL.replace(/\/+$/, '')}/apps`;
 }
 
 // --- Which apps can be connected here, and with which Composio setup ---------------------------
@@ -122,6 +149,19 @@ export function serverMaySetUp(app: CatalogApp): boolean {
   if (!app.managedAuth) return false;
   const allowed = config().COMPOSIO_MANAGED_APPS;
   return allowed === 'all' || allowed.includes(app.slug);
+}
+
+/**
+ * The setup an app connects with today, without making one: from COMPOSIO_AUTH_CONFIGS, or one
+ * the server made itself. For the dev-user script's `apps` command.
+ */
+export async function currentSetupFor(
+  appSlug: string,
+): Promise<{ id: string; source: 'settings' | 'made by the server' } | null> {
+  const named = authConfigFor(appSlug);
+  if (named) return { id: named, source: 'settings' };
+  const stored = (await storedAuthConfigs()).get(appSlug);
+  return stored ? { id: stored, source: 'made by the server' } : null;
 }
 
 /** Setups the server made itself, by app slug. */
@@ -191,7 +231,7 @@ export function signInPath(
  */
 export function connectReturnUrl(appSlug: string, returnUrl?: string): string {
   const web = config().WEB_APP_URL;
-  const fallback = `${web.replace(/\/+$/, '')}/apps?connected=${encodeURIComponent(appSlug)}`;
+  const fallback = `${appsPageUrl()}?connected=${encodeURIComponent(appSlug)}`;
   if (!returnUrl) return fallback;
   try {
     return new URL(returnUrl).origin === new URL(web).origin ? returnUrl : fallback;

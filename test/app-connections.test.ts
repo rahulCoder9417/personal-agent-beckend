@@ -111,7 +111,10 @@ describe('app connections: the server finishes the job itself', () => {
     expect(CONNECTION_CHECK_DELAYS_MS).toEqual([15_000, 30_000, 60_000, 120_000, 240_000, 480_000]);
     expect(await checkJobs(conn.id)).toHaveLength(6);
     expect((await rowsOf(user.id))[0]!.status).toBe('pending'); // left as it is
-    expect(composio.state.accountLookups.filter((id) => id === user.id)).toHaveLength(6);
+    // Each check asks Composio about this connection's own account.
+    expect(composio.state.accountGets.filter((id) => id === conn.composioAccountId)).toHaveLength(
+      6,
+    );
   });
 
   it('a check that finds it later in the series resolves it', async () => {
@@ -164,7 +167,7 @@ describe('app connections: the server finishes the job itself', () => {
     const b = await connecting();
     await disconnect(b.user.id, b.conn.id);
     expect(await runLatestCheck(b.conn.id)).toBe(IGNORED);
-    expect(composio.state.accountLookups).toEqual([]); // Composio wasn't asked either time
+    expect(composio.state.accountGets).toEqual([]); // Composio wasn't asked either time
     expect(await checkJobs(b.conn.id)).toHaveLength(1);
   });
 

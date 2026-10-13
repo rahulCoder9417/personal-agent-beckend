@@ -16,6 +16,8 @@ export interface ComposioAccount {
   toolkit: string;
   status: string;
   label: string | null;
+  /** The setup (auth config) the account was made with, when Composio says. */
+  authConfigId?: string | null;
 }
 
 export interface ComposioTriggerEvent {
@@ -64,7 +66,10 @@ export interface ComposioApi {
    * a new one named `name`. Needs a Composio key that may make setups (the default "full access").
    */
   setUpManagedAuthConfig(toolkit: string, name: string): Promise<{ id: string }>;
+  /** The user's connected accounts. Composio answers in pages: this is the first one only. */
   listAccounts(userId: string): Promise<ComposioAccount[]>;
+  /** One connected account, asked by its id. Null when Composio has no such account. */
+  account(accountId: string): Promise<ComposioAccount | null>;
   deleteAccount(accountId: string): Promise<void>;
   /**
    * The provider OAuth access token of one connected account, or null when Composio doesn't
@@ -72,6 +77,10 @@ export interface ComposioApi {
    * Used only by the git gateway; the token never leaves the api.
    */
   accessToken(accountId: string): Promise<string | null>;
+  /**
+   * The tools of these toolkits, in one request with one limit (200) for all of them. So ask for
+   * one toolkit at a time (`appActionsFor`): GitHub alone has more than 200.
+   */
   listTools(toolkits: string[]): Promise<ComposioTool[]>;
   /** One tool's Composio tags (see `toolTags` below, which caches them). */
   toolTags(slug: string): Promise<string[]>;
@@ -98,6 +107,36 @@ export interface ComposioApi {
     | { kind: 'other'; type: string }
   >;
 }
+
+/**
+ * Which existing setup to reuse for a toolkit: an enabled one with Composio's shared sign-in for
+ * that same toolkit. The list was asked for that toolkit already; the check here makes sure a
+ * setup of another app is never taken, whatever the list holds.
+ */
+export function pickManagedSetup(
+  items: Array<{ id: string; status: string; toolkit?: string | null }>,
+  toolkit: string,
+): string | undefined {
+  return items.find(
+    (ac) => ac.status === 'ENABLED' && ac.toolkit?.toLowerCase() === toolkit.toLowerCase(),
+  )?.id;
+}
+
+type RawAccount = {
+  id: string;
+  status: string;
+  toolkit?: { slug?: string };
+  authConfig?: { id?: string };
+  data?: Record<string, unknown>;
+};
+
+const toAccount = (a: RawAccount): ComposioAccount => ({
+  id: a.id,
+  toolkit: a.toolkit?.slug ?? '',
+  status: a.status,
+  label: (a.data?.email as string | undefined) ?? null,
+  authConfigId: a.authConfig?.id ?? null,
+});
 
 function sdk(): Composio {
   const apiKey = config().COMPOSIO_API_KEY;
@@ -136,8 +175,11 @@ const realApi: ComposioApi = {
   },
   async setUpManagedAuthConfig(toolkit, name) {
     const found = await sdk().authConfigs.list({ toolkit, isComposioManaged: true });
-    const ready = found.items.find((ac) => ac.status === 'ENABLED');
-    if (ready) return { id: ready.id };
+    const ready = pickManagedSetup(
+      found.items.map((ac) => ({ id: ac.id, status: ac.status, toolkit: ac.toolkit?.slug })),
+      toolkit,
+    );
+    if (ready) return { id: ready };
     const made = await sdk().authConfigs.create(toolkit, {
       type: 'use_composio_managed_auth',
       name,
@@ -146,19 +188,18 @@ const realApi: ComposioApi = {
   },
   async listAccounts(userId) {
     const res = (await sdk().connectedAccounts.list({ userIds: [userId] })) as unknown as {
-      items: Array<{
-        id: string;
-        status: string;
-        toolkit?: { slug?: string };
-        data?: Record<string, unknown>;
-      }>;
+      items: RawAccount[];
     };
-    return res.items.map((a) => ({
-      id: a.id,
-      toolkit: a.toolkit?.slug ?? '',
-      status: a.status,
-      label: (a.data?.email as string | undefined) ?? null,
-    }));
+    return res.items.map(toAccount);
+  },
+  async account(accountId) {
+    try {
+      return toAccount((await sdk().connectedAccounts.get(accountId)) as unknown as RawAccount);
+    } catch (err) {
+      const e = err as { status?: number; code?: string };
+      if (e.status === 404 || e.code === 'CONNECTED_ACCOUNT_NOT_FOUND') return null;
+      throw err;
+    }
   },
   async deleteAccount(accountId) {
     await sdk().connectedAccounts.delete(accountId);

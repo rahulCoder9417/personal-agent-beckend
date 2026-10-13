@@ -746,8 +746,8 @@ The Platform MCP is the platform's tool server. MCP is a standard way for an AI 
 | Tool | What it does |
 |---|---|
 | `send_message` | Sends a text to one of the user's own chats |
-| `get_profile` | Returns the user's name, time zone, plan and connected apps |
-| `list_app_actions` | Lists the actions the agent may run in the user's connected apps |
+| `get_profile` | Returns the user's name, time zone, plan, connected apps, and the apps that are not ready yet with what to tell the user |
+| `list_app_actions` | Lists the user's apps with their status, and the actions the agent may run in the connected ones |
 | `run_app_action` | Runs one app action, for example "send an email" |
 | `request_approval` | Asks the user to approve a risky action. Answers "pending" at once |
 | `schedule_reminder` | Saves a reminder for one moment in time |
@@ -791,8 +791,9 @@ Composio is an outside service. It keeps the user's sign-ins to apps such as Gma
   2. the table `composio_auth_configs`, which keeps the setups the server made itself;
   3. the setting `COMPOSIO_MANAGED_APPS`. It names the apps the server may set up by itself, or says `all`. Then the server makes the setup on the first connect, with Composio's shared sign-in, and keeps its id in the table. If the Composio project already has an enabled shared setup for that app, the server uses that one instead of making another.
 - With none of the three, the api answers that the app is not configured yet.
+- When the server reuses a shared setup already in the Composio project, it takes only one that Composio says is for that same app.
 - Exa Search signs in with an API key, not with a sign-in page, so the server never sets it up by itself.
-- The app list says for each app if it can be connected on this server. The field is called `connectable`. It is true when one of the three ways above gives a setup, or would. The web app shows an app that cannot be connected as "Not available yet", with no Connect button. Today the test server has a setup for Gmail and GitHub only, and `COMPOSIO_MANAGED_APPS` is empty.
+- The app list says for each app if it can be connected on this server. The field is called `connectable`. It is true when one of the three ways above gives a setup, or would. The web app shows an app that cannot be connected as "Not available yet", with no Connect button. The test server has setups named for Gmail and GitHub, and since 13 October `COMPOSIO_MANAGED_APPS` is `all`: the server made Google Calendar's setup itself.
 
 ### How a user connects an app
 
@@ -806,27 +807,38 @@ Composio is an outside service. It keeps the user's sign-ins to apps such as Gma
    - If Composio cannot say which kind it is, or the direct link fails, the api uses a Connect Link. It works for every kind.
 6. The api gives Composio our own user id and the page to come back to. That page must be on our web app's own address. Anything else, also an address that only starts the same way, is replaced by the Apps page.
 7. The api saves the connection as `pending` in the table `connections`, and returns the link.
-8. The user signs in on the provider's page and allows access. The platform never sees the password. Composio sends the browser back to the web app and adds `status=success` or `status=failed` to the address. The web app says "Gmail is connected" or "Gmail didn't connect".
+8. The user signs in on the provider's page and allows access. The platform never sees the password. Composio sends the browser back to the web app and adds `status=success` or `status=failed` to the address. The web app says "Gmail is connected" or "Gmail didn't connect". That message comes from Composio's address only: our own record may still say `pending` for a few seconds, until the platform has checked (next part).
 9. A user may connect a second account of the same app ("Add account").
 
 **The way back through our own address.** With our own sign-in app, the provider sends the browser back to Composio's address after the user allows access. To keep our own address there too, the sign-in app's redirect address can be `https://api.textcrew.in/oauth/callback`. The api answers that address with a redirect to Composio's own, with the same query. It saves nothing, adds no job and never writes the query to a log, because it holds a one-time code. `docs/composio.md`, section 9, has the steps.
 
 ### How the platform checks that the connection became active
 
-A connection becomes `active`, `expired` or `error` in one of three ways. The first one to happen wins.
+A connection becomes `active`, `expired` or `error` in one of four ways. The first one to happen wins.
 
-- **Composio's webhook.** A webhook is a message a service sends to our server when something happens. Composio sends one when the status changes.
+- **Composio's webhook.** A webhook is a message a service sends to our server when something happens. Composio sends one when the status changes. The only one Composio documents is "expired".
 - **The app list.** When the web app lists the apps and a connection is still pending, the api asks Composio. With nothing pending it does not ask. So a connection that expires later is learned from Composio's webhook only.
+- **The agent's own look.** When the agent calls `get_profile` or `list_app_actions`, or runs an action of an app that is not active, the api asks Composio about the pending connections first. So an app that just finished connecting can be used in the same turn.
 - **The check job.** The worker asks Composio by itself. The first check runs 15 seconds after the link is made. The next ones come 30 seconds, then 1, 2, 4 and 8 minutes later.
-- That is six checks in about 16 minutes. They stop as soon as the connection is no longer pending. After the last one, the other two ways can still finish it.
+- That is six checks in about 16 minutes. They stop as soon as the connection is no longer pending. After the last one, the other ways can still finish it.
+
+Each way asks Composio about each pending connection by its own account id, the ten newest at most. It used to read the user's whole list of accounts at Composio. Composio gives that list in pages, so for a user with many accounts the new one could be on a later page, and it stayed pending for good.
 
 ### How the agent finds and runs an action
 
 1. The agent calls `list_app_actions`. It can filter by app or by a search word.
-2. The api lists only apps that are connected, active and allowed on the user's plan. Each action carries two marks: whether it needs approval, and whether it costs a credit.
-3. The agent calls `run_app_action` with the action's name and its inputs.
-4. The api checks the app, the credits and the approval (next section).
-5. The api calls Composio with the user id from the container token. The result goes back to the agent.
+2. The answer has two parts. `apps` gives every app the user has a connection for, with its status:
+   - **connected**: active and on the user's plan. Its actions are listed.
+   - **connecting**: a sign-in started less than 20 minutes ago and not finished. The note says "Google Calendar is still connecting", and asks the agent to tell the user it may still be finishing.
+   - **not finished**: a sign-in started longer ago and never finished. The note asks the agent to tell the user to connect it again on the Apps page.
+   - **needs reconnecting**: the connection expired or failed. Same advice.
+   - **not on plan**: connected, but the app is not on the user's plan any more.
+   An active connection of an app wins over any other of the same app. The notes carry the Apps page address, so the agent sends the user there and nowhere else.
+3. `actions` lists the actions of the connected apps, at most 100. The api asks Composio once per app. It used to ask once for all of them, with one limit of 200 tools in all. GitHub alone has more than 200, so it left no room for the next app. That is the most likely reason why, on 13 October, the agent saw only GitHub after the founder connected Google Calendar (not confirmed on the server). Now the 100 places are shared fairly: an app with few actions gets them all, and the rest goes to the big ones. An app that is cut short gets a note: "Showing 97 of its 200 actions", and to ask again with that app and a search word.
+4. Each action carries two marks: whether it needs approval, and whether it costs a credit.
+5. The agent calls `run_app_action` with the action's name and its inputs. For an app that is not ready, the answer is the same note as above, for example "Google Calendar is still connecting".
+6. The api checks the app, the credits and the approval (next section).
+7. The api calls Composio with the user id from the container token. The result goes back to the agent.
 
 **Example.** Rahul texts "what is on my calendar tomorrow". The agent runs a Google Calendar list action. It only reads, so it needs no approval and costs nothing.
 
@@ -844,6 +856,7 @@ A connection becomes `active`, `expired` or `error` in one of three ways. The fi
 - **Composio or the app is down.** The agent is told to try later. Nothing is charged.
 - **Composio is down while a user connects, or will not make a setup** (for example, the Composio key may not make setups). The api answers 503: "Gmail can't be connected right now". Nothing is saved, and the next try asks again.
 - **Two users connect a new app at the same moment.** Each may make a setup at Composio. The first one saved is used by everyone. The other stays unused at Composio, with no connections on it.
+- **The user says an app is connected, but the agent can't see it.** The agent says it may still be finishing, or that it needs connecting again on the Apps page. To see why, run the dev-user script's `apps` command on the server (`docs/composio.md`, section 11). It prints each connection with our status, its Composio account id, what Composio says about it, the setup it was made with, and what the agent sees.
 
 ## 15. Approvals
 
@@ -2139,6 +2152,13 @@ Risky actions never wait inside a turn. The agent asks the platform for approval
 | What it is | An open-source agent | Anthropic's own program, not changed |
 | Whose AI it uses | The platform's models through the gateway, or the user's own API key | The user's own Claude plan |
 | Who pays for the AI | Credits, or the user's own key | The user's Claude plan |
+
+Both engines get the same instructions for the lead each turn, and they open with who the lead is. Each engine has an identity of its own in its own system prompt: Claude Code's says "You are Claude Code". So the lead once sent the founder to "your Claude settings" to connect Google Calendar. The opening now says:
+
+- Tex is the user's own agent in Textcrew.
+- The user connects apps on Textcrew's Apps page, `https://app.textcrew.in/apps`.
+- To see what is connected, use `get_profile` and `list_app_actions`. If an app the user calls connected is missing, it may still be finishing, or it needs connecting again on the Apps page.
+- Never send the user to the settings of Claude or any other product. Never present itself as Claude or Claude Code, and name the engine behind it only when the user asks.
 
 Claude Code runs when the user has connected a Claude plan and chosen it. Hermes runs in the other cases: on the user's own API key, or on credits if the server offers Textcrew AI. A user who chose Textcrew AI gets Hermes on credits, as long as the server offers it. If a Claude plan is the user's only AI, Claude Code runs even when Hermes was chosen. With no AI at all, nothing runs, and the user is told to connect one.
 

@@ -100,9 +100,9 @@ One setup serves all users. Rahul and Priya each have their own connection, and 
    - the setting `COMPOSIO_AUTH_CONFIGS`, where we name a setup ourselves;
    - a list of setups the server made itself earlier, kept in its own database table;
    - the setting `COMPOSIO_MANAGED_APPS`. An app named there, or every app when it says `all`, gets its setup made by the server on its first connect.
-3. Today `COMPOSIO_AUTH_CONFIGS` holds two ids, Gmail and GitHub, and `COMPOSIO_MANAGED_APPS` is empty. For the other 23 apps the web app shows "Not available yet" and no Connect button.
+3. `COMPOSIO_AUTH_CONFIGS` holds two ids, Gmail and GitHub. Since 13 October `COMPOSIO_MANAGED_APPS` is `all` on the test server, so every app but Exa Search has a Connect button, and the server makes each app's setup on its first connect. It made Google Calendar's that day.
 
-Nothing is broken. Nobody has made those 23 setups yet. Section 8 shows how to switch them on.
+Without that setting, an app with no setup shows "Not available yet" and no Connect button. Nothing is broken then: nobody has made its setup yet. Section 8 shows how to switch them on.
 
 ---
 
@@ -120,12 +120,16 @@ Example: Rahul connects Gmail.
 6. Our server saves the connection as "pending" and gives the link to the browser.
 7. Rahul signs in on Google's page and clicks **Allow**. With Composio's shared sign-in, Google's screen says that Composio wants access. With our own sign-in app, it says Textcrew.
 8. Google gives the token to Composio. Composio keeps it.
-9. The browser goes back to the web app. Composio adds `status=success` or `status=failed` to the address. The web app says "Gmail is connected", or "Gmail didn't connect" when Rahul stopped or Google refused.
-10. Our server learns that the connection is active. There are three ways, and the first one wins:
+9. The browser goes back to the web app. Composio adds `status=success` or `status=failed` to the address. The web app says "Gmail is connected", or "Gmail didn't connect" when Rahul stopped or Google refused. This message reads Composio's word in the address only. Our server may still have the connection as "pending" for a few seconds.
+10. Our server learns that the connection is active. There are four ways, and the first one wins:
    - Composio sends our server a **webhook**: a message that another service sends to our server when something happens.
    - The web app shows the app list, and our server asks Composio.
+   - Tex looks at Rahul's apps (`get_profile`, `list_app_actions`) or runs a Gmail action, and our server asks Composio first.
    - The worker asks Composio by itself, six times over about 16 minutes.
-11. Gmail shows as connected.
+   Each time, our server asks Composio about that one connection, by its id.
+11. Gmail shows as connected, and Tex can use it.
+
+If Rahul asks Tex about Gmail before step 10 has happened, Tex says that Gmail is still connecting. If the sign-in never finished, Tex says to connect it again on the Apps page.
 
 Our database keeps only Composio's id for the connection, its status and a label. The token stays at Composio.
 
@@ -219,6 +223,11 @@ It takes five minutes, once, for all apps. There is no code change and no deploy
    ```
 4. Open the web app and go to **Apps**. Every app except Exa Search now has a **Connect** button.
 5. Connect one, for example Google Calendar. The first person to connect an app waits a second longer: the server makes the app's setup at Composio then, with Composio's shared sign-in. Composio's dashboard then shows a setup named "Textcrew Google Calendar". If the Composio project already had an enabled shared setup for that app, the server uses it and makes none.
+6. Check it on the server, with the email you sign in with:
+   ```sh
+   cd /opt/textcrew && ./dc --profile app exec -T api node --import tsx scripts/dev-user.ts apps --email <your email>
+   ```
+   The line for Google Calendar must say `active` and "Composio: ACTIVE", and a line must say "agent sees googlecalendar: connected". Section 11 says what the other answers mean.
 
 Good to know:
 
@@ -228,7 +237,7 @@ Good to know:
 - **These apps use Composio's shared sign-in,** so the provider's "Allow" screen names Composio. Section 9 says how to change that, app by app.
 - **Taking an app off the setting does not hide it again** once its setup is made, because users' connections live on that setup. To hide one, ask Claude to remove its row from the table `composio_auth_configs`.
 - **A setup named in `COMPOSIO_AUTH_CONFIGS` always wins** over one the server made.
-- **Not run for real yet.** It was built and tested against a stand-in for Composio, not against Composio itself.
+- **Run for real once.** On 13 October the server made Google Calendar's setup itself, and the founder connected it. Tex then saw only GitHub; the fix is in section 11, "Connected, but Tex can't see it".
 
 ### The dashboard way
 
@@ -492,11 +501,41 @@ A beta month. **Every number in this list is an assumption:**
 | **Composio will not make an app's setup,** or is down while someone connects | "Google Calendar can't be connected right now". Nothing is saved | Check that the Composio key has full access. Or make the setup the dashboard way (section 8) |
 | **The user stops on the provider's page,** or the provider refuses | "Gmail didn't connect" in the web app | Nothing. They can press Connect again |
 | **Our own sign-in app's redirect address does not match** | The provider shows an error such as "redirect_uri mismatch" | Make the address the same at the provider and in Composio (section 9, step 4) |
+| **Connected, but Tex can't see it.** The web app said "Google Calendar is connected", but Tex says it isn't there | Tex says the app is still connecting, or that it needs connecting again on the Apps page | Run the `apps` check below |
 | **The connection expired.** The user changed their password or removed our access at Google | The web app shows "Expired" and a **Reconnect** button. Tex says the app is not connected, or reports an error from the app | The user clicks Reconnect |
 | **Composio or the app is down** | Tex says the app is unavailable right now. Nothing is charged. An approval already given still works later | Wait |
 | **Composio's free limit is reached** | Actions fail. Tex reports an error or says the app is unavailable | Wait for next month, or move to Pro |
 | **Composio's webhook does not reach our server** | "When an email arrives" never fires. Pull-request review never starts | Set the webhook address (section 7) |
 | **Composio hides the GitHub token** | Git answers "The GitHub connection can't be used for git". Byte cannot clone or push, and Patch cannot read the code for a review. GitHub actions through Composio still work | See below |
+
+**Connected, but Tex can't see it, in more words.** On 13 October the founder connected Google Calendar, and Tex answered that only GitHub was connected. Three things in our server could cause that, and all three are fixed:
+
+- Our server asked Composio for the actions of all connected apps at once, with one limit of 200 for all of them. GitHub alone has more than 200, so Google Calendar's actions never made it into Tex's list. Now each app is asked for separately, and the 100 actions Tex sees are shared fairly between the apps. This is the most likely cause.
+- Tex's own tools never asked Composio whether a pending connection had finished, and left a pending app out without a word. Now they ask first, and say "Google Calendar is still connecting" when it is.
+- The check read the user's whole list of accounts at Composio, which comes in pages, so a new account could be missed. Now it asks about each connection by its id.
+
+To see where a user's apps stand, run this on the server, with the user's email (or `--user <user id>`):
+
+```sh
+cd /opt/textcrew && ./dc --profile app exec -T api node --import tsx scripts/dev-user.ts apps --email <the user's email>
+```
+
+It prints, newest first:
+
+- one `connection` line per connection: the app, our status (`pending`, `active`, `expired`, `error`), when it was started, Composio's account id (it starts with `ca_`), and what Composio says about that account: its status, its app and the setup it was made with;
+- one `setup` line per app: the setup id and where it comes from (`COMPOSIO_AUTH_CONFIGS`, or made by the server);
+- `composio also has …` for an account Composio has for this user that our server has no connection for;
+- one `agent sees` line per app: what Tex gets from `list_app_actions`, with the note Tex is given when the app is not ready.
+
+What the answers mean:
+
+| You see | It means | What to do |
+|---|---|---|
+| `active`, "Composio: ACTIVE", "agent sees …: connected" | All is well | Ask Tex again, in a new message |
+| `pending`, "Composio: INITIATED" | The sign-in is not finished at the provider | Wait a minute. If it stays so, connect again from the Apps page |
+| `pending`, "Composio: no such account" | Composio does not know that account | Connect again from the Apps page |
+| "Composio: ACTIVE (app github …" on a Google Calendar line | The setup used is another app's | Tell Claude: the setup in the table `composio_auth_configs` is wrong |
+| `expired` or `error` | The connection stopped working | Reconnect from the Apps page |
 
 **The hidden token, in more words.** Our git gateway lets the agent use normal git on the user's GitHub. For that, our server asks Composio for the user's GitHub token. Composio hides ("masks") tokens in its answers.
 

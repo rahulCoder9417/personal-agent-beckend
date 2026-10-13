@@ -90,7 +90,10 @@ async function emit(a: Automation): Promise<void> {
   await publish(a.userId, 'automation.updated', toApiAutomation(a));
 }
 
-/** Registers the timer (or trigger) for an enabled automation. Idempotent. */
+/**
+ * Registers the timer (or trigger) for an enabled automation. Idempotent: a timer that is
+ * already there is kept.
+ */
 export async function registerTimer(a: Automation): Promise<void> {
   if (!a.enabled || a.completedAt) return;
   if (a.kind === 'once' && a.runAt) {
@@ -100,9 +103,19 @@ export async function registerTimer(a: Automation): Promise<void> {
       { jobId: onceJobId(a), delay: Math.max(0, a.runAt.getTime() - Date.now()) },
     );
   } else if (a.kind === 'repeat' && a.cron) {
+    const tz = a.timezone ?? 'UTC';
+    // Already set with this schedule, its next job waiting (the worker starting again): left as
+    // it is. Setting it again would replace a run that came due while the worker was stopped
+    // with the next one, so that run would be lost instead of running late.
+    const set = await queue('scheduled').getJobScheduler(schedulerId(a.id));
+    if (set?.pattern === a.cron && set.tz === tz && set.next) {
+      // BullMQ names a scheduler's job after the slot it is for.
+      const next = await queue('scheduled').getJob(`repeat:${schedulerId(a.id)}:${set.next}`);
+      if (next) return;
+    }
     await queue('scheduled').upsertJobScheduler(
       schedulerId(a.id),
-      { pattern: a.cron, tz: a.timezone ?? 'UTC' },
+      { pattern: a.cron, tz },
       { name: 'run-automation', data: { automationId: a.id, userId: a.userId } },
     );
   }

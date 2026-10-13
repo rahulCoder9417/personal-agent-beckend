@@ -250,6 +250,7 @@ describe('every delivery carries the chat epoch', () => {
     expect(metadataOf(vm.deliveries.at(-1))).toEqual({
       automationId: 'aut_1',
       chat_epoch: 1,
+      stream_text: true,
       claude: {},
     });
   });

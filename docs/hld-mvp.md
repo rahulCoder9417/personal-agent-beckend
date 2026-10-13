@@ -168,7 +168,7 @@ Example: the user texts "email Priya the notes".
 4. The worker checks the user's credits. At zero, the user gets a short "out of credits" reply and the container is not started.
 5. The worker asks the vm-manager to wake the user's container. This takes a few seconds if it was asleep.
 6. The vm-manager hands the message to the Bridge inside the container. The Bridge gives it to the agent.
-7. The agent works. It may call tools, and Tex may hand parts to the crew. Short progress lines go to the chat.
+7. The agent works. It may call tools, and Tex may hand parts to the crew. Short progress lines go to the chat. In web chat the reply also shows a few words at a time while the agent writes it; on Telegram it arrives in one piece.
 8. The agent gives its final reply. The worker sends it to Telegram as a simple text message: it takes the formatting symbols out first. The saved reply keeps them, so the web app shows it with its formatting.
 9. The worker counts what was used and charges credits.
 10. After 3 idle minutes the container stops. The user's files stay.
@@ -402,6 +402,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - The chat history in the web app with a signed-in user: the list beside the chat, rename and delete. The screens were checked in the web app's demo mode and the backend with the test script, but nobody has clicked through them on the live site yet.
 - A reply on Telegram since replies there became plain text. The agent's instructions and the plain-text step are both on the server, but no real Telegram message has been sent through them yet.
 - The web app drawing a real reply as Markdown for a signed-in user. It was checked in the web app's demo mode only.
+- The reply showing a few words at a time in web chat. Tested with stand-ins, in the web app's demo mode, and with a real Claude Code program talking to a fake AI service. Not yet with a real model, with Hermes, or on the server.
 - A conversation older than 30 days being opened again. Claude Code removes its own saved sessions after 30 days, so such a conversation would start with no context. Your decision (below).
 - The desktop app. It is now a small window around the live web app (`https://app.textcrew.in`), so it always shows the same screens. It reaches the sign-in page, and Clerk's and Google's sign-in pages open inside the window. Nobody has signed in with a real account in it, and the tray icon, the shortcut and "start at login" have not been run. A Linux installer builds; Windows and Mac installers are not built.
 - Web search through Brave. The key works; the path through the app has not run.

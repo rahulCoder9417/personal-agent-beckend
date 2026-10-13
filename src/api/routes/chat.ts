@@ -9,7 +9,7 @@ import {
 } from '../../modules/channels/conversations.ts';
 import { listMessages, toApiMessage } from '../../modules/channels/messages.ts';
 import { attachments } from '../../modules/channels/schema.ts';
-import { subscribe } from '../../modules/channels/stream.ts';
+import { enqueueStreamEvent, subscribe, type StreamEvent } from '../../modules/channels/stream.ts';
 import {
   deleteUserConversation,
   openWebConversation,
@@ -140,10 +140,10 @@ export const chatRoutes = [
   route('streamEvents', (c) => {
     const userId = c.get('user').id;
     return streamSSE(c, async (stream) => {
-      const queue: Array<{ type: string; data: unknown }> = [];
+      const queue: StreamEvent[] = [];
       let wake: (() => void) | undefined;
       const unsubscribe = await subscribe(userId, (e) => {
-        queue.push(e);
+        enqueueStreamEvent(queue, e);
         wake?.();
       });
       stream.onAbort(unsubscribe);

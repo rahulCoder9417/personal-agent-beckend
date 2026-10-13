@@ -2500,7 +2500,7 @@ These were found by reading the code while this report was written. Each is desc
 
 ## 44. What has run for real
 
-The backend has 605 automated tests. They use a real database and real queues, and stand-ins for outside services. "Run for real" below means it ran on the AWS test server against the real outside service.
+The backend has 612 automated tests. They use a real database and real queues, and stand-ins for outside services. "Run for real" below means it ran on the AWS test server against the real outside service.
 
 | Area | Run for real |
 |---|---|

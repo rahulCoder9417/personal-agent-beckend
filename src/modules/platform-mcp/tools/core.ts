@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isChannelEnabled } from '../../../shared/config.ts';
+import { recordCrewJobReport } from '../../automations/crew-jobs.ts';
 import { getActiveUser } from '../../auth/users.ts';
 import { ownsChat } from '../../auth/links.ts';
 import { lastInboundSession } from '../../channels/messages.ts';
@@ -47,6 +48,8 @@ defineTool({
       // Sent during a turn in this chat: it belongs to the turn's conversation.
       conversationId: await turnConversationId(userId, sessionKey),
     });
+    // During a crew job's turn this is the lead's final answer: the job's report.
+    await recordCrewJobReport(userId, sessionKey, args.text);
     return { message_id: msg.id, status: 'queued' };
   },
   summarize: (args) => `Sent a message (${args.text.length} chars)`,

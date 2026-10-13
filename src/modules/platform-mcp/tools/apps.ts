@@ -10,6 +10,7 @@ import {
   appActionChangesSomething,
   connectionForToolkit,
 } from '../../integrations/apps.ts';
+import { claimCrewJobComment, releaseCrewJobComment } from '../../automations/crew-jobs.ts';
 import { prCommentAllowed } from '../../automations/pr-review.ts';
 import {
   actionChangesSomething,
@@ -68,7 +69,8 @@ defineTool({
   description:
     'Actions you can run in your user\'s connected apps (connected apps × plan). Optionally filter by app (e.g. "gmail"). ' +
     'Actions marked requires_approval need request_approval first, then run_app_action with the approval_id ' +
-    '(one exception: a new review or comment on a pull request, in a repo where your user turned on pull-request review). ' +
+    '(exceptions: a new review or comment on a pull request, in a repo where your user turned on pull-request review, ' +
+    "and the one review a crew job's brief asks you to post on its pull request). " +
     'costs_credits is what a successful run costs your user: 1 for an action that changes something, 0 for reading.',
   input: { app: z.string().optional(), search: z.string().optional() },
   async run({ userId }, args) {
@@ -155,12 +157,16 @@ defineTool({
     // Pull-request review is on for this repo: the user's standing approval covers a new review
     // or comment on its pull requests, and nothing else (HLD 0.8).
     let prReviewRepo: string | null = null;
+    // A crew job whose brief says "post it on the pull request": the user's yes for ONE review or
+    // comment on that pull request, during that job (docs/backend-report.md, "The crew").
+    let crewJobId: string | null = null;
     if (actionNeedsApproval(args.action) && !args.approval_id) {
       const target = prCommentTarget(args.action, args.arguments);
       if (target && (await prCommentAllowed(userId, target)))
         prReviewRepo = `${target.owner}/${target.repo}`;
+      else if (target) crewJobId = await claimCrewJobComment(userId, target);
     }
-    if (actionNeedsApproval(args.action) && !prReviewRepo) {
+    if (actionNeedsApproval(args.action) && !prReviewRepo && !crewJobId) {
       if (!args.approval_id)
         throw new ToolError(
           "This action needs the user's approval first: call request_approval and end your turn",
@@ -191,6 +197,7 @@ defineTool({
     } catch (err) {
       if (consumedId)
         await db().update(approvals).set({ usedAt: null }).where(eq(approvals.id, consumedId));
+      if (crewJobId) await releaseCrewJobComment(userId, crewJobId);
       if (err instanceof ToolError) throw err;
       logger().warn({ userId, action: args.action, err: String(err) }, 'composio execute failed');
       throw new ToolError('The app is unavailable right now; tell the user and try later');
@@ -216,11 +223,14 @@ defineTool({
       data,
       credits_charged: creditsCharged,
       ...(prReviewRepo ? { pr_review: prReviewRepo } : {}),
+      ...(crewJobId ? { crew_job: crewJobId } : {}),
     };
   },
   summarize: (args, result) => {
     const repo = (result as { pr_review?: string }).pr_review;
     if (repo) return `Ran ${args.action} (pull-request review is on for ${repo})`;
+    const job = (result as { crew_job?: string }).crew_job;
+    if (job) return `Ran ${args.action} (the review the user asked for in crew job ${job})`;
     return `Ran ${args.action}${args.approval_id ? ' (approved)' : ''}`;
   },
   creditsCharged: (_args, result) => (result as { credits_charged: number }).credits_charged,

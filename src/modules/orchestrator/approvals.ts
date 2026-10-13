@@ -16,6 +16,16 @@ import { runTurn, turnConversationId } from './turn.ts';
 export type Approval = typeof approvals.$inferSelect;
 export const APPROVAL_TTL_MS = 24 * 3600 * 1000;
 
+/**
+ * The action an approval names when the lead asks the user's yes for a crew job whose report is
+ * posted on a pull request (the start_crew_job tool). It is the platform's own, not an app's.
+ */
+export const START_CREW_JOB_ACTION = 'TEXTCREW_START_CREW_JOB';
+
+/** The tool that runs what an approval was asked for. */
+const toolFor = (a: Approval) =>
+  a.action === START_CREW_JOB_ACTION ? 'start_crew_job' : 'run_app_action';
+
 export function toApiApproval(a: Approval) {
   return {
     id: a.id,
@@ -191,7 +201,7 @@ export async function handleProcessApproval(job: Job): Promise<unknown> {
     ...(conversationId ? { conversationId } : {}),
     text:
       a.status === 'approved'
-        ? `The user APPROVED: ${a.summary}. Go ahead (call run_app_action with approval_id "${a.id}").`
+        ? `The user APPROVED: ${a.summary}. Go ahead (call ${toolFor(a)} with approval_id "${a.id}").`
         : `The user REJECTED: ${a.summary}. Don't do it.`,
     approval: { id: a.id, approved: a.status === 'approved' },
   });

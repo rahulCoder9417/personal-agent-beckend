@@ -9,6 +9,7 @@ import './tools/apps.ts';
 import './tools/automations.ts';
 import './tools/web.ts';
 import './tools/memory.ts';
+import './tools/crew-jobs.ts';
 
 /** A per-request MCP server bound to ONE user (stateless streamable HTTP). */
 export function createPlatformMcpServer(ctx: ToolContext): McpServer {

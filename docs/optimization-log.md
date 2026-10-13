@@ -62,6 +62,38 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 4. The log
 
+### 13 October 2026: Tex knows who it is, and sees every app the user connected
+
+- **Where it is:** on `main` since 13 October, in the backend and the vm-manager. It reaches the server with `deploy.sh`.
+- **Why:** you connected Google Calendar in the web app, with the server making Calendar's Composio setup itself. In web chat Tex then said that only GitHub was connected, and told you to check "your Claude settings". Two problems: Tex did not know it is Textcrew's agent, and Calendar was not usable even though it was connected.
+- **What the user notices:**
+  - Tex speaks as the user's agent in Textcrew. It sends the user to Textcrew's Apps page to connect an app, never to Claude's settings, and does not call itself Claude or Claude Code.
+  - An app the user just connected can be used right away, next to GitHub.
+  - When an app is not ready, Tex says so plainly: "Google Calendar is still connecting", or that it needs connecting again on the Apps page.
+- **Backend:**
+  - **The cause, most likely:** to list the actions Tex may run, the server asked Composio once for all connected apps, with one limit of 200 tools for all of them, and kept the first 100. GitHub alone has more than 200, so Google Calendar's actions never reached Tex. Now Composio is asked once per app, and the 100 places are shared fairly: an app with few actions gets them all, the rest goes to the big ones, and a cut-short app comes with a note on how to see more.
+  - **The agent's answer names every app** with its status: connected, still connecting, never finished, needs connecting again, or not on the plan, with a note saying what to tell the user and the Apps page address. `get_profile` lists the apps that are not ready too.
+  - **The agent's own tools check a pending connection with Composio first,** so an app that finished connecting a moment ago is usable in the same turn. Before, only the web app's app list and the worker's six checks did.
+  - **Each check asks about the connection's own account.** It used to read the user's whole list of accounts at Composio, which comes in pages, so a new account could be missed for good.
+  - **A setup the server reuses** must be one Composio says is for the same app.
+  - **A new check for you:** the dev-user script's `apps` command prints each connection with our status, its Composio account id, what Composio says, its setup, and what Tex sees. Every command of the script now takes `--email` in place of `--user`.
+- **vm-manager:**
+  - The lead's instructions open with a short identity block, the same on both engines: Tex is the user's own agent in Textcrew; apps are connected on the Apps page, `https://app.textcrew.in/apps`; `get_profile` and `list_app_actions` show what is connected; a missing app may still be finishing or needs connecting again; never Claude's settings, never "I am Claude", the engine named only when the user asks. Claude Code's own system prompt says "You are Claude Code", which is what made Tex talk about Claude's settings.
+- **Cost and speed:** a listing of apps now makes one Composio request per connected app instead of one in all, at the same time. A pending connection costs one small Composio request when Tex looks at the apps. The instructions grow by about 900 characters a turn. Not measured.
+- **Contracts:** `openapi.yaml` and `vm.proto` did not change. The answer of the agent's tool `list_app_actions` changed shape: it was a list of actions, it is now the apps and their statuses, and the actions.
+- **Database:** none.
+- **How it was checked:**
+  - New backend tests reproduce each cause on the old code first: Calendar crowded out by 320 GitHub actions, a connection active at Composio but pending here and missing for the agent, and a new account missed past the first page of the list. All three failed before the fix and pass after it. Other new tests: the fair share, one app failing to list, each not-ready status and its note, the plan, `get_profile`, `run_app_action`, the setup reuse, and the dev-user `apps` command.
+  - Lint and the type check pass. 644 of 645 backend tests pass; the one failure is the Hindi title test, which already failed before.
+  - vm-manager: new Bridge tests check the identity block opens the instructions for every channel, kind and crew job, and reaches both Hermes and Claude Code. The 225 Bridge tests pass, `go vet` and the Go tests pass.
+  - Not on the server, not against Composio itself, and not with a real model.
+- **Still open:**
+  - Run `scripts/dev-user.ts apps --email <your email>` on the server after the deploy, and ask Tex about your calendar again.
+  - The web app says "connected" from Composio's word in the return address alone. It could show "connecting" while our record is still pending; that needs a small change to the app list's contract and to the web app.
+  - Composio's webhook names only "expired" for connections. Our code reads any other connection event as "active". Not changed here.
+- **Docs updated:** `backend-report.md` sections 13, 14 and 34; `composio.md` sections 3, 4, 8 and 11; the vm-manager's README ("The crew").
+- **Commits:** backend `adbd533`, `8343501`, `84ec22d`, `6ad5d3b`; vm-manager `6481354`, `edd6191`.
+
 ### 13 October 2026: a separate Automations chat for every automation
 
 - **Where it is:** on `main` since 13 October, in the backend. It reaches the server with `deploy.sh`.

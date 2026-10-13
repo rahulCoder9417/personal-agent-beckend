@@ -60,6 +60,7 @@ Six files make up the docs:
 - **Set reminders and automations.** Once, on a schedule, or when something happens in an app. Example: "Every Monday at 9, send me my open pull requests."
 - **Use a crew.** The agent you text is called Tex. Tex can hand work to three specialists: Byte writes code, Patch reviews code, Scout researches.
 - **Get pull requests reviewed.** Turn it on for a GitHub repo. When a pull request opens, Patch reviews it and comments on it. You get a short verdict in chat.
+- **Give the crew a job.** Fill in a brief on the Crew screen, or say it in chat: Patch reviews one pull request or branch, or Byte fixes or builds something and opens a pull request. Pick the repo, say what to look for or what to test, give the commands to run, and choose where the report goes. The job runs in a folder of its own, and when it is over, everything it started is stopped and the folder is deleted. Example: "Patch, review acme/web PR 42, run pnpm test, post it on the PR."
 - **Research on the web.** Scout searches and reads pages. On the Max plan Scout can also drive a real browser.
 - **Be remembered.** The agent keeps short notes about you, and you can see and delete them.
 - **Bring their own AI.** A Claude plan or an API key. Then the AI part costs no credits.
@@ -216,7 +217,17 @@ An automation pauses itself at zero credits, or after three failures in a row. T
 
 Each commit is reviewed once. Patch never merges and never approves. Turning review on is the user's standing permission for these comments, on that repo only.
 
-### 5.6 Research and the browser
+### 5.6 A job for Patch or Byte
+
+1. The user fills in a brief on the Crew screen: the repo (picked from their GitHub repos, or typed), the pull request or branch, their own instructions, what to look for (Patch) or what to fix and what to test for (Byte), the commands to run, and what to do with the report.
+2. The api saves the job and queues it like a message. It runs as soon as the user's agent is free, as one turn.
+3. Tex hands it to Patch or Byte. They clone into a folder of the job's own, and may start what the job needs there (an install, the app, the tests). A large review may be split into up to three Patch reviews at the same time.
+4. The report comes back in a fixed shape: the verdict, the findings or changes with file and line, the tests run with their results, and what was not checked. It goes to the chosen chat and stays on the Crew screen. If the user ticked it, it is also posted on the pull request as one review comment (Patch), put in the pull request Byte opens, or opened as an issue.
+5. After the turn, the container itself stops every program of the job and deletes its folder. Then the container goes to sleep at once, unless something else is running there.
+
+Ticking "post it on the pull request" is the user's yes for that one review, on that pull request, for that job only. From chat, posting a review needs an ordinary approval first.
+
+### 5.7 Research and the browser
 
 - Only Scout touches the web. Scout has no files, no shell and no app tools, so a web page cannot trick it into sending or deleting anything.
 - If the user's engine has its own web search, Scout uses that. This is the case on Claude Code. It costs no credits.
@@ -224,14 +235,14 @@ Each commit is reviewed once. Patch never merges and never approves. Turning rev
 - Scout can read a web page through our page reader. That is free on every plan.
 - On the Max plan Scout can drive a real browser, for pages that need clicking or JavaScript. The browser runs inside the user's own container and costs 2 credits per minute.
 
-### 5.7 The container sleeps and wakes
+### 5.8 The container sleeps and wakes
 
 Picture: GoDraw, page 3, "The life of a container".
 
 - A container is stopped most of the time. A stopped container costs nothing.
 - A message, a reminder or an app event wakes it.
 - While a turn runs, the container is never stopped.
-- After 3 idle minutes it stops again. Its files are kept.
+- After 3 idle minutes it stops again. Its files are kept. After a crew job it stops right away, when nothing else runs there.
 - The server allows only a set number of containers awake at once. When it is full and another user needs one, the container that has been idle longest is stopped early.
 - A container is deleted only when the user deletes their account.
 
@@ -398,6 +409,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - The user's own API key. Every model call goes to the user's provider with their key, through LiteLLM on our server. There is no key with balance to test it.
 - Payments through Polar.
 - Pull-request review, and Byte pushing code through our git gateway.
+- Crew jobs: a brief for Patch or Byte from the Crew screen or from chat, the report in its fixed shape, the list of GitHub repos to pick from, the container stopping every program of the job and deleting its folder, and the container sleeping right after. Built on 13 October. Checked with the automated tests (the clean-up with real programs on Linux, not inside gVisor) and the web app's demo mode. Nothing has run against real GitHub, Composio or a container.
 - A memory saved on one engine and used on the other.
 - The chat history in the web app with a signed-in user: the list beside the chat, rename and delete. The screens were checked in the web app's demo mode and the backend with the test script, but nobody has clicked through them on the live site yet.
 - A reply on Telegram since replies there became plain text. The agent's instructions and the plain-text step are both on the server, but no real Telegram message has been sent through them yet.
@@ -443,7 +455,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - **The waitlist form** still asks about WhatsApp and iMessage. Keep it as a signal of demand, or change it.
 - **Composio and the GitHub token:** the git gateway and pull-request review need the user's GitHub token from Composio. The plan was to switch off the project setting "mask connected account secrets". Composio's change note of 22 April 2026 says the token is always hidden for its shared sign-in, whatever that setting says. So Byte pushing code, and Patch reading the code for a review, may need our own GitHub app registered at Composio. Not confirmed: neither has run for real. `composio.md`, section 11, has the details.
 - **Pull-request review** needs admin access to the repo, because Composio puts a webhook on it.
-- **Small gaps the web app found in the API:** no history of past reviews, no list of repos to pick from, no way to add or edit a memory, and progress lines are not shown again after a page reload.
+- **Small gaps the web app found in the API:** no history of past automatic reviews (a crew job keeps its report), no way to add or edit a memory, and progress lines are not shown again after a page reload. The list of repos to pick from now exists, for crew jobs.
 
 ### Also waiting on you
 

@@ -92,7 +92,9 @@ defineTool({
         throw new ToolError(
           'No matching approved approval (it must be approved, unused, for start_crew_job)',
         );
-      if (approval.arguments && !isDeepStrictEqual(approval.arguments, approvedBrief(args))) {
+      // Unlike an app action, the brief must have been asked about in full: a yes for "a crew job"
+      // with no brief would cover any repository and any pull request.
+      if (!approval.arguments || !isDeepStrictEqual(approval.arguments, approvedBrief(args))) {
         await db().update(approvals).set({ usedAt: null }).where(eq(approvals.id, approval.id));
         throw new ToolError('The brief differs from what the user approved');
       }

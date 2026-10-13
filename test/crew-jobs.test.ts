@@ -756,6 +756,12 @@ describe('start_crew_job, from chat', () => {
       isError: true,
       text: expect.stringMatching(/differs from what the user approved/),
     });
+    // A yes asked with no brief at all covers nothing.
+    const blank = await ask(null as never);
+    expect(await mcpCall(token, 'start_crew_job', { ...brief, approval_id: blank })).toMatchObject({
+      isError: true,
+      text: expect.stringMatching(/differs from what the user approved/),
+    });
     const no = await ask(brief, 'rejected');
     expect((await mcpCall(token, 'start_crew_job', { ...brief, approval_id: no })).isError).toBe(
       true,

@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import type { Job } from 'bullmq';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { devUser, UsageError } from '../scripts/dev-user.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
 import { startConnect } from '../src/modules/integrations/apps.ts';
 import { pickManagedSetup, type ComposioTool } from '../src/modules/integrations/composio.ts';
@@ -379,5 +380,77 @@ describe("the server's own setup for an app", () => {
     expect(pickManagedSetup([setup('ac_cal', 'GoogleCalendar')], 'googlecalendar')).toBe('ac_cal');
     // Composio left the app out: not taken, a new one is made.
     expect(pickManagedSetup([setup('ac_x', undefined)], 'googlecalendar')).toBeUndefined();
+  });
+});
+
+describe('dev-user: apps, to check a user on the server', () => {
+  it('shows each connection with our status, its Composio account, its setup and what the agent sees', async () => {
+    const userId = (await devUser(['create', '--email', 'Founder@Example.com']))[0]!.split(' ')[1]!;
+    await devUser(['connect-app', '--user', userId, '--app', 'github']);
+    await devUser(['connect-app', '--email', 'founder@example.com', '--app', 'googlecalendar']);
+    const rows = await db().select().from(connections).where(eq(connections.userId, userId));
+    const gh = rows.find((r) => r.app === 'github')!;
+    const cal = rows.find((r) => r.app === 'googlecalendar')!;
+    composio.state.accounts.set(userId, [
+      {
+        id: gh.composioAccountId,
+        toolkit: 'github',
+        status: 'ACTIVE',
+        label: 'me@example.com',
+        authConfigId: 'ac_github',
+      },
+      {
+        id: cal.composioAccountId,
+        toolkit: 'googlecalendar',
+        status: 'INITIATED',
+        label: null,
+        authConfigId: 'ac_made_cal',
+      },
+      { id: 'ca_stray', toolkit: 'gmail', status: 'ACTIVE', label: null },
+    ]);
+    const out = await devUser(['apps', '--email', 'FOUNDER@example.com']);
+    expect(out[0]).toBe(`user ${userId} (Founder@Example.com, plan free)`);
+    const text = out.join('\n');
+    expect(text).toMatch(
+      new RegExp(
+        `connection ${gh.id} github: active since \\S+, account ${gh.composioAccountId} ` +
+          '\\(me@example\\.com\\); Composio: ACTIVE \\(app github, setup ac_github, me@example\\.com\\)',
+      ),
+    );
+    expect(text).toContain(
+      `connection ${cal.id} googlecalendar: pending since ${cal.createdAt.toISOString()}, ` +
+        `account ${cal.composioAccountId}; Composio: INITIATED (app googlecalendar, setup ac_made_cal)`,
+    );
+    expect(out).toContain('setup github ac_github (COMPOSIO_AUTH_CONFIGS)');
+    expect(text).toMatch(/setup googlecalendar ac_made_googlecalendar_\d+ \(made by the server\)/);
+    expect(out).toContain('composio also has ca_stray (gmail, ACTIVE) with no connection here');
+    expect(out).toContain('agent sees github: connected, 2 actions');
+    expect(text).toMatch(
+      /agent sees googlecalendar: connecting \(Google Calendar is still connecting/,
+    );
+    // Newest first.
+    expect(out.findIndex((l) => l.includes(cal.id))).toBeLessThan(
+      out.findIndex((l) => l.includes(gh.id)),
+    );
+
+    // Composio finishes it: the next look shows it active, for us and for the agent.
+    composio.state.accounts.get(userId)![1]!.status = 'ACTIVE';
+    const after = await devUser(['apps', '--user', userId]);
+    expect(after).toContain('agent sees googlecalendar: connected, 2 actions');
+    expect(after.join('\n')).toContain(`connection ${cal.id} googlecalendar: active since`);
+  });
+
+  it('--email finds the user; an unknown one, or neither flag, is a usage error', async () => {
+    await expect(devUser(['apps', '--email', 'nobody@example.com'])).rejects.toBeInstanceOf(
+      UsageError,
+    );
+    await expect(devUser(['apps'])).rejects.toThrow('--user (or --email) is required');
+    const userId = (await devUser(['create', '--email', 'solo@example.com']))[0]!.split(' ')[1]!;
+    expect((await devUser(['status', '--email', 'solo@example.com']))[0]).toContain(userId);
+    expect(await devUser(['apps', '--user', userId])).toEqual([
+      `user ${userId} (solo@example.com, plan free)`,
+      'connections none',
+      'agent sees: No app is connected. Your user connects apps on the Apps page (http://web.test/apps).',
+    ]);
   });
 });

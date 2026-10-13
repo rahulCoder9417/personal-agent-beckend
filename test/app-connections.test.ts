@@ -209,6 +209,7 @@ describe('app connections: the server finishes the job itself', () => {
     const userId = (await devUser(['create', '--email', 'apps@example.com']))[0]!.split(' ')[1]!;
     const out = await devUser(['connect-app', '--user', userId, '--app', 'github']);
     expect(out[0]).toMatch(/^open https:\/\/composio\.test\//);
+    expect(out[1]).toBe("sign-in: Composio's connect page first, then the provider's");
     const [conn] = await rowsOf(userId);
     expect(await checkJobs(conn!.id)).toHaveLength(1);
     expect((await devUser(['status', '--user', userId])).join('\n')).toContain(

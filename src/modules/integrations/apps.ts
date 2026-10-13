@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { config } from '../../shared/config.ts';
 import { db } from '../../shared/db/client.ts';
-import { notFound, planLimit } from '../../shared/errors.ts';
+import { notFound, planLimit, unavailable } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
 import { logger } from '../../shared/logger.ts';
 import type { PlanId } from '../auth/users.ts';
@@ -15,7 +15,13 @@ import {
   findApp,
   type CatalogApp,
 } from './catalog.ts';
-import { authConfigFor, composio, toolTags } from './composio.ts';
+import {
+  authConfigFor,
+  authConfigInfo,
+  composio,
+  toolTags,
+  type AuthConfigInfo,
+} from './composio.ts';
 import { connections } from './tables.ts';
 
 export type Connection = typeof connections.$inferSelect;
@@ -101,6 +107,38 @@ export async function refreshPendingConnections(userId: string): Promise<void> {
 }
 
 /**
+ * How the sign-in starts for a setup:
+ * - `direct`: our own sign-in app at the provider (a custom setup, OAuth). The link is the
+ *   provider's own page: no Composio page, no Composio address on the way out.
+ * - `link`: a Composio Connect Link. Composio's page comes first (its logo and name can be ours,
+ *   in Composio's dashboard), then the provider's. The only way for Composio's shared sign-in,
+ *   and for a setup that asks for an API key. Also used when Composio can't say which kind it is.
+ */
+export function signInPath(
+  info: AuthConfigInfo | null,
+): { kind: 'direct'; authScheme: 'OAUTH2' | 'OAUTH1' } | { kind: 'link' } {
+  if (!info || info.composioManaged) return { kind: 'link' };
+  if (info.authScheme === 'OAUTH2' || info.authScheme === 'OAUTH1')
+    return { kind: 'direct', authScheme: info.authScheme };
+  return { kind: 'link' };
+}
+
+/**
+ * The page to come back to after the sign-in. Only a page of our own web app: anything else
+ * (another site, or one whose address only starts the same way) gets the Apps page.
+ */
+export function connectReturnUrl(appSlug: string, returnUrl?: string): string {
+  const web = config().WEB_APP_URL;
+  const fallback = `${web.replace(/\/+$/, '')}/apps?connected=${encodeURIComponent(appSlug)}`;
+  if (!returnUrl) return fallback;
+  try {
+    return new URL(returnUrl).origin === new URL(web).origin ? returnUrl : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
  * The catalog for one user. `connectable`: this server has a Composio setup for the app
  * (COMPOSIO_AUTH_CONFIGS). Without one the app is listed but `startConnect` answers 404 for it,
  * so the web app shows "Not available yet" instead of a Connect button.
@@ -127,23 +165,51 @@ export async function appCatalogFor(userId: string, plan: PlanId) {
   }));
 }
 
-/** Starts connecting an app; returns the provider login URL. Plan limits apply. */
+/** Asks Composio for the sign-in link, the direct way when the setup allows it. */
+async function openSignIn(
+  app: CatalogApp,
+  userId: string,
+  authConfigId: string,
+  callbackUrl: string,
+): Promise<{ accountId: string; redirectUrl: string; direct: boolean }> {
+  const path = signInPath(await authConfigInfo(authConfigId));
+  if (path.kind === 'direct') {
+    try {
+      const r = await composio().connectDirect(userId, authConfigId, path.authScheme, callbackUrl);
+      if (r.redirectUrl) return { ...r, direct: true };
+    } catch (err) {
+      // A Connect Link works for every setup, so the user can still connect.
+      logger().warn({ app: app.slug, err: String(err) }, 'composio direct connect failed');
+    }
+  }
+  try {
+    const r = await composio().connectLink(userId, authConfigId, callbackUrl);
+    if (r.redirectUrl) return { ...r, direct: false };
+    logger().warn({ app: app.slug }, 'composio gave no connect link');
+  } catch (err) {
+    logger().warn({ app: app.slug, err: String(err) }, 'composio connect link failed');
+  }
+  throw unavailable(`${app.name} can't be connected right now. Try again in a few minutes.`);
+}
+
+/**
+ * Starts connecting an app; returns the sign-in page to send the browser to, and whether it is
+ * the provider's own page (`direct`) or Composio's connect page first. Plan limits apply.
+ */
 export async function startConnect(
   userId: string,
   plan: PlanId,
   appSlug: string,
   returnUrl?: string,
-): Promise<string> {
+): Promise<{ redirectUrl: string; direct: boolean }> {
   const app = findApp(appSlug);
   if (!app) throw notFound('Unknown app');
   if (!appAllowedOnPlan(app, plan))
     throw planLimit(`${app.name} isn't available on the ${plan} plan`, { app: app.slug, plan });
   const authConfigId = authConfigFor(app.slug);
   if (!authConfigId) throw notFound(`${app.name} isn't configured yet`);
-  const web = config().WEB_APP_URL;
-  const callback =
-    returnUrl && returnUrl.startsWith(web) ? returnUrl : `${web}/apps?connected=${app.slug}`;
-  const { accountId, redirectUrl } = await composio().connectLink(userId, authConfigId, callback);
+  const callback = connectReturnUrl(app.slug, returnUrl);
+  const { accountId, redirectUrl, direct } = await openSignIn(app, userId, authConfigId, callback);
   await db()
     .insert(connections)
     .values({
@@ -171,7 +237,7 @@ export async function startConnect(
       logger().warn({ userId, err: String(err) }, 'could not queue the connection check'),
     );
   }
-  return redirectUrl;
+  return { redirectUrl, direct };
 }
 
 export async function disconnect(userId: string, connectionId: string): Promise<boolean> {

@@ -1,5 +1,6 @@
 // The 25 apps we offer (HLD 7.1). `free: true` marks the 10 available on the Free plan.
-// `toolkit` is the Composio toolkit slug; auth config ids come from COMPOSIO_AUTH_CONFIGS.
+// `toolkit` is the Composio toolkit slug. An app's Composio setup (auth config) comes from
+// COMPOSIO_AUTH_CONFIGS, or is made by the server itself (COMPOSIO_MANAGED_APPS, see apps.ts).
 export interface CatalogApp {
   slug: string;
   name: string;
@@ -20,9 +21,16 @@ export interface CatalogApp {
     | 'social';
   toolkit: string;
   free: boolean;
+  /**
+   * Composio has its own shared sign-in app for this toolkit ("Composio managed"), so the server
+   * can make the setup itself. False for Exa, which signs in with an API key (docs/composio.md).
+   */
+  managedAuth: boolean;
 }
 
-export const CATALOG: CatalogApp[] = [
+type Entry = Omit<CatalogApp, 'managedAuth'> & { managedAuth?: boolean };
+
+const APPS: Entry[] = [
   {
     slug: 'gmail',
     name: 'Gmail',
@@ -112,6 +120,7 @@ export const CATALOG: CatalogApp[] = [
     category: 'research',
     toolkit: 'exa',
     free: true,
+    managedAuth: false,
   },
   {
     slug: 'outlook',
@@ -249,6 +258,8 @@ export const CATALOG: CatalogApp[] = [
     free: false,
   },
 ];
+
+export const CATALOG: CatalogApp[] = APPS.map((app) => ({ managedAuth: true, ...app }));
 
 export function findApp(slug: string): CatalogApp | undefined {
   return CATALOG.find((a) => a.slug === slug);

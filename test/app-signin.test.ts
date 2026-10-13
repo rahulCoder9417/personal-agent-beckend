@@ -1,14 +1,21 @@
 // Connecting an app (docs/backend-report.md, "Apps through Composio"; docs/composio.md):
 // - an app set up with our own sign-in app goes straight to the provider's page (`initiate()`
 //   with the long redirect URL); Composio's shared sign-in keeps the Connect Link;
+// - the server may make an app's Composio setup itself (COMPOSIO_MANAGED_APPS);
 // - the catalog says who signs the user in and what Tex can do with each app.
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeQueues } from '../src/modules/events/queues.ts';
-import { connectReturnUrl, signInPath, startConnect } from '../src/modules/integrations/apps.ts';
+import {
+  appCatalogFor,
+  connectReturnUrl,
+  serverMaySetUp,
+  signInPath,
+  startConnect,
+} from '../src/modules/integrations/apps.ts';
 import { CATALOG, findApp } from '../src/modules/integrations/catalog.ts';
-import { connections } from '../src/modules/integrations/tables.ts';
-import { resetConfig } from '../src/shared/config.ts';
+import { composioAuthConfigs, connections } from '../src/modules/integrations/tables.ts';
+import { loadConfig, resetConfig } from '../src/shared/config.ts';
 import { db } from '../src/shared/db/client.ts';
 import { wireModules } from '../src/wiring.ts';
 import { installFakeComposio, installFakeVm } from './fakes.ts';
@@ -17,13 +24,15 @@ import { call, chatUser, expectContract } from './helpers.ts';
 type Fake = Awaited<ReturnType<typeof installFakeComposio>>;
 let composio: Fake;
 
-function settings(env: { configs?: Record<string, string> }) {
+function settings(env: { configs?: Record<string, string>; managed?: string }) {
   process.env.COMPOSIO_AUTH_CONFIGS = JSON.stringify(env.configs ?? {});
+  process.env.COMPOSIO_MANAGED_APPS = env.managed ?? '';
   resetConfig();
 }
 
 beforeAll(() => wireModules());
 afterAll(async () => {
+  delete process.env.COMPOSIO_MANAGED_APPS;
   delete process.env.COMPOSIO_AUTH_CONFIGS;
   resetConfig();
   await closeQueues();
@@ -31,6 +40,7 @@ afterAll(async () => {
 beforeEach(async () => {
   installFakeVm();
   composio = await installFakeComposio();
+  await db().delete(composioAuthConfigs);
   settings({ configs: { gmail: 'ac_gmail', github: 'ac_own_github' } });
   // Our own GitHub sign-in app; Gmail stays on Composio's shared sign-in (the fake's default).
   composio.state.authConfigs.set('ac_own_github', { composioManaged: false, authScheme: 'OAUTH2' });
@@ -160,6 +170,137 @@ describe('which way the sign-in starts', () => {
   });
 });
 
+describe('the server makes an app setup itself (COMPOSIO_MANAGED_APPS)', () => {
+  it('reads the setting: all, a list, or nothing', () => {
+    const base = { ...process.env };
+    const read = (v: string) =>
+      loadConfig({ ...base, COMPOSIO_MANAGED_APPS: v }).COMPOSIO_MANAGED_APPS;
+    expect(read('all')).toBe('all');
+    expect(read(' ALL ')).toBe('all');
+    expect(read(' Notion , slack,notion ')).toEqual(['notion', 'slack']);
+    expect(read('')).toEqual([]);
+    expect(loadConfig({ ...base, COMPOSIO_MANAGED_APPS: undefined }).COMPOSIO_MANAGED_APPS).toEqual(
+      [],
+    );
+    expect(() => read('all,gmail')).toThrow(/stands alone/);
+    expect(() => read('google calendar')).toThrow(/not an app name/);
+  });
+
+  it('with nothing set, only the apps named in COMPOSIO_AUTH_CONFIGS can be connected', async () => {
+    const user = await chatUser({ plan: 'pro' });
+    const apps = await appCatalogFor(user.id, user.plan);
+    expect(apps.filter((a) => a.connectable).map((a) => a.slug)).toEqual(['gmail', 'github']);
+    await expect(startConnect(user.id, user.plan, 'notion')).rejects.toMatchObject({
+      status: 404,
+      message: "Notion isn't configured yet",
+    });
+    expect(composio.state.managedSetups).toEqual([]);
+  });
+
+  it('`all`: every app with a shared sign-in at Composio can be connected; Exa still needs its own', async () => {
+    settings({ configs: { gmail: 'ac_gmail' }, managed: 'all' });
+    const user = await chatUser({ plan: 'pro' });
+    const res = await expectContract<{ items: Array<{ slug: string; connectable: boolean }> }>(
+      'listApps',
+      await call('/v1/apps', { token: user.token }),
+      200,
+    );
+    const off = res.items.filter((a) => !a.connectable).map((a) => a.slug);
+    expect(off).toEqual(['exa']);
+    expect(serverMaySetUp(findApp('exa')!)).toBe(false);
+    await expect(startConnect(user.id, user.plan, 'exa')).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('a list: just those apps', async () => {
+    settings({ configs: { gmail: 'ac_gmail' }, managed: 'notion,slack,nonsense' });
+    const user = await chatUser({ plan: 'pro' });
+    const apps = await appCatalogFor(user.id, user.plan);
+    expect(apps.filter((a) => a.connectable).map((a) => a.slug)).toEqual([
+      'gmail',
+      'notion',
+      'slack',
+    ]);
+  });
+
+  it('the first connect makes the setup and keeps it; later connects use the same one', async () => {
+    settings({ managed: 'googlecalendar' });
+    const a = await chatUser();
+    const b = await chatUser();
+    const first = await startConnect(a.id, a.plan, 'googlecalendar');
+    expect(composio.state.managedSetups).toEqual([
+      { toolkit: 'googlecalendar', name: 'Textcrew Google Calendar', id: expect.any(String) },
+    ]);
+    const made = composio.state.managedSetups[0]!.id;
+    expect(first).toEqual({ redirectUrl: `https://composio.test/connect/${made}`, direct: false });
+    expect(await db().select().from(composioAuthConfigs)).toMatchObject([
+      { app: 'googlecalendar', authConfigId: made },
+    ]);
+    // Made with the shared sign-in, so the server knows its kind without asking.
+    expect(composio.state.authConfigLookups).toEqual([]);
+
+    await startConnect(b.id, b.plan, 'googlecalendar');
+    expect(composio.state.managedSetups).toHaveLength(1);
+    expect(composio.state.signIns.map((s) => s.authConfigId)).toEqual([made, made]);
+
+    // Kept even when the app is later taken off the setting: its users' connections live on it.
+    settings({ managed: '' });
+    const apps = await appCatalogFor(a.id, a.plan);
+    expect(apps.find((x) => x.slug === 'googlecalendar')!.connectable).toBe(true);
+  });
+
+  it('two first connects at once end on one saved setup', async () => {
+    settings({ managed: 'notion' });
+    const [a, b] = await Promise.all([chatUser(), chatUser()]);
+    await Promise.all([startConnect(a.id, a.plan, 'notion'), startConnect(b.id, b.plan, 'notion')]);
+    const saved = await db().select().from(composioAuthConfigs);
+    expect(saved).toHaveLength(1);
+    // Whichever was made first or second, everyone is sent to the saved one from now on.
+    const c = await chatUser();
+    await startConnect(c.id, c.plan, 'notion');
+    expect(composio.state.signIns.at(-1)!.authConfigId).toBe(saved[0]!.authConfigId);
+  });
+
+  it("a setup Composio won't make is a 503; nothing is kept and the next try asks again", async () => {
+    settings({ managed: 'all' });
+    const user = await chatUser();
+    composio.state.setupError = new Error('key may not create auth configs');
+    const res = await expectContract<{ error: { code: string } }>(
+      'connectApp',
+      await call('/v1/apps/notion/connect', { method: 'POST', token: user.token }),
+      503,
+    );
+    expect(res.error.code).toBe('unavailable');
+    expect(await db().select().from(composioAuthConfigs)).toEqual([]);
+    expect(await connectionsOf(user.id)).toEqual([]);
+    await startConnect(user.id, user.plan, 'notion');
+    expect(composio.state.managedSetups).toHaveLength(1);
+  });
+
+  it('COMPOSIO_AUTH_CONFIGS wins over a setup the server made', async () => {
+    settings({ managed: 'github' });
+    const user = await chatUser();
+    await startConnect(user.id, user.plan, 'github');
+    const made = composio.state.managedSetups[0]!.id;
+    // Later, our own GitHub app is named in the settings: new connects use it, straight to GitHub.
+    settings({ configs: { github: 'ac_own_github' }, managed: 'github' });
+    const started = await startConnect(user.id, user.plan, 'github');
+    expect(started.direct).toBe(true);
+    expect(composio.state.signIns.map((s) => s.authConfigId)).toEqual([made, 'ac_own_github']);
+  });
+
+  it('plan limits come first: nothing is made for an app the plan does not include', async () => {
+    settings({ managed: 'all' });
+    const user = await chatUser(); // Free
+    const res = await expectContract<{ error: { code: string } }>(
+      'connectApp',
+      await call('/v1/apps/outlook/connect', { method: 'POST', token: user.token }),
+      403,
+    );
+    expect(res.error.code).toBe('plan_limit');
+    expect(composio.state.managedSetups).toEqual([]);
+  });
+});
+
 describe('the catalog, for the connect screen', () => {
   it('every app names who signs the user in and what Tex can do with it, in one sentence', () => {
     for (const app of CATALOG) {
@@ -168,6 +309,7 @@ describe('the catalog, for the connect screen', () => {
     }
     expect(findApp('gmail')).toMatchObject({ provider: 'Google' });
     expect(findApp('jira')).toMatchObject({ provider: 'Atlassian' });
+    expect(CATALOG.filter((a) => !a.managedAuth).map((a) => a.slug)).toEqual(['exa']);
   });
 
   it('the app list carries both', async () => {

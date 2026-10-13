@@ -356,6 +356,9 @@ export interface paths {
          *     comes back to `returnUrl` (default: the web app's `/apps?connected=<appSlug>`) with
          *     `status=success` or `status=failed` added by Composio. Only the app list says for sure that
          *     the connection is active.
+         *
+         *     An app the server may set up by itself (`COMPOSIO_MANAGED_APPS`) gets its Composio setup on
+         *     the first connect; that is when the first user can wait a second longer.
          */
         post: operations["connectApp"];
         delete?: never;
@@ -1394,9 +1397,10 @@ export interface components {
             category: string;
             availableOnPlan: boolean;
             /**
-             * @description True when this server has a Composio setup for the app, so it can be connected. False:
-             *     the app is listed but cannot be connected yet (`POST /v1/apps/{appSlug}/connect`
-             *     answers 404 for it); show it as "Not available yet", without a Connect button.
+             * @description True when this server can connect the app: it has a Composio setup for it, or may make
+             *     one on the first connect (`COMPOSIO_MANAGED_APPS`). False: the app is listed but cannot
+             *     be connected yet (`POST /v1/apps/{appSlug}/connect` answers 404 for it); show it as
+             *     "Not available yet", without a Connect button.
              */
             connectable: boolean;
             connections: {
@@ -2655,7 +2659,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["PlanLimit"];
             404: components["responses"]["NotFound"];
-            /** @description Composio could not be reached. Nothing was saved. Retry later */
+            /** @description Composio could not be reached, or could not make the app's setup. Nothing was saved. Retry later */
             503: {
                 headers: {
                     [name: string]: unknown;

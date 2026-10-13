@@ -10,7 +10,7 @@ Read `hld-mvp.md` first. It gives the short version and explains the words. This
 | **What it does** | Receives messages, runs each user's agent through the vm-manager, charges credits, sends replies |
 | **What it does not do** | It does not run the AI itself. Each user's agent runs in its own container |
 | **Where it runs** | On the AWS test server (see `aws-setup.md`) |
-| **How it is tested** | 568 automated tests, with a real database and real queues |
+| **How it is tested** | 581 automated tests, with a real database and real queues |
 | **What is in this report** | The backend, and the parts it depends on: the vm-manager, the container, the proxy |
 
 ## How to read this report
@@ -406,6 +406,7 @@ The rules:
 - **Web chat:** the user can start a new conversation, open any earlier web conversation and keep writing in it. Writing in an earlier one makes it the active one. The agent then continues that conversation's own context, not the latest one's.
 - **Telegram:** a message always goes into the chat's latest conversation. `/new` starts the next one. In the web app, Telegram conversations are listed for reading only. The api answers 409 when the web app tries to open one or write in it.
 - **A reply stays where its question was asked.** What the agent sends during a turn is saved in that turn's conversation, also when the user has opened another conversation meanwhile. An approval's answer goes back to the conversation that asked for it.
+- **An automation answers where it was made.** In web chat a run answers in the conversation the automation was made in, or else in a conversation of its own named after it. That one is added beside the active one and does not become active. Never in the conversation the user happens to have open (section 18).
 - **Renaming:** the user can give any conversation a name of 1 to 80 characters. A later message does not change it back.
 - **Deleting:** the conversation goes, with its messages and their files. They are the user's own data. A file that a message in another conversation still shows is kept. The activity log gets "Deleted a conversation in web chat" or "on Telegram". It never holds the title or the text of a message.
 - **After the active web conversation is deleted,** the newest remaining web conversation becomes the active one. When none is left, an empty one is started. After a Telegram chat's current conversation is deleted, the chat's next message starts a new one.
@@ -948,12 +949,19 @@ An automation is a saved instruction that the agent runs later, without the user
 
 1. The user asks in chat. The agent calls `schedule_reminder` with a text and a time. For the other kinds it calls `create_automation`.
 2. The api checks the request (the list below) and saves it in the table `automations`. The database is the source of truth.
-3. The api sets the timer. For an app event, Composio starts a watch on the app, called a trigger. The agent then confirms to the user.
+3. It also saves the conversation the request was made in: the agent's turn's, when the agent makes it during a turn in that chat. An automation made from the web app (pull-request review) has none.
+4. The api sets the timer. For an app event, Composio starts a watch on the app, called a trigger. The agent then confirms to the user.
 
 - **The plan limit.** Free 1, Pro 5, Max 50. Reminders count, and paused automations count. A finished one-time reminder does not.
 - **The 15-minute minimum.** For a schedule, the next 50 runs must each be at least 15 minutes apart.
 - **The time zone.** It must be a real one. If none is given, the user's own is used. "Every Monday at 9" means 9 where the user lives.
 - **Other checks.** A one-time moment must not be in the past. An app event needs that app to be connected.
+
+**Where the user's own time zone comes from.** Every account starts on UTC. While nobody has set a time zone, the web app sets the one the browser is in, once: on the first page of the app or of the setup steps. After that the account says the time zone was set (`timezoneSet` in `GET /v1/me`), and the web app never changes it again. So a time zone the user chose in Settings is never replaced, also when they open the app in another country. The database update that added this marks every account whose time zone is not UTC as set. An account still on UTC gets the browser's time zone the next time its user opens the web app. A user who chose UTC in Settings before that cannot be told apart, and gets the browser's time zone once too.
+
+Example: Priya in Bengaluru signs up. Her account starts on UTC. The setup page sets it to Asia/Kolkata. "Every morning at 9" then runs at 9 in India, not at 2:30 PM.
+
+The user's container keeps the time zone it was made with, which is usually UTC: it is made at sign-up, before the web app sets one. The agent reads the user's time zone with `get_profile`, and an automation uses the account's time zone, not the container's.
 
 ### What happens when one fires
 
@@ -961,23 +969,54 @@ An automation is a saved instruction that the agent runs later, without the user
 2. The worker checks that the automation still exists and is on. For an app event, it also checks the owner.
 3. It puts a job in the same queue as the user's messages. So messages and automations run one at a time, in order.
 4. The agent gets a normal turn. A turn is one run of the agent, from input to answer.
-5. The input is the automation's title and instruction. For an app event, the event's data is added.
-6. The agent answers in the chat where the automation was created. A one-time automation is then marked finished.
+5. The input is the automation's title and instruction. For an app event, the event's data is added. A timer run that starts late gets a line about that first (below).
+6. The agent answers in the chat where the automation was created, in the conversation the next part says. A one-time automation is then marked finished.
 
 **Example.** Rahul texts "every Monday at 9, send me this week's meetings". Each Monday at 9 his time, the agent wakes, reads his calendar and sends the list on Telegram.
 
 **The cost.** The automation itself has no price. Each run is a normal turn and costs what a turn costs. That is the AI when Textcrew AI is used, and the time the container is awake. An app action that changes something costs 1 credit. A risky action still needs the user's approval.
 
+### Which conversation a run answers in
+
+In web chat:
+
+1. **The conversation the automation was made in,** while it still exists. Also when the user has opened another conversation since. The agent continues that conversation's own context.
+2. **Otherwise, a conversation of its own,** named after the automation. This is for an automation made from the web app, one made before automations kept a conversation, and one whose conversation was deleted. Its first such run starts the conversation beside the active one. The active one stays active. Later runs answer in the same conversation. If the user deletes it, the next run starts another, with a new number.
+3. **Never the conversation the user happens to have open,** only because it is open.
+
+The conversation the run answers in moves to the top of the web app's list. The user can open it and answer there, and the agent then has the run in its context.
+
+On Telegram a run answers in the chat's current conversation, as before. There the user can only write in the latest conversation, so a result kept anywhere else could not be answered with its context.
+
+Starting the conversation and saving it on the automation happen in one step. A job that runs twice, or two runs at the same moment, start one conversation, not two.
+
+**Example.** Rahul asks in web chat "every morning at 9, summarise my open pull requests". The next morning he is in a new chat about a recipe. At 9 the summary appears in the conversation where he asked for it, which moves to the top of the list. The recipe chat gets nothing.
+
+### A run that starts late
+
+A timer run can start late. The worker may have been stopped when it was due, for an update or after a crash. The user's own turns may also have kept it waiting.
+
+- **It still runs.** A late run is never skipped. When the worker starts again, a run that came due meanwhile runs then. A repeating automation that missed several slots runs once, then goes on with its next slot.
+- **It says so.** If it starts more than 10 minutes after it was due, the agent is told when it was due, in the automation's time zone, and how late it is. It is asked to say so at the start of its reply. Up to 10 minutes late, nothing is said.
+- **When it was due.** For a one-time reminder, its own moment. For a repeating one, the slot the timer was set for.
+- **App events are never late.** They have no due time.
+
+Example: the server is off from 8:50 to 9:31 on Tuesday. Rahul's 9:00 summary runs at 9:31. The agent starts its reply by saying that it is 31 minutes late and was due at 9:00 AM.
+
+The worker's start used to drop such a run at times. On start the worker sets every automation's timer again, and for a repeating one that replaced the missed run with the next one. Now a timer that is already set with the same schedule is left as it is.
+
 ### Auto-pause and recovery
 
 - **Zero credits.** All the user's automations are paused. When credits are added, these are switched on again by themselves.
 - **Three failures in a row.** That automation is paused. The user is told in chat and can resume it in the web app. A paused automation has no timer, and app events for it are ignored.
-- **After a restart.** The timers live in the job queue, which can lose its data. So every time the worker starts, it sets the timer of every enabled automation again. Setting one twice is harmless.
+- **After a restart.** The timers live in the job queue, which can lose its data. So every time the worker starts, it sets the timer of every enabled automation again. A timer that is still there is left as it is, so a run that came due while the worker was stopped is not lost. It runs late and says so (above).
+- **The job queue lost its jobs.** A run whose job was lost is put back from the saved event. It still knows its automation and when it was due.
 
 ### What can go wrong
 
 - **The plan limit is reached.** The tool says how many the plan allows. Nothing is saved.
-- **No credits when it fires.** No turn runs. The user gets the out-of-credits message and the automation is paused.
+- **No credits when it fires.** No turn runs. The user gets the out-of-credits message, in the conversation the run would have answered in, and the automation is paused.
+- **The automation is deleted while it runs.** The run stops before the agent gets it. The job is tried again, finds no automation and ends.
 
 ## 19. Pull-request review
 
@@ -989,7 +1028,7 @@ The user can switch on automatic code review for chosen GitHub repositories. Whe
 2. The api checks that GitHub is connected and that the plan has a free automation.
 3. The api asks Composio to watch that repository. Composio puts a webhook on it, so the GitHub account needs admin access there.
 4. The api saves an app-event automation with the mark `pr_review`. It shows in the automations list.
-5. The verdict chat is chosen now: the user's linked Telegram chat, or else the web chat.
+5. The verdict chat is chosen now: the user's linked Telegram chat, or else the web chat. In web chat the verdicts go to a conversation of their own, named "Review pull requests in owner/repo" (section 18).
 
 Only the user can switch it on, from the web app. No agent tool can set this mark. Switching it off deletes the automation and Composio's watch.
 
@@ -2234,7 +2273,7 @@ This section lists every table of the backend's database, grouped by the module 
 
 | Module | Table | What it holds |
 |---|---|---|
-| auth | `users` | One row per person: email, name, time zone, plan, role |
+| auth | `users` | One row per person: email, name, time zone and whether anyone set it, plan, role |
 | auth | `link_codes` | One-time codes to link a chat app, stored as hashes, with an expiry |
 | auth | `channel_links` | Which chat belongs to which user |
 | auth | `waitlist_entries` | People waiting for access, with request details for abuse checks |
@@ -2254,7 +2293,7 @@ This section lists every table of the backend's database, grouped by the module 
 | integrations | `user_mcp_servers` | The user's own MCP servers, with the secret encrypted |
 | integrations | `composio_triggers` | Made for app triggers. No code reads or writes it today |
 | integrations | `byok_keys` | The user's own AI keys, encrypted, plus the last 4 characters |
-| automations | `automations` | Reminders, repeating tasks and app-event tasks |
+| automations | `automations` | Reminders, repeating tasks and app-event tasks, each with the conversation its runs answer in |
 | automations | `pr_reviews` | One row per reviewed pull-request commit, so none is reviewed twice |
 | billing | `subscriptions` | Each paid plan: user, Polar id, status, period |
 | billing | `payments` | Polar orders seen, to trace refunds back to a user |
@@ -2275,7 +2314,7 @@ This section says what the web app can do through the api, group by group. Almos
 
 | Group | What it lets the app do |
 |---|---|
-| Profile | Read the user's name, plan and credit summary. Change the name and time zone |
+| Profile | Read the user's name, plan and credit summary, and whether a time zone was ever set. Change the name and time zone. The app sets the time zone from the browser once, while nobody has set one |
 | Channels and linking | See linked chat apps and which channels are on. Get a one-time code to link Telegram. Unlink a chat |
 | Chat and the live stream | List the conversations. Start a new web conversation, open an earlier one, rename or delete one. Read the messages of one conversation, or of all. Send a message into the active web conversation or into one the app names. Upload a file up to 10 MB. Keep a live stream open |
 | Approvals | List approvals, the waiting ones by default. Approve or reject one |
@@ -2430,7 +2469,7 @@ These were found by reading the code while this report was written. Each is desc
 
 ## 44. What has run for real
 
-The backend has 590 automated tests. They use a real database and real queues, and stand-ins for outside services. "Run for real" below means it ran on the AWS test server against the real outside service.
+The backend has 605 automated tests. They use a real database and real queues, and stand-ins for outside services. "Run for real" below means it ran on the AWS test server against the real outside service.
 
 | Area | Run for real |
 |---|---|
@@ -2453,6 +2492,7 @@ The backend has 590 automated tests. They use a real database and real queues, a
 | Pull-request review; Byte through the git gateway | No |
 | Reminders and automations | Yes: a one-time reminder, a daily automation, the 15-minute limit |
 | Conversations: the list, going back to an earlier one, rename, delete | No. Built on 9 October, with the automated tests only |
+| An automation answering in its own conversation; a late run saying so; the time zone set from the browser | No. Built on 13 October, with the automated tests only, and the web app's part in its demo mode |
 | Replies to a chat app as plain text, with the formatting kept for the web app | No. Built on 9 October, with the automated tests only |
 | Connecting straight to the provider with our own sign-in app, apps the server sets up at Composio by itself, `/oauth/callback` | No. Built on 13 October, with the automated tests only and a stand-in for Composio. No own sign-in app exists yet, and `COMPOSIO_MANAGED_APPS` is not set on the server |
 | Web search through Brave | No. The key answers a direct call |

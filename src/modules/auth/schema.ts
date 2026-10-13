@@ -18,6 +18,11 @@ export const users = pgTable('users', {
   emailVerified: boolean().notNull().default(false),
   name: text().notNull().default(''),
   timezone: text().notNull().default('UTC'),
+  /**
+   * Someone set the time zone (the user, or the web app once from the browser). While false the
+   * account still has the default above, and the web app may set it from the browser.
+   */
+  timezoneSet: boolean().notNull().default(false),
   plan: text({ enum: ['free', 'pro', 'max'] })
     .notNull()
     .default('free'),

@@ -127,6 +127,13 @@
       "when": 1791889376808,
       "tag": "0017_automation_conversation_timezone_set",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791890222849,
+      "tag": "0018_crew_jobs",
+      "breakpoints": true
     }
   ]
 }

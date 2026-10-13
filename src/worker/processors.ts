@@ -12,6 +12,7 @@ import {
   handleComposioTrigger,
   handleRunAutomation,
 } from '../modules/automations/jobs.ts';
+import { handleCrewJob } from '../modules/automations/crew-jobs.ts';
 import { handleSendMessage, handleSendRaw } from '../modules/channels/outbound.ts';
 import { handleMessageStatus } from '../modules/channels/status.ts';
 import {
@@ -35,6 +36,7 @@ export function processors(): Processors {
       'process-approval': handleProcessApproval,
       'automation-turn': handleAutomationTurn,
       'composio-trigger': handleComposioTrigger,
+      'crew-job': handleCrewJob,
     },
     scheduled: {
       'run-automation': handleRunAutomation,

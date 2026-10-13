@@ -233,6 +233,43 @@ async function reportProgress(
   }
 }
 
+/** A draft is cut at this length (the Bridge stops one there too). */
+export const DRAFT_MAX_CHARS = 16_000;
+
+/**
+ * Whether a turn's answer is shown as it is written: only in web chat, where the web app draws
+ * the draft (`message.draft`). Telegram and the other chat apps get the finished answer only.
+ */
+export const streamsDraft = (input: Pick<TurnInput, 'channel'>) => input.channel === 'web';
+
+/**
+ * The answer the agent is writing, so far: a TEXT_DELTA from the Bridge, which holds the whole
+ * draft. It goes to the web app's live stream as `message.draft`, with the turn's conversation,
+ * the turn's id (its delivery id) and the message it answers. Nothing is saved and nothing goes to
+ * a chat app. An empty text means the agent started over (a new message, or a tool call). Never
+ * fails the turn.
+ */
+async function publishDraft(
+  input: TurnInput,
+  ev: { message: string; atUnixMs?: bigint },
+): Promise<boolean> {
+  if (!streamsDraft(input) || !input.conversationId) return false;
+  const at = ev.atUnixMs ? new Date(Number(ev.atUnixMs)) : new Date();
+  try {
+    await publish(input.userId, 'message.draft', {
+      conversationId: input.conversationId,
+      turnId: input.deliveryId,
+      messageId: input.inboundMessageId ?? null,
+      text: ev.message.slice(0, DRAFT_MAX_CHARS),
+      at: at.toISOString(),
+    });
+    return true;
+  } catch (err) {
+    logger().debug({ userId: input.userId, err: String(err) }, 'draft dropped');
+    return false;
+  }
+}
+
 export async function runTurn(given: TurnInput): Promise<TurnOutcome> {
   const { userId } = given;
   const log = logger().child({ userId, deliveryId: given.deliveryId });
@@ -297,9 +334,11 @@ export async function runTurn(given: TurnInput): Promise<TurnOutcome> {
   // always. The Bridge keeps one engine conversation per number, so this turn continues its own
   // conversation's context; the number is lower than the chat's highest when the user went back
   // to an earlier conversation. On Claude Code also the model and the effort the user chose (each
-  // left out when it is Claude Code's default).
+  // left out when it is Claude Code's default). `stream_text`: whether the Bridge sends the draft of
+  // the answer as it is written (web chat only).
   const metadata: Record<string, unknown> = {
     chat_epoch: conversation.epoch,
+    stream_text: streamsDraft(input),
     ...(engine === 'claude_code' ? { claude: await claudeTurnOptions(userId) } : {}),
   };
 
@@ -363,6 +402,8 @@ async function deliverTurn(
   const { text, log } = turn;
   const startedAt = new Date();
   const progress = { crewLines: 0 };
+  // Whether a draft of the answer was shown in the web app during this turn.
+  let drafted = false;
   let outcome: TurnOutcome | null = null;
   const stream = vm().deliver({
     userId,
@@ -395,12 +436,17 @@ async function deliverTurn(
       case DeliverEventType.WORKING:
         await reportProgress(input, ev, progress);
         break;
+      case DeliverEventType.TEXT_DELTA:
+        if (await publishDraft(input, ev)) drafted = true;
+        break;
       case DeliverEventType.TURN_DONE:
         outcome = 'done';
         break;
       case DeliverEventType.ERROR: {
         outcome = 'error';
         log.warn({ platformFault: ev.platformFault, message: ev.message }, 'turn error');
+        // A half-written answer goes away before the user is told the turn failed.
+        if (drafted) await publishDraft(input, { message: '' });
         if (ev.platformFault) {
           // The user is told first. The refund is a job of its own (retried, given once): it
           // never holds back the reply or the message's last state.

@@ -18,18 +18,63 @@ export type AiAccessMode = 'platform' | 'own_only';
 export type ClaudeEffort = (typeof CLAUDE_EFFORTS)[number];
 export { CLAUDE_EFFORTS };
 
+export type ClaudeModelGroup = 'current' | 'older';
+
+export interface ClaudeModel {
+  /** The full model name Claude Code's `--model` flag takes. */
+  id: string;
+  label: string;
+  /** `current`: Claude's newest models. `older`: earlier models Claude still offers. */
+  group: ClaudeModelGroup;
+  /** The effort levels the model takes, lowest first. Empty: no effort setting at all. */
+  efforts: readonly ClaudeEffort[];
+  /** A short word worth showing next to the model. */
+  note?: string;
+}
+
+const ALL_EFFORTS = CLAUDE_EFFORTS;
+/** Opus 4.6 and Sonnet 4.6: no `xhigh` (it came with Opus 4.7). */
+const NO_XHIGH = ['low', 'medium', 'high', 'max'] as const satisfies readonly ClaudeEffort[];
+const FABLE_NOTE =
+  'Pro: paid with usage credits. Max: up to half your weekly limit, then usage credits.';
+
 /**
- * The Claude models a user may choose for Claude Code, in display order. Each id is a full model
- * name Claude Code's `--model` flag takes (checked against the CLI, 2.1.291 to 2.1.294). Whether
- * the user's own Claude plan allows a model is Anthropic's call: a refusal ends the turn with the
+ * Every Claude model a user may choose for Claude Code, in display order: the current models,
+ * then the older ones Claude still offers; in each, the newest version first, and within one
+ * version Fable, Opus, Sonnet, Haiku. Claude has no way to list a plan's models at run time, so
+ * this list is kept by hand, here only. Checked on 2026-10-13 against Anthropic's models overview, Claude Code's model page
+ * (code.claude.com/docs/en/model-config) and the model table inside Claude Code 2.1.296, the
+ * version the agent image pins: every id is one it knows, with these effort levels. Whether the
+ * user's own Claude plan allows a model is Anthropic's call: a refusal ends the turn with the
  * CLI's message.
  */
-export const CLAUDE_MODELS = [
-  { id: 'claude-opus-5-5', label: 'Opus 5.5' },
-  { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
-  { id: 'claude-haiku-4-5', label: 'Haiku 4.5' },
-  { id: 'claude-fable-5-1', label: 'Fable 5.1' },
-] as const;
+export const CLAUDE_MODELS: readonly ClaudeModel[] = [
+  { id: 'claude-opus-5-5', label: 'Opus 5.5', group: 'current', efforts: ALL_EFFORTS },
+  { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', group: 'current', efforts: ALL_EFFORTS },
+  { id: 'claude-haiku-5-5', label: 'Haiku 5.5', group: 'current', efforts: ALL_EFFORTS },
+  {
+    id: 'claude-fable-5-1',
+    label: 'Fable 5.1',
+    group: 'current',
+    efforts: ALL_EFFORTS,
+    note: FABLE_NOTE,
+  },
+  {
+    id: 'claude-fable-5',
+    label: 'Fable 5',
+    group: 'older',
+    efforts: ALL_EFFORTS,
+    note: FABLE_NOTE,
+  },
+  { id: 'claude-opus-5', label: 'Opus 5', group: 'older', efforts: ALL_EFFORTS },
+  { id: 'claude-sonnet-5', label: 'Sonnet 5', group: 'older', efforts: ALL_EFFORTS },
+  { id: 'claude-opus-4-8', label: 'Opus 4.8', group: 'older', efforts: ALL_EFFORTS },
+  { id: 'claude-opus-4-7', label: 'Opus 4.7', group: 'older', efforts: ALL_EFFORTS },
+  { id: 'claude-opus-4-6', label: 'Opus 4.6', group: 'older', efforts: NO_XHIGH },
+  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', group: 'older', efforts: NO_XHIGH },
+  { id: 'claude-opus-4-5', label: 'Opus 4.5', group: 'older', efforts: [] },
+  { id: 'claude-haiku-4-5', label: 'Haiku 4.5', group: 'older', efforts: [] },
+];
 
 const isClaudeModel = (id: string | null | undefined): id is string =>
   CLAUDE_MODELS.some((m) => m.id === id);

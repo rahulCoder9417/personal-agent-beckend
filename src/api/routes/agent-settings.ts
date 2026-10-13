@@ -27,7 +27,13 @@ function toAgentSettings(s: AgentSettingsView): Schemas['AgentSettings'] {
     claudeModel: s.claudeModel,
     claudeEffort: s.claudeEffort,
     claudeChoices: {
-      models: CLAUDE_MODELS.map((m) => ({ id: m.id, label: m.label })),
+      models: CLAUDE_MODELS.map((m) => ({
+        id: m.id,
+        label: m.label,
+        group: m.group,
+        efforts: [...m.efforts],
+        ...(m.note ? { note: m.note } : {}),
+      })),
       efforts: [...CLAUDE_EFFORTS],
     },
   };

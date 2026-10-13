@@ -11,7 +11,12 @@ import { messages } from '../src/modules/channels/schema.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
 import { events } from '../src/modules/events/schema.ts';
 import { setByokKey, setByokVerifier } from '../src/modules/integrations/byok.ts';
-import { decideAccess, getAgentSettings } from '../src/modules/orchestrator/agent-settings.ts';
+import {
+  CLAUDE_EFFORTS,
+  CLAUDE_MODELS,
+  decideAccess,
+  getAgentSettings,
+} from '../src/modules/orchestrator/agent-settings.ts';
 import { deleteSandboxRecord, ensureSandbox } from '../src/modules/orchestrator/sandbox.ts';
 import { agentSettings } from '../src/modules/orchestrator/schema.ts';
 import { vm } from '../src/modules/orchestrator/vm.ts';
@@ -31,18 +36,44 @@ type Settings = {
   ownKeyProviders: string[];
   claudeModel: string | null;
   claudeEffort: string | null;
-  claudeChoices: { models: Array<{ id: string; label: string }>; efforts: string[] };
+  claudeChoices: {
+    models: Array<{ id: string; label: string; group: string; efforts: string[]; note?: string }>;
+    efforts: string[];
+  };
 };
 
-/** The list the web app shows, exactly as the shared spec names it. */
+const ALL = ['low', 'medium', 'high', 'xhigh', 'max'];
+const NO_XHIGH = ['low', 'medium', 'high', 'max'];
+const FABLE_NOTE =
+  'Pro: paid with usage credits. Max: up to half your weekly limit, then usage credits.';
+/**
+ * The list the web app shows: every Claude model Claude Code can use (Anthropic's models overview
+ * and Claude Code's model page, 2026-10-13), the current ones first, then the older ones, newest
+ * first; each with the effort levels Claude Code gives it.
+ */
 const CLAUDE_CHOICES = {
   models: [
-    { id: 'claude-opus-5-5', label: 'Opus 5.5' },
-    { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
-    { id: 'claude-haiku-4-5', label: 'Haiku 4.5' },
-    { id: 'claude-fable-5-1', label: 'Fable 5.1' },
+    { id: 'claude-opus-5-5', label: 'Opus 5.5', group: 'current', efforts: ALL },
+    { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', group: 'current', efforts: ALL },
+    { id: 'claude-haiku-5-5', label: 'Haiku 5.5', group: 'current', efforts: ALL },
+    {
+      id: 'claude-fable-5-1',
+      label: 'Fable 5.1',
+      group: 'current',
+      efforts: ALL,
+      note: FABLE_NOTE,
+    },
+    { id: 'claude-fable-5', label: 'Fable 5', group: 'older', efforts: ALL, note: FABLE_NOTE },
+    { id: 'claude-opus-5', label: 'Opus 5', group: 'older', efforts: ALL },
+    { id: 'claude-sonnet-5', label: 'Sonnet 5', group: 'older', efforts: ALL },
+    { id: 'claude-opus-4-8', label: 'Opus 4.8', group: 'older', efforts: ALL },
+    { id: 'claude-opus-4-7', label: 'Opus 4.7', group: 'older', efforts: ALL },
+    { id: 'claude-opus-4-6', label: 'Opus 4.6', group: 'older', efforts: NO_XHIGH },
+    { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', group: 'older', efforts: NO_XHIGH },
+    { id: 'claude-opus-4-5', label: 'Opus 4.5', group: 'older', efforts: [] },
+    { id: 'claude-haiku-4-5', label: 'Haiku 4.5', group: 'older', efforts: [] },
   ],
-  efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+  efforts: ALL,
 };
 type Fake = ReturnType<typeof installFakeVm>;
 
@@ -575,6 +606,34 @@ describe('Claude Code model and effort', () => {
       claudeModel: 'claude-fable-5-1',
       claudeEffort: 'max',
     });
+  });
+
+  it('every model on the list can be chosen, and a Claude Code turn carries it', async () => {
+    const u = await chatUser();
+    await connectClaude(u);
+    for (const { id } of CLAUDE_CHOICES.models) {
+      expect(
+        await expectContract<Settings>(
+          'updateAgentSettings',
+          await patch(u.token, { claudeModel: id }),
+          200,
+        ),
+        id,
+      ).toMatchObject({ claudeModel: id });
+      expect(await webTurn(u.id, `on ${id}`)).toBe('done');
+      expect(metadataOf().claude, id).toEqual({ model: id });
+    }
+  });
+
+  it('the list: no id twice, current before older, each model with levels from the full ladder', () => {
+    const ids = CLAUDE_MODELS.map((m) => m.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    const groups = CLAUDE_MODELS.map((m) => m.group);
+    expect(groups).toEqual([...groups].sort((a, b) => (a === b ? 0 : a === 'current' ? -1 : 1)));
+    for (const m of CLAUDE_MODELS) {
+      // Lowest first, in the order of CLAUDE_EFFORTS.
+      expect(m.efforts, m.id).toEqual(CLAUDE_EFFORTS.filter((e) => m.efforts.includes(e)));
+    }
   });
 
   it('a model or an effort that is not on the list → 400 invalid_request, nothing saved', async () => {

@@ -6,17 +6,24 @@ import { newId } from '../../../shared/ids.ts';
 import { logger } from '../../../shared/logger.ts';
 import { getActiveUser } from '../../auth/users.ts';
 import {
+  appActionsFor,
+  agentAppStates,
+  currentAgentAppStates,
+} from '../../integrations/agent-apps.ts';
+import {
   activeConnections,
   appActionChangesSomething,
   connectionForToolkit,
+  listConnections,
+  refreshPendingConnections,
 } from '../../integrations/apps.ts';
 import { claimCrewJobComment, releaseCrewJobComment } from '../../automations/crew-jobs.ts';
 import { prCommentAllowed } from '../../automations/pr-review.ts';
 import {
-  actionChangesSomething,
   actionNeedsApproval,
   appAllowedOnPlan,
   appForToolkit,
+  CATALOG,
   prCommentTarget,
 } from '../../integrations/catalog.ts';
 import { composio } from '../../integrations/composio.ts';
@@ -56,44 +63,49 @@ async function allowedToolkits(
     .map((c) => ({ toolkit: c.catalog.toolkit, connectedAccountId: c.composioAccountId }));
 }
 
-extendProfile(async (userId) => ({
-  connected_apps: (await activeConnections(userId)).map((c) => ({
-    app: c.catalog.slug,
-    name: c.catalog.name,
-    account: c.accountLabel,
-  })),
-}));
+// The profile asks Composio about connections still pending first, so an app the user just
+// connected shows at once; one that is not ready is named with what to tell the user.
+extendProfile(async (userId) => {
+  const user = await getActiveUser(userId);
+  if (!user) return { connected_apps: [], apps_not_ready: [] };
+  const states = await currentAgentAppStates(userId, user.plan);
+  return {
+    connected_apps: (await activeConnections(userId)).map((c) => ({
+      app: c.catalog.slug,
+      name: c.catalog.name,
+      account: c.accountLabel,
+    })),
+    apps_not_ready: states
+      .filter((s) => s.status !== 'connected' && s.status !== 'not_on_plan')
+      .map((s) => ({ app: s.app.slug, name: s.app.name, status: s.status, note: s.note })),
+  };
+});
 
 defineTool({
   name: 'list_app_actions',
   description:
-    'Actions you can run in your user\'s connected apps (connected apps × plan). Optionally filter by app (e.g. "gmail"). ' +
+    "Your user's apps and the actions you can run in them. `apps` gives each app's status: connected, or not " +
+    "ready (still connecting, needs connecting again, not on the user's plan) with a note saying what to tell " +
+    'the user. `actions` lists the actions of the connected apps, at most 100, shared fairly between the apps; ' +
+    'filter by app (e.g. "googlecalendar") or by a search word to see more of one app. ' +
     'Actions marked requires_approval need request_approval first, then run_app_action with the approval_id ' +
     '(exceptions: a new review or comment on a pull request, in a repo where your user turned on pull-request review, ' +
     "and the one review a crew job's brief asks you to post on its pull request). " +
     'costs_credits is what a successful run costs your user: 1 for an action that changes something, 0 for reading.',
   input: { app: z.string().optional(), search: z.string().optional() },
   async run({ userId }, args) {
-    let toolkits = (await allowedToolkits(userId)).map((t) => t.toolkit);
-    if (args.app)
-      toolkits = toolkits.filter((t) => t === args.app || appForToolkit(t)?.slug === args.app);
-    const tools = await composio().listTools(toolkits);
-    const q = args.search?.toLowerCase();
-    return tools
-      .filter(
-        (t) => !q || t.slug.toLowerCase().includes(q) || t.description.toLowerCase().includes(q),
-      )
-      .slice(0, 100)
-      .map((t) => ({
-        action: t.slug,
-        app: appForToolkit(t.toolkit)?.slug ?? t.toolkit,
-        description: t.description.slice(0, 300),
-        requires_approval: actionNeedsApproval(t.slug),
-        costs_credits: actionChangesSomething(t.slug, t.tags) ? 1 : 0,
-        input_schema: t.inputParameters,
-      }));
+    const user = await getActiveUser(userId);
+    if (!user) throw new ToolError('User not found');
+    return appActionsFor(userId, user.plan, { app: args.app, search: args.search });
   },
 });
+
+/** The catalog app an action belongs to, by the start of its name (GOOGLECALENDAR_… → googlecalendar). */
+function appOfAction(action: string) {
+  const known = CATALOG.map((a) => a.toolkit);
+  const toolkit = toolkitOf(action, known);
+  return toolkit ? appForToolkit(toolkit) : undefined;
+}
 
 defineTool({
   name: 'request_approval',
@@ -136,12 +148,28 @@ defineTool({
     approval_id: z.string().optional(),
   },
   async run({ userId }, args) {
-    const allowed = await allowedToolkits(userId);
-    const toolkit = toolkitOf(
+    let toolkit = toolkitOf(
       args.action,
-      allowed.map((a) => a.toolkit),
+      (await allowedToolkits(userId)).map((a) => a.toolkit),
     );
-    if (!toolkit) throw new ToolError('That app is not connected or not available on your plan');
+    if (!toolkit) {
+      // It may have finished connecting a moment ago: ask Composio, then look again.
+      await refreshPendingConnections(userId);
+      toolkit = toolkitOf(
+        args.action,
+        (await allowedToolkits(userId)).map((a) => a.toolkit),
+      );
+    }
+    if (!toolkit) {
+      // Say why, when the app is one the user has a connection for (still connecting, expired…).
+      const app = appOfAction(args.action);
+      const user = await getActiveUser(userId);
+      const state =
+        app && user
+          ? agentAppStates(await listConnections(userId), user.plan).find((s) => s.app === app)
+          : undefined;
+      throw new ToolError(state?.note ?? 'That app is not connected or not available on your plan');
+    }
     const conn = await connectionForToolkit(userId, toolkit);
     if (!conn) throw new ToolError('That app is not connected');
 

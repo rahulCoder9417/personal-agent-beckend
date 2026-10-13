@@ -181,9 +181,9 @@ describe('app-action charge', () => {
 
   it('list_app_actions says what each action costs', async () => {
     const u = await appUser();
-    const actions = JSON.parse(
+    const { actions } = JSON.parse(
       (await mcpCall(u.mcp, 'list_app_actions', { app: 'gmail' })).text,
-    ) as Array<{ action: string; costs_credits: number; requires_approval: boolean }>;
+    ) as { actions: Array<{ action: string; costs_credits: number; requires_approval: boolean }> };
     expect(actions.find((a) => a.action === SEND)).toMatchObject({
       costs_credits: 1,
       requires_approval: true,

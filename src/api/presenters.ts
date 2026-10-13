@@ -11,6 +11,7 @@ export function toMe(user: User, credits: BalanceSummary): Schemas['Me'] {
     emailVerified: user.emailVerified,
     name: user.name,
     timezone: user.timezone,
+    timezoneSet: user.timezoneSet,
     plan: user.plan,
     role: user.role,
     credits: { balance: credits.balance, nextExpiry: iso(credits.nextExpiry) },

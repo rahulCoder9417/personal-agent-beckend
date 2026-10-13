@@ -31,6 +31,12 @@ export const automations = pgTable(
     preset: text({ enum: ['pr_review'] }),
     /** Where results are sent. */
     sessionKey: text().notNull(),
+    /**
+     * The conversation a run replies in (web chat): the one the agent made it in, or, when there
+     * was none or it was deleted, the automation's own conversation, started by its first run.
+     * Null until one is known. No foreign key: the conversation is the channels module's.
+     */
+    conversationId: text(),
     enabled: boolean().notNull().default(true),
     pausedReason: text({ enum: ['out_of_credits', 'failures', 'user'] }),
     failCount: integer().notNull().default(0),

@@ -1,7 +1,8 @@
 // An automation's runs reply in the conversation it was made in, else in a conversation of its
-// own (web chat), never in whatever conversation the user has open.
+// own (web chat), never in whatever conversation the user has open. And a timer run that starts
+// more than 10 minutes after it was due says so.
 import { randomUUID } from 'node:crypto';
-import type { Worker } from 'bullmq';
+import type { Job, Worker } from 'bullmq';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DeliverKind } from '../proto-gen/vm/v1/vm_pb.ts';
@@ -12,13 +13,24 @@ import {
   setMinIntervalMs,
   type Automation,
 } from '../src/modules/automations/automations.ts';
+import {
+  describeDueTime,
+  dueTimeOf,
+  handleRunAutomation,
+  LATE_AFTER_MS,
+  lateNote,
+  setLateAfterMs,
+} from '../src/modules/automations/jobs.ts';
 import { automations } from '../src/modules/automations/schema.ts';
 import { activeConversation } from '../src/modules/channels/conversations.ts';
 import { conversations, messages } from '../src/modules/channels/schema.ts';
+import { requeuePendingEvents } from '../src/modules/events/intake.ts';
 import { closeQueues, queue } from '../src/modules/events/queues.ts';
 import { startNewChat, startNewWebChat } from '../src/modules/orchestrator/chats.ts';
+import { config } from '../src/shared/config.ts';
 import { db } from '../src/shared/db/client.ts';
 import { newId } from '../src/shared/ids.ts';
+import { redis } from '../src/shared/redis.ts';
 import { wireModules } from '../src/wiring.ts';
 import { processors } from '../src/worker/processors.ts';
 import { startWorkers } from '../src/worker/runner.ts';
@@ -48,6 +60,8 @@ afterAll(async () => {
 
 /** The last line of a turn's text: what the user wrote (the platform's blocks come before it). */
 const lastLine = (text: string) => text.split('\n').at(-1)!;
+/** An automation turn's own text: from its `[Automation "…"]` line on. */
+const automationText = (text: string) => text.slice(text.indexOf('[Automation "'));
 
 beforeEach(() => {
   installFakeTelegram();
@@ -260,5 +274,116 @@ describe('where an automation replies', () => {
     const reply = await fire(a);
     expect(reply.conversationId).toBe(current.id);
     expect(await conversationsOf(user.id)).toHaveLength(2);
+  });
+});
+
+describe('a timer run that starts late', () => {
+  const AT = new Date('2026-10-13T03:30:00Z'); // 9:00 AM in India
+
+  it('says when it was due, in the automation’s time zone, and how late it is', () => {
+    expect(describeDueTime(AT, 'Asia/Kolkata')).toBe(
+      '9:00 AM on Tuesday 13 October (Asia/Kolkata)',
+    );
+    expect(describeDueTime(AT, 'Nowhere/Land')).toBe('3:30 AM on Tuesday 13 October (UTC)');
+    const later = (minutes: number) => new Date(AT.getTime() + minutes * 60_000);
+    expect(lateNote(AT, later(31), 'Asia/Kolkata', LATE_AFTER_MS)).toBe(
+      '[This run is late. It was due at 9:00 AM on Tuesday 13 October (Asia/Kolkata) and starts ' +
+        '31 minutes late. Start your reply by saying that it is late and when it was due.]',
+    );
+    expect(lateNote(AT, later(185), 'UTC', LATE_AFTER_MS)).toContain('starts about 3 hours late');
+    expect(lateNote(AT, later(3 * 24 * 60), 'UTC', LATE_AFTER_MS)).toContain(
+      'starts about 3 days late',
+    );
+  });
+
+  it('on time (at most 10 minutes after it was due) says nothing', () => {
+    expect(lateNote(AT, AT, 'UTC', LATE_AFTER_MS)).toBeNull();
+    expect(lateNote(AT, new Date(AT.getTime() + LATE_AFTER_MS), 'UTC', LATE_AFTER_MS)).toBeNull();
+    expect(
+      lateNote(AT, new Date(AT.getTime() + LATE_AFTER_MS + 1000), 'UTC', LATE_AFTER_MS),
+    ).not.toBeNull();
+    // Early (a clock a little behind) is not late.
+    expect(lateNote(AT, new Date(AT.getTime() - 5000), 'UTC', LATE_AFTER_MS)).toBeNull();
+  });
+
+  it('the due time: a one-time automation’s moment; the scheduler’s slot; else added + delay', () => {
+    const once = { kind: 'once', runAt: AT } as Automation;
+    const repeat = { kind: 'repeat', runAt: null } as Automation;
+    const job = (opts: Job['opts'], timestamp = 0) => ({ opts, timestamp });
+    expect(dueTimeOf(once, job({ delay: 0 }, Date.now()))).toEqual(AT);
+    expect(dueTimeOf(repeat, job({ prevMillis: AT.getTime(), delay: 0 }, Date.now()))).toEqual(AT);
+    expect(dueTimeOf(repeat, job({ delay: 60_000 }, AT.getTime() - 60_000))).toEqual(AT);
+  });
+
+  it('a run due while the worker was stopped still runs, says it is late; the next one does not', async () => {
+    const user = await chatUser({ plan: 'pro' });
+    setLateAfterMs(1500);
+    try {
+      await stop();
+      const a = await createAutomation({
+        userId: user.id,
+        title: 'Ticker',
+        instruction: 'tick',
+        sessionKey: 'web',
+        cron: '*/2 * * * * *',
+        timezone: 'Asia/Kolkata',
+      });
+      // Its first slot passes while nothing runs jobs.
+      await new Promise((r) => setTimeout(r, 4000));
+      start();
+      await waitFor(async () => (await runReplies(user.id, 'Ticker')).length >= 2, 15_000);
+      const turns = automationTurns().filter((d) => d.userId === user.id);
+      const [late, onTime] = turns.map((d) => automationText(d.text));
+      expect(late).toMatch(
+        /^\[Automation "Ticker"\] \[This run is late\. It was due at \d{1,2}:\d{2} [AP]M on \w+ \d{1,2} \w+ \(Asia\/Kolkata\) and starts \d+ minutes? late\./,
+      );
+      expect(late!.split('\n').at(-1)).toBe('tick');
+      expect(onTime).toBe('[Automation "Ticker"] tick');
+      await call(`/v1/automations/${a.id}`, { method: 'DELETE', token: user.token });
+    } finally {
+      setLateAfterMs(LATE_AFTER_MS);
+      if (!workers.length) start();
+    }
+  });
+
+  it('a run re-added from its saved event after Redis lost its jobs still knows when it was due', async () => {
+    const user = await chatUser({ plan: 'pro' });
+    const a = await createAutomation({
+      userId: user.id,
+      title: 'Bank',
+      instruction: 'Remind me to call the bank',
+      sessionKey: 'web',
+      runAt: new Date(Date.now() + 3600_000),
+      timezone: 'Asia/Kolkata',
+    });
+    // It was due 20 minutes ago (the server was off): the timer fires now, with no worker to
+    // run the turn, and then Redis loses every job.
+    const dueAt = new Date(Date.now() - 20 * 60_000);
+    const [due] = await db()
+      .update(automations)
+      .set({ runAt: dueAt })
+      .where(eq(automations.id, a.id))
+      .returning();
+    await stop();
+    try {
+      await handleRunAutomation({
+        id: `fire-${randomUUID()}`,
+        data: { automationId: due!.id, userId: user.id },
+        opts: {},
+        timestamp: Date.now(),
+      } as unknown as Job);
+      const keys = await redis().keys(`${config().QUEUE_PREFIX}:*`);
+      if (keys.length) await redis().del(...keys);
+      expect(await requeuePendingEvents()).toBeGreaterThanOrEqual(1);
+    } finally {
+      start();
+    }
+    await waitFor(async () => (await runReplies(user.id, 'Bank')).length >= 1);
+    const turn = automationTurns().find((d) => d.userId === user.id)!;
+    expect(automationText(turn.text)).toBe(
+      `[Automation "Bank"] [This run is late. It was due at ${describeDueTime(dueAt, 'Asia/Kolkata')} ` +
+        'and starts 20 minutes late. Start your reply by saying that it is late and when it was due.]\n' +
+        'Remind me to call the bank',
+    );
   });
 });

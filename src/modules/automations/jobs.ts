@@ -1,6 +1,7 @@
 import type { Job } from 'bullmq';
 import { eq } from 'drizzle-orm';
 import { db } from '../../shared/db/client.ts';
+import { isValidTimezone } from '../auth/users.ts';
 import { queueOutbound } from '../channels/outbound.ts';
 import { parseSessionKey } from '../channels/types.ts';
 import { getEvent, ingestEvent } from '../events/intake.ts';
@@ -24,20 +25,86 @@ async function load(id: string): Promise<Automation | undefined> {
   return row;
 }
 
+/** A timer run that starts more than this after it was due says so. Tests lower it. */
+export const LATE_AFTER_MS = 10 * 60 * 1000;
+let lateAfterMs = LATE_AFTER_MS;
+export function setLateAfterMs(ms: number): void {
+  lateAfterMs = ms;
+}
+
+/**
+ * When a timer run was due. A one-time automation: its moment (also when it was paused past it
+ * and resumed). A repeating one: the slot the scheduler made this job for, which BullMQ keeps on
+ * the job; failing that, when the job was added plus its delay.
+ */
+export function dueTimeOf(a: Automation, job: Pick<Job, 'opts' | 'timestamp'>): Date {
+  if (a.kind === 'once' && a.runAt) return a.runAt;
+  const slot = job.opts.prevMillis;
+  if (typeof slot === 'number' && slot > 0) return new Date(slot);
+  return new Date(job.timestamp + (job.opts.delay ?? 0));
+}
+
+/** "9:00 AM on Tuesday 13 October (Asia/Kolkata)": the moment in the automation's time zone. */
+export function describeDueTime(at: Date, timeZone: string): string {
+  const tz = isValidTimezone(timeZone) ? timeZone : 'UTC';
+  const part = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    })
+      .formatToParts(at)
+      .map((p) => [p.type, p.value]),
+  );
+  return `${part.hour}:${part.minute} ${part.dayPeriod} on ${part.weekday} ${part.day} ${part.month} (${tz})`;
+}
+
+function howLate(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 120) return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `about ${hours} hours`;
+  return `about ${Math.round(hours / 24)} days`;
+}
+
+/**
+ * The line a late timer run starts with, so the agent says in its reply that it is late and
+ * when it was due. Null when the run starts on time (at most 10 minutes after it was due). A late
+ * run is never skipped: the user still gets it, told that it is late.
+ */
+export function lateNote(
+  dueAt: Date,
+  startedAt: Date,
+  timeZone: string,
+  afterMs = lateAfterMs,
+): string | null {
+  const late = startedAt.getTime() - dueAt.getTime();
+  if (late <= afterMs) return null;
+  return (
+    `[This run is late. It was due at ${describeDueTime(dueAt, timeZone)} and starts ` +
+    `${howLate(late)} late. Start your reply by saying that it is late and when it was due.]`
+  );
+}
+
 /** scheduled/run-automation: the timer fired → queue a normal inbound turn (per-user lock applies). */
 export async function handleRunAutomation(job: Job): Promise<unknown> {
   const { automationId } = job.data as { automationId: string };
   const a = await load(automationId);
   if (!a || !a.enabled || a.completedAt) return IGNORED;
+  const dueAt = dueTimeOf(a, job).toISOString();
   await ingestEvent({
     source: 'automation',
     externalId: `${a.id}:${job.id}`,
     type: 'fired',
     userId: a.userId,
-    payload: { automationId: a.id, firedAt: new Date().toISOString() },
+    payload: { automationId: a.id, firedAt: new Date().toISOString(), dueAt },
     queue: 'inbound',
     jobName: 'automation-turn',
-    jobData: { automationId: a.id },
+    jobData: { automationId: a.id, dueAt },
   });
   return null;
 }
@@ -79,12 +146,31 @@ async function runAutomationTurn(
   return outcome;
 }
 
+/**
+ * What an automation-turn job is about. Its data, or, for a job re-added from its saved event
+ * after Redis lost its jobs (that job has only the event id), the event's payload.
+ */
+async function timerRunOf(job: Job): Promise<{ automationId?: string; dueAt?: string }> {
+  const data = job.data as { automationId?: string; dueAt?: string; eventId: string };
+  if (data.automationId) return data;
+  const payload = (await getEvent(data.eventId))?.payload as
+    { automationId?: string; dueAt?: string } | undefined;
+  return payload ?? {};
+}
+
 /** inbound/automation-turn: same path as a normal message, with the saved instruction. */
 export async function handleAutomationTurn(job: Job): Promise<unknown> {
-  const { automationId, eventId } = job.data as { automationId: string; eventId: string };
-  const a = await load(automationId);
+  const { eventId } = job.data as { eventId: string };
+  const { automationId, dueAt } = await timerRunOf(job);
+  const a = automationId ? await load(automationId) : undefined;
   if (!a || !a.enabled) return IGNORED;
-  await runAutomationTurn(a, eventId, 'automation', `[Automation "${a.title}"] ${a.instruction}`);
+  const note = dueAt ? lateNote(new Date(dueAt), new Date(), a.timezone ?? 'UTC') : null;
+  await runAutomationTurn(
+    a,
+    eventId,
+    'automation',
+    `[Automation "${a.title}"] ${note ? `${note}\n` : ''}${a.instruction}`,
+  );
   return null;
 }
 

@@ -89,9 +89,9 @@ describe('Phase 4: approvals + Composio', () => {
     const attempts: McpResult[] = [];
     vmFake = installFakeVm(async (d, mcp) => {
       if (d.kind === DeliverKind.MESSAGE) {
-        const actions = JSON.parse(
-          (await mcp('list_app_actions', { app: 'gmail' })).text,
-        ) as Array<{ action: string; requires_approval: boolean }>;
+        const { actions } = JSON.parse((await mcp('list_app_actions', { app: 'gmail' })).text) as {
+          actions: Array<{ action: string; requires_approval: boolean }>;
+        };
         const send = actions.find((a) => a.action === 'GMAIL_SEND_EMAIL')!;
         expect(send.requires_approval).toBe(true);
         attempts.push(await mcp('run_app_action', { action: send.action, arguments: EMAIL_ARGS }));

@@ -15,6 +15,9 @@
 //   claude-login    --user <id>
 //   claude-complete --user <id> --login <loginId> --code <code>   (the code is never printed or logged)
 //   connect-app     --user <id> --app <slug>
+//   apps            --user <id>
+//                   (each app connection: our status, what Composio says, its account id and setup,
+//                   and what the agent sees in list_app_actions)
 //   status          --user <id>
 //   browser         --user <id>                      (send Scout's browser switch for this user now)
 //   send            --user <id> --text <text> [--conversation <id>] [--timeout 900]
@@ -29,6 +32,8 @@
 //   pr-review       --user <id> [--repo <owner>/<name> --state on|off]
 //   memories        --user <id> [--clear all|<memoryId>]
 //
+// Every command that takes --user also takes --email <the user's email> instead.
+//
 // What it prints is for a person to read and paste into a report. It never prints a secret: no
 // key, token or sign-in code is ever read for printing, and text that people or the agent wrote
 // (messages, replies, approvals, memories) goes through `hideSecrets` first.
@@ -37,7 +42,12 @@ import { pathToFileURL } from 'node:url';
 import type { Job } from 'bullmq';
 import { audit, listAudit } from '../src/modules/admin/audit.ts';
 import { createLinkCode, listLinks, type LinkChannel } from '../src/modules/auth/links.ts';
-import { getActiveUser, setPlan, upsertUserFromClerk } from '../src/modules/auth/users.ts';
+import {
+  findActiveUsersByEmail,
+  getActiveUser,
+  setPlan,
+  upsertUserFromClerk,
+} from '../src/modules/auth/users.ts';
 import {
   disablePrReview,
   enablePrReview,
@@ -66,11 +76,14 @@ import { subscribe } from '../src/modules/channels/stream.ts';
 import type { Channel } from '../src/modules/channels/types.ts';
 import { findEvent, getEvent } from '../src/modules/events/intake.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
+import { appActionsFor } from '../src/modules/integrations/agent-apps.ts';
 import {
+  currentSetupFor,
   listConnections,
   refreshPendingConnections,
   startConnect,
 } from '../src/modules/integrations/apps.ts';
+import { composio, type ComposioAccount } from '../src/modules/integrations/composio.ts';
 import { getAgentSettings } from '../src/modules/orchestrator/agent-settings.ts';
 import { decideApproval, listApprovals } from '../src/modules/orchestrator/approvals.ts';
 import { browserStatus, syncBrowser } from '../src/modules/orchestrator/browser.ts';
@@ -101,6 +114,7 @@ const USAGE = `usage: node --import tsx scripts/dev-user.ts <command> [flags]
   claude-login    --user <id>
   claude-complete --user <id> --login <loginId> --code <code>
   connect-app     --user <id> --app <slug>
+  apps            --user <id>
   status          --user <id>
   browser         --user <id>
   send            --user <id> --text <text> [--conversation <id>] [--timeout 900]
@@ -110,7 +124,8 @@ const USAGE = `usage: node --import tsx scripts/dev-user.ts <command> [flags]
   activity        --user <id> [--limit 20]
   approve         --user <id> [--approval <id>] [--decision approve|reject] [--timeout 900]
   pr-review       --user <id> [--repo <owner>/<name> --state on|off]
-  memories        --user <id> [--clear all|<memoryId>]`;
+  memories        --user <id> [--clear all|<memoryId>]
+(--email <the user's email> works in place of --user)`;
 
 /** How long `send` and `approve` wait for the agent's turn: a turn is cut off at 15 minutes. */
 const TURN_TIMEOUT_SECONDS = 900;
@@ -247,10 +262,30 @@ async function listen(userId: string) {
 }
 
 async function activeUser(flags: Record<string, string>) {
-  const id = need(flags, 'user');
+  if (!flags.user && flags.email) {
+    const found = await findActiveUsersByEmail(flags.email);
+    if (found.length === 0) throw new UsageError(`no active user with email ${flags.email}`);
+    if (found.length > 1)
+      throw new UsageError(
+        `${found.length} users have email ${flags.email} (${found.map((u) => u.id).join(', ')}): use --user`,
+      );
+    return found[0]!;
+  }
+  if (!flags.user) throw new UsageError('--user (or --email) is required');
+  const id = flags.user;
   const user = await getActiveUser(id);
   if (!user) throw new UsageError(`no active user ${id}`);
   return user;
+}
+
+/** What Composio says about one account, on one line; never a token. */
+function composioLine(acc: ComposioAccount | null | Error): string {
+  if (acc === null) return 'Composio: no such account';
+  if (acc instanceof Error) return `Composio: could not ask (${shown(acc.message, 200)})`;
+  return (
+    `Composio: ${acc.status} (app ${acc.toolkit || '?'}, setup ${acc.authConfigId ?? '?'}` +
+    `${acc.label ? `, ${shown(acc.label, 80)}` : ''})`
+  );
 }
 
 /** Runs one command; returns the lines to print. Never returns the Claude code or any secret. */
@@ -397,6 +432,58 @@ export async function devUser(argv: string[]): Promise<string[]> {
           ? "sign-in: straight to the provider's page (our own sign-in app)"
           : "sign-in: Composio's connect page first, then the provider's",
         'the worker checks Composio over the next minutes; `status` also asks right away',
+      ];
+    }
+    case 'apps': {
+      // Each connection as we keep it and as Composio has it, the setup each app connects with,
+      // and what the agent is told by list_app_actions. For "I connected it, but Tex can't see it".
+      const user = await activeUser(flags);
+      await refreshPendingConnections(user.id);
+      const rows = (await listConnections(user.id)).sort(
+        (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+      );
+      const accounts = await Promise.all(
+        rows.map((r) =>
+          composio()
+            .account(r.composioAccountId)
+            .catch((err: unknown) => (err instanceof Error ? err : new Error(String(err)))),
+        ),
+      );
+      const known = new Set(rows.map((r) => r.composioAccountId));
+      const others = await composio()
+        .listAccounts(user.id)
+        .then((list) => list.filter((a) => !known.has(a.id)))
+        .catch(() => []);
+      const setups = await Promise.all(
+        [...new Set(rows.map((r) => r.app))].map(async (app) => ({
+          app,
+          setup: await currentSetupFor(app),
+        })),
+      );
+      const agent = await appActionsFor(user.id, user.plan);
+      return [
+        `user ${user.id} (${user.email}, plan ${user.plan})`,
+        ...(rows.length === 0 ? ['connections none'] : []),
+        ...rows.map(
+          (r, i) =>
+            `connection ${r.id} ${r.app}: ${r.status} since ${r.createdAt.toISOString()}, ` +
+            `account ${r.composioAccountId}${r.accountLabel ? ` (${shown(r.accountLabel, 80)})` : ''}; ` +
+            composioLine(accounts[i]!),
+        ),
+        ...setups.map(({ app, setup }) =>
+          setup ? `setup ${app} ${setup.id} (${setup.source})` : `setup ${app} none`,
+        ),
+        ...others.map(
+          (a) =>
+            `composio also has ${a.id} (${a.toolkit || '?'}, ${a.status}) with no connection here`,
+        ),
+        ...agent.apps.map(
+          (a) =>
+            `agent sees ${a.app}: ${a.status}` +
+            `${a.actions === undefined ? '' : `, ${a.actions} actions`}` +
+            `${a.note ? ` (${a.note})` : ''}`,
+        ),
+        ...(agent.note ? [`agent sees: ${agent.note}`] : []),
       ];
     }
     case 'status': {

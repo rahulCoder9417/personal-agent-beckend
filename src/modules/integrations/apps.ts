@@ -157,9 +157,9 @@ export function serverMaySetUp(app: CatalogApp): boolean {
  */
 export async function currentSetupFor(
   appSlug: string,
-): Promise<{ id: string; source: 'settings' | 'made by the server' } | null> {
+): Promise<{ id: string; source: 'COMPOSIO_AUTH_CONFIGS' | 'made by the server' } | null> {
   const named = authConfigFor(appSlug);
-  if (named) return { id: named, source: 'settings' };
+  if (named) return { id: named, source: 'COMPOSIO_AUTH_CONFIGS' };
   const stored = (await storedAuthConfigs()).get(appSlug);
   return stored ? { id: stored, source: 'made by the server' } : null;
 }

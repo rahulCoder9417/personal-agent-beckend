@@ -1,5 +1,5 @@
 import { createClerkClient } from '@clerk/backend';
-import { and, eq, isNull, ne } from 'drizzle-orm';
+import { and, eq, isNull, ne, sql } from 'drizzle-orm';
 import { config } from '../../shared/config.ts';
 import { db, type Tx } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
@@ -53,6 +53,16 @@ export async function getActiveUser(userId: string, tx: Tx = db()): Promise<User
     .from(users)
     .where(and(eq(users.id, userId), isNull(users.deletedAt)));
   return row;
+}
+
+/** Users (not deleted) with this email, in any letter case. For the ops script only. */
+export async function findActiveUsersByEmail(email: string): Promise<User[]> {
+  return db()
+    .select()
+    .from(users)
+    .where(
+      and(sql`lower(${users.email}) = ${email.trim().toLowerCase()}`, isNull(users.deletedAt)),
+    );
 }
 
 export async function getUserByClerkId(clerkId: string): Promise<User | undefined> {

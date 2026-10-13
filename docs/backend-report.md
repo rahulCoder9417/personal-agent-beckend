@@ -1694,18 +1694,30 @@ With a Claude plan, the user also picks which Claude model Claude Code uses, and
 
 | Setting | Choices | "Default" means |
 |---|---|---|
-| Model | Opus 5.5, Sonnet 5.5, Haiku 4.5, Fable 5.1 | Claude Code's own choice |
+| Model | Every Claude model Claude Code can use: see the list below | Claude Code's own choice |
 | Thinking effort | low, medium, high, xhigh, max | Claude Code's own choice |
+
+The model list, in the order the web app shows it. The current models come first, then the older models Claude still offers. In each part the newest version comes first.
+
+| Group | Model | Effort levels it takes |
+|---|---|---|
+| Current | Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.1 | all five |
+| Older | Fable 5, Opus 5, Sonnet 5, Opus 4.8, Opus 4.7 | all five |
+| Older | Opus 4.6, Sonnet 4.6 | low, medium, high, max (no xhigh) |
+| Older | Opus 4.5, Haiku 4.5 | none: the effort does not apply to them |
 
 1. The user picks them in the web app's AI settings, in the Claude plan's part. They can do this whatever engine runs now.
 2. The backend saves them with the other agent settings. A model that is not in the list is refused.
 3. Every turn that runs on Claude Code carries both to the container. A choice left at "Default" is left out. A turn on Hermes carries neither.
 4. The Bridge starts Claude Code with that model and effort for the turn.
 
+- **What the list says about each model.** Its group (current or older), the effort levels it takes, and for some a short note. The web app uses these to group the models, to offer only the levels the chosen model takes, and to show the note.
+- **An effort the model does not take.** The effort stays saved: it is the user's, and it applies again on another model. Claude Code runs the model at the nearest lower level it takes. Example: xhigh on Sonnet 4.6 runs at high. On Opus 4.5 and Haiku 4.5 the effort is left out altogether.
+- **Fable costs extra on some plans.** On Pro, Fable 5.1 and Fable 5 are paid only with usage credits, from the first message. On Max, they may use up to half of the weekly limit, then usage credits. The list carries this as a note on both Fable models. It is Anthropic's rule, and Claude Code applies it; we only say it.
 - **No credits change.** The Claude plan pays for the AI, so the choice changes no price.
 - **The plan refuses the model or the effort.** The turn ends with Claude Code's own message. It is not our fault, so there is no refund. The choice is kept, and the user changes it in the settings.
 - **A model taken off the list later** counts as "Default" until the user picks again.
-- The list was checked against recent versions of the Claude Code program: each model name and each effort level is one it takes.
+- **Where the list comes from.** Claude has no way to ask which models a plan may use, so the list is kept by hand, in one place in the backend. It was checked on 13 October 2026 against Anthropic's model pages and the model table inside Claude Code 2.1.296, the version the container image installs: each model name and each effort level is one it takes. Haiku 5.5 needs Claude Code 2.1.293 or later. When Anthropic adds or retires a model, the list is changed by hand, and the container image's Claude Code version is raised if the new model needs it.
 
 Example: Rahul picks Opus 5.5 and the effort xhigh. His next Telegram message runs on Claude Code with Opus 5.5, thinking at xhigh. He switches to Hermes for a day, and the choice waits for his return.
 

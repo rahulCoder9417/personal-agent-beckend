@@ -63,7 +63,7 @@ Six files make up the docs:
 - **Research on the web.** Scout searches and reads pages. On the Max plan Scout can also drive a real browser.
 - **Be remembered.** The agent keeps short notes about you, and you can see and delete them.
 - **Bring their own AI.** A Claude plan or an API key. Then the AI part costs no credits.
-- **Choose Claude's model and effort.** With a Claude plan, the user picks the Claude model and how hard it thinks, called the effort. Example: Opus 5.5 at effort "xhigh". Left at "Default", Claude Code chooses.
+- **Choose Claude's model and effort.** With a Claude plan, the user picks the Claude model and how hard it thinks, called the effort. Every model Claude Code can use is offered: the current ones first, then the older ones Claude still runs. Example: Opus 5.5 at effort "xhigh". Left at "Default", Claude Code chooses.
 
 ---
 

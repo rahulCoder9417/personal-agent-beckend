@@ -40,8 +40,9 @@ export interface TurnInput {
   approval?: { id: string; approved: boolean };
   inboundMessageId?: string;
   /**
-   * The conversation the turn belongs to: the inbound message's own. Left out (an automation, an
-   * app event) or no longer there: the chat's active one.
+   * The conversation the turn belongs to: the inbound message's own, or the one an automation's
+   * runs reply in. Left out (an automation on a chat app) or no longer there: the chat's active
+   * one.
    */
   conversationId?: string;
   metadata?: Record<string, unknown>;

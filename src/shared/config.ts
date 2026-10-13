@@ -37,6 +37,32 @@ const channelList = z.string().transform((value, ctx) => {
   return names as ChannelName[];
 });
 
+/**
+ * COMPOSIO_MANAGED_APPS: `all`, or app slugs separated by commas (trimmed, lower-cased, no
+ * duplicates). Empty is none. Which slugs are real apps is the integrations module's business.
+ */
+const managedAppList = z.string().transform((value, ctx): 'all' | string[] => {
+  const names = [
+    ...new Set(
+      value
+        .split(',')
+        .map((n) => n.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+  if (names.includes('all')) {
+    if (names.length === 1) return 'all';
+    ctx.addIssue({ code: 'custom', message: '`all` stands alone, without app names' });
+    return z.NEVER;
+  }
+  const bad = names.filter((n) => !/^[a-z0-9_]{1,40}$/.test(n));
+  if (bad.length) {
+    ctx.addIssue({ code: 'custom', message: `not an app name: ${bad.join(', ')}` });
+    return z.NEVER;
+  }
+  return names;
+});
+
 /** The crew's specialists (HLD 0.7). The lead, Tex, is always there. */
 export const SPECIALIST_IDS = ['byte', 'patch', 'scout'] as const;
 export type SpecialistId = (typeof SPECIALIST_IDS)[number];
@@ -140,6 +166,12 @@ export const configSchema = z.object({
   COMPOSIO_API_URL: z.string().url().default('https://backend.composio.dev'),
   /** JSON map of app slug → Composio auth config id, e.g. {"gmail":"ac_123"}. */
   COMPOSIO_AUTH_CONFIGS: optional,
+  /**
+   * Apps whose Composio setup the server may make by itself, with Composio's shared sign-in, the
+   * first time someone connects them: `all`, or app slugs such as `googlecalendar,notion`.
+   * Empty: none. COMPOSIO_AUTH_CONFIGS wins for an app named in both.
+   */
+  COMPOSIO_MANAGED_APPS: managedAppList.default([]),
 
   /** TypeSafe API root for Jev routing (default https://api.typesafe.ai, or LiteLLM's /typesafe pass-through). */
   JEV_URL: optional,

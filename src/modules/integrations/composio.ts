@@ -1,4 +1,4 @@
-import { Composio } from '@composio/core';
+import { AuthScheme, Composio } from '@composio/core';
 import { config } from '../../shared/config.ts';
 
 export interface ComposioTool {
@@ -27,13 +27,43 @@ export interface ComposioTriggerEvent {
   payload: Record<string, unknown>;
 }
 
+/** What Composio says about one app setup (auth config). */
+export interface AuthConfigInfo {
+  /** Composio's shared sign-in app at the provider. False: our own app (a custom auth config). */
+  composioManaged: boolean;
+  /** How users sign in: `OAUTH2`, `OAUTH1`, `API_KEY`… Null when Composio didn't say. */
+  authScheme: string | null;
+}
+
 /** The slice of Composio we use. Real SDK below; tests install a fake. */
 export interface ComposioApi {
+  /**
+   * A Composio Connect Link: Composio's own connect page, then the provider's. Works for every
+   * setup, and is the only way left for one with Composio's shared sign-in (`initiate()` was
+   * retired for those on 2026-07-03).
+   */
   connectLink(
     userId: string,
     authConfigId: string,
     callbackUrl: string,
   ): Promise<{ accountId: string; redirectUrl: string }>;
+  /**
+   * For a setup with our own sign-in app: `initiate()` with the long redirect URL, so the link is
+   * the provider's own sign-in page, with no Composio page and no Composio address on the way.
+   */
+  connectDirect(
+    userId: string,
+    authConfigId: string,
+    authScheme: 'OAUTH2' | 'OAUTH1',
+    callbackUrl: string,
+  ): Promise<{ accountId: string; redirectUrl: string }>;
+  /** One app setup, as Composio describes it (see `authConfigInfo` below, which caches it). */
+  authConfig(authConfigId: string): Promise<AuthConfigInfo>;
+  /**
+   * An enabled setup with Composio's shared sign-in for a toolkit: one already in the project, or
+   * a new one named `name`. Needs a Composio key that may make setups (the default "full access").
+   */
+  setUpManagedAuthConfig(toolkit: string, name: string): Promise<{ id: string }>;
   listAccounts(userId: string): Promise<ComposioAccount[]>;
   deleteAccount(accountId: string): Promise<void>;
   /**
@@ -77,8 +107,42 @@ function sdk(): Composio {
 
 const realApi: ComposioApi = {
   async connectLink(userId, authConfigId, callbackUrl) {
-    const req = await sdk().connectedAccounts.link(userId, authConfigId, { callbackUrl });
+    // allowMultiple: the web app offers "Add account" for an app that already has one.
+    const req = await sdk().connectedAccounts.link(userId, authConfigId, {
+      callbackUrl,
+      allowMultiple: true,
+    });
     return { accountId: req.id, redirectUrl: req.redirectUrl ?? '' };
+  },
+  async connectDirect(userId, authConfigId, authScheme, callbackUrl) {
+    // Composio's white-labeling guide: `long_redirect_url` makes the link the provider's own
+    // page instead of a short backend.composio.dev link that forwards to it.
+    const state =
+      authScheme === 'OAUTH1'
+        ? AuthScheme.OAuth1({ long_redirect_url: true })
+        : AuthScheme.OAuth2({ long_redirect_url: true });
+    const req = await sdk().connectedAccounts.initiate(userId, authConfigId, {
+      callbackUrl,
+      allowMultiple: true,
+      config: state,
+    });
+    return { accountId: req.id, redirectUrl: req.redirectUrl ?? '' };
+  },
+  async authConfig(authConfigId) {
+    const ac = await sdk().authConfigs.get(authConfigId);
+    // Composio leaves the flag out on some setups; reading that as "shared" is the safe side,
+    // because a Connect Link works for both kinds.
+    return { composioManaged: ac.isComposioManaged !== false, authScheme: ac.authScheme ?? null };
+  },
+  async setUpManagedAuthConfig(toolkit, name) {
+    const found = await sdk().authConfigs.list({ toolkit, isComposioManaged: true });
+    const ready = found.items.find((ac) => ac.status === 'ENABLED');
+    if (ready) return { id: ready.id };
+    const made = await sdk().authConfigs.create(toolkit, {
+      type: 'use_composio_managed_auth',
+      name,
+    });
+    return { id: made.id };
   },
   async listAccounts(userId) {
     const res = (await sdk().connectedAccounts.list({ userIds: [userId] })) as unknown as {
@@ -194,6 +258,11 @@ const realApi: ComposioApi = {
 let api: ComposioApi = realApi;
 /** A tool's tags don't change between calls: asked once per tool, kept for the process. */
 const tagCache = new Map<string, string[]>();
+/**
+ * Whether a setup is Composio's shared sign-in or our own never changes for one id (switching
+ * means a new setup with a new id), so it is asked once per id and kept for the process.
+ */
+const authConfigCache = new Map<string, AuthConfigInfo>();
 
 export function composio(): ComposioApi {
   return api;
@@ -203,6 +272,25 @@ export function composio(): ComposioApi {
 export function setComposioApi(fake: ComposioApi | undefined): void {
   api = fake ?? realApi;
   tagCache.clear();
+  authConfigCache.clear();
+}
+
+/** What Composio says about a setup, or null when it can't be asked right now (nothing cached). */
+export async function authConfigInfo(authConfigId: string): Promise<AuthConfigInfo | null> {
+  const cached = authConfigCache.get(authConfigId);
+  if (cached) return cached;
+  try {
+    const info = await api.authConfig(authConfigId);
+    authConfigCache.set(authConfigId, info);
+    return info;
+  } catch {
+    return null;
+  }
+}
+
+/** Tells the cache about a setup the server just made itself (Composio's shared sign-in). */
+export function rememberAuthConfig(authConfigId: string, info: AuthConfigInfo): void {
+  authConfigCache.set(authConfigId, info);
 }
 
 /** A tool's Composio tags, or null when Composio can't be asked right now (nothing is cached). */
@@ -219,7 +307,11 @@ export async function toolTags(slug: string): Promise<string[] | null> {
   }
 }
 
-/** Composio auth config id per app slug (COMPOSIO_AUTH_CONFIGS = {"gmail":"ac_…", …}). */
+/**
+ * The setup id named for an app in the server's settings (COMPOSIO_AUTH_CONFIGS =
+ * {"gmail":"ac_…", …}). A setup the server made itself is in the `composio_auth_configs` table
+ * instead (apps.ts).
+ */
 export function authConfigFor(appSlug: string): string | undefined {
   const raw = config().COMPOSIO_AUTH_CONFIGS;
   if (!raw) return undefined;
@@ -228,4 +320,13 @@ export function authConfigFor(appSlug: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Where `/oauth/callback` sends the browser on to: Composio's own callback, with the provider's
+ * query string unchanged (`search` starts with "?" or is empty). Used for a sign-in app of our
+ * own whose redirect address is ours (Composio's white-labeling guide, "the return redirect").
+ */
+export function composioCallbackUrl(search: string): string {
+  return `${config().COMPOSIO_API_URL.replace(/\/+$/, '')}/api/v3/toolkits/auth/callback${search}`;
 }

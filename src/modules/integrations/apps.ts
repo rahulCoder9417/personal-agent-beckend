@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { config } from '../../shared/config.ts';
 import { db } from '../../shared/db/client.ts';
-import { notFound, planLimit } from '../../shared/errors.ts';
+import { notFound, planLimit, unavailable } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
 import { logger } from '../../shared/logger.ts';
 import type { PlanId } from '../auth/users.ts';
@@ -15,8 +15,15 @@ import {
   findApp,
   type CatalogApp,
 } from './catalog.ts';
-import { authConfigFor, composio, toolTags } from './composio.ts';
-import { connections } from './tables.ts';
+import {
+  authConfigFor,
+  authConfigInfo,
+  composio,
+  rememberAuthConfig,
+  toolTags,
+  type AuthConfigInfo,
+} from './composio.ts';
+import { composioAuthConfigs, connections } from './tables.ts';
 
 export type Connection = typeof connections.$inferSelect;
 
@@ -100,21 +107,116 @@ export async function refreshPendingConnections(userId: string): Promise<void> {
   }
 }
 
+// --- Which apps can be connected here, and with which Composio setup ---------------------------
+//
+// An app's setup (Composio's "auth config") is, in this order:
+//   1. the one named for it in COMPOSIO_AUTH_CONFIGS (for example our own GitHub sign-in app);
+//   2. one the server made itself earlier, kept in `composio_auth_configs`;
+//   3. one the server makes now, on the first connect, with Composio's shared sign-in, when the
+//      app is named in COMPOSIO_MANAGED_APPS (or that setting is `all`) and Composio has a shared
+//      sign-in for it.
+// No setup and none allowed: the app is listed but can't be connected ("Not available yet").
+
+/** May the server make this app's setup itself (COMPOSIO_MANAGED_APPS)? */
+export function serverMaySetUp(app: CatalogApp): boolean {
+  if (!app.managedAuth) return false;
+  const allowed = config().COMPOSIO_MANAGED_APPS;
+  return allowed === 'all' || allowed.includes(app.slug);
+}
+
+/** Setups the server made itself, by app slug. */
+async function storedAuthConfigs(): Promise<Map<string, string>> {
+  const rows = await db().select().from(composioAuthConfigs);
+  return new Map(rows.map((r) => [r.app, r.authConfigId]));
+}
+
+/** The name of a setup the server makes. It shows only in Composio's dashboard. */
+const setupName = (app: CatalogApp) => `Textcrew ${app.name}`;
+
 /**
- * The catalog for one user. `connectable`: this server has a Composio setup for the app
- * (COMPOSIO_AUTH_CONFIGS). Without one the app is listed but `startConnect` answers 404 for it,
- * so the web app shows "Not available yet" instead of a Connect button.
+ * The setup to connect an app with (the order above). Makes it when the server may.
+ * Undefined: the app can't be connected on this server.
+ */
+async function authConfigToConnect(app: CatalogApp): Promise<string | undefined> {
+  const named = authConfigFor(app.slug);
+  if (named) return named;
+  const [row] = await db()
+    .select()
+    .from(composioAuthConfigs)
+    .where(eq(composioAuthConfigs.app, app.slug));
+  if (row) return row.authConfigId;
+  if (!serverMaySetUp(app)) return undefined;
+
+  let made: { id: string };
+  try {
+    made = await composio().setUpManagedAuthConfig(app.toolkit, setupName(app));
+  } catch (err) {
+    logger().warn({ app: app.slug, err: String(err) }, 'composio setup failed');
+    throw unavailable(`${app.name} can't be connected right now. Try again in a few minutes.`);
+  }
+  rememberAuthConfig(made.id, { composioManaged: true, authScheme: null });
+  // Two first connects at the same moment can each make one. The first one saved is used by
+  // everyone; the other stays unused at Composio, with no connections on it.
+  await db()
+    .insert(composioAuthConfigs)
+    .values({ app: app.slug, authConfigId: made.id })
+    .onConflictDoNothing({ target: composioAuthConfigs.app });
+  const [saved] = await db()
+    .select()
+    .from(composioAuthConfigs)
+    .where(eq(composioAuthConfigs.app, app.slug));
+  return saved?.authConfigId ?? made.id;
+}
+
+/**
+ * How the sign-in starts for a setup:
+ * - `direct`: our own sign-in app at the provider (a custom setup, OAuth). The link is the
+ *   provider's own page: no Composio page, no Composio address on the way out.
+ * - `link`: a Composio Connect Link. Composio's page comes first (its logo and name can be ours,
+ *   in Composio's dashboard), then the provider's. The only way for Composio's shared sign-in,
+ *   and for a setup that asks for an API key. Also used when Composio can't say which kind it is.
+ */
+export function signInPath(
+  info: AuthConfigInfo | null,
+): { kind: 'direct'; authScheme: 'OAUTH2' | 'OAUTH1' } | { kind: 'link' } {
+  if (!info || info.composioManaged) return { kind: 'link' };
+  if (info.authScheme === 'OAUTH2' || info.authScheme === 'OAUTH1')
+    return { kind: 'direct', authScheme: info.authScheme };
+  return { kind: 'link' };
+}
+
+/**
+ * The page to come back to after the sign-in. Only a page of our own web app: anything else
+ * (another site, or one whose address only starts the same way) gets the Apps page.
+ */
+export function connectReturnUrl(appSlug: string, returnUrl?: string): string {
+  const web = config().WEB_APP_URL;
+  const fallback = `${web.replace(/\/+$/, '')}/apps?connected=${encodeURIComponent(appSlug)}`;
+  if (!returnUrl) return fallback;
+  try {
+    return new URL(returnUrl).origin === new URL(web).origin ? returnUrl : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * The catalog for one user. `connectable`: this server can connect the app (it has a setup for
+ * it, or may make one: see above). Without that the app is listed but `startConnect` answers 404
+ * for it, so the web app shows "Not available yet" instead of a Connect button.
  */
 export async function appCatalogFor(userId: string, plan: PlanId) {
   await refreshPendingConnections(userId);
-  const rows = await listConnections(userId);
+  const [rows, stored] = await Promise.all([listConnections(userId), storedAuthConfigs()]);
   return CATALOG.map((app) => ({
     slug: app.slug,
     name: app.name,
+    provider: app.provider,
+    description: app.description,
     iconUrl: null,
     category: app.category,
     availableOnPlan: appAllowedOnPlan(app, plan),
-    connectable: Boolean(authConfigFor(app.slug)),
+    connectable: Boolean(authConfigFor(app.slug) ?? stored.get(app.slug)) || serverMaySetUp(app),
     connections: rows
       .filter((r) => r.app === app.slug && r.status !== 'pending')
       .map((r) => ({
@@ -125,23 +227,51 @@ export async function appCatalogFor(userId: string, plan: PlanId) {
   }));
 }
 
-/** Starts connecting an app; returns the provider login URL. Plan limits apply. */
+/** Asks Composio for the sign-in link, the direct way when the setup allows it. */
+async function openSignIn(
+  app: CatalogApp,
+  userId: string,
+  authConfigId: string,
+  callbackUrl: string,
+): Promise<{ accountId: string; redirectUrl: string; direct: boolean }> {
+  const path = signInPath(await authConfigInfo(authConfigId));
+  if (path.kind === 'direct') {
+    try {
+      const r = await composio().connectDirect(userId, authConfigId, path.authScheme, callbackUrl);
+      if (r.redirectUrl) return { ...r, direct: true };
+    } catch (err) {
+      // A Connect Link works for every setup, so the user can still connect.
+      logger().warn({ app: app.slug, err: String(err) }, 'composio direct connect failed');
+    }
+  }
+  try {
+    const r = await composio().connectLink(userId, authConfigId, callbackUrl);
+    if (r.redirectUrl) return { ...r, direct: false };
+    logger().warn({ app: app.slug }, 'composio gave no connect link');
+  } catch (err) {
+    logger().warn({ app: app.slug, err: String(err) }, 'composio connect link failed');
+  }
+  throw unavailable(`${app.name} can't be connected right now. Try again in a few minutes.`);
+}
+
+/**
+ * Starts connecting an app; returns the sign-in page to send the browser to, and whether it is
+ * the provider's own page (`direct`) or Composio's connect page first. Plan limits apply.
+ */
 export async function startConnect(
   userId: string,
   plan: PlanId,
   appSlug: string,
   returnUrl?: string,
-): Promise<string> {
+): Promise<{ redirectUrl: string; direct: boolean }> {
   const app = findApp(appSlug);
   if (!app) throw notFound('Unknown app');
   if (!appAllowedOnPlan(app, plan))
     throw planLimit(`${app.name} isn't available on the ${plan} plan`, { app: app.slug, plan });
-  const authConfigId = authConfigFor(app.slug);
+  const authConfigId = await authConfigToConnect(app);
   if (!authConfigId) throw notFound(`${app.name} isn't configured yet`);
-  const web = config().WEB_APP_URL;
-  const callback =
-    returnUrl && returnUrl.startsWith(web) ? returnUrl : `${web}/apps?connected=${app.slug}`;
-  const { accountId, redirectUrl } = await composio().connectLink(userId, authConfigId, callback);
+  const callback = connectReturnUrl(app.slug, returnUrl);
+  const { accountId, redirectUrl, direct } = await openSignIn(app, userId, authConfigId, callback);
   await db()
     .insert(connections)
     .values({
@@ -169,7 +299,7 @@ export async function startConnect(
       logger().warn({ userId, err: String(err) }, 'could not queue the connection check'),
     );
   }
-  return redirectUrl;
+  return { redirectUrl, direct };
 }
 
 export async function disconnect(userId: string, connectionId: string): Promise<boolean> {

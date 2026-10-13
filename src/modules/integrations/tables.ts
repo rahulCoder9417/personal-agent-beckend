@@ -17,6 +17,17 @@ export const connections = pgTable(
   (t) => [uniqueIndex().on(t.composioAccountId), index().on(t.userId)],
 );
 
+/**
+ * Composio setups (auth configs) the server made itself, with Composio's shared sign-in, the first
+ * time someone connected an app named in COMPOSIO_MANAGED_APPS. One per app; not per user.
+ * A setup named in COMPOSIO_AUTH_CONFIGS wins over the one here.
+ */
+export const composioAuthConfigs = pgTable('composio_auth_configs', {
+  app: text().primaryKey(),
+  authConfigId: text().notNull(),
+  createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+});
+
 /** The user's own MCP servers (Max plan). Their domains go on the egress allowlist. */
 export const userMcpServers = pgTable(
   'user_mcp_servers',

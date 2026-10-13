@@ -498,10 +498,11 @@ The cheap model is told where its answer will be read. In web chat it may use fo
 11. The worker makes sure the container exists. Then it asks the vm-manager to wake it, with the plan's priority.
 12. It checks the container against the account: which engine runs, and if the browser is on. The engine is the agent program, Hermes or Claude Code.
 13. It builds the text: what the agent has saved about the user, a short recap if the engine changed, then the message. The recap holds only the message's own conversation.
-14. It sends the delivery to the vm-manager and keeps the connection open. The delivery carries the event id, the chat it came from, the text and signed links to the files. It also carries the number of the message's conversation (section 8). After the user went back to an earlier conversation, that number is lower than the chat's highest. On Claude Code it also carries the Claude model and the thinking effort the user chose (section 30).
+14. It sends the delivery to the vm-manager and keeps the connection open. The delivery carries the event id, the chat it came from, the text and signed links to the files. It also carries the number of the message's conversation (section 8). After the user went back to an earlier conversation, that number is lower than the chat's highest. On Claude Code it also carries the Claude model and the thinking effort the user chose (section 30). When the answer goes to web chat, it asks for the answer as it is written (section 12).
 15. The vm-manager reports back while the turn runs:
     - **Accepted.** The message becomes `processing`. The web app shows the agent as busy.
     - **Working.** A progress line. It is shown live in the web app only.
+    - **Draft.** The answer so far, while the agent writes it. Only for web chat, where the web app shows it word by word. It is never saved (section 12).
     - **Done.** The message becomes `delivered`.
     - **Error on our side.** Rahul is told at once that he was not charged, and the message becomes `failed`. A separate refund job gives the turn's credits back about 30 seconds later (section 25).
     - **Other error.** Rahul gets "I couldn't finish that" with the reason.
@@ -664,6 +665,7 @@ The web app shows new messages and the agent's state without a reload. It keeps 
 |---|---|
 | `message.created` | A message is saved, incoming or outgoing, on any channel |
 | `message.status` | A message's status changes |
+| `message.draft` | The agent writes its answer in a web chat turn: the whole text so far |
 | `approval.created` | The agent asks for permission |
 | `approval.resolved` | An approval is answered or runs out |
 | `agent.status` | The container is waking, busy or awake |
@@ -683,9 +685,36 @@ A message event holds the whole message, with the id of its conversation. So the
 - One exception: a line that names a crew member, such as Scout, is also written to the activity log. At most 30 are saved per turn.
 - A line that cannot be published is dropped. The turn goes on.
 
+### The answer as it is written
+
+In web chat the answer appears a few words at a time while the agent writes it, the way a person types. Before, the web app showed "Tex is working…" and then the whole answer at once. Example: Rahul asks in web chat "what's on my calendar today?". The bubble shows "You have", then "You have two meetings", and so on, and then the finished message takes its place.
+
+1. The worker asks for it in the delivery: `stream_text` is true when the turn's answer goes to web chat, false for every other channel. A turn's own data cannot change it.
+2. In the container, the Bridge passes on what the agent writes, about four times a second. Each piece holds the whole text so far, not only the new words. So a piece that gets lost does no harm: the next one has everything.
+3. The agent can start over. It writes "Let me check your calendar.", then calls a tool, then writes the answer. When it goes on to a tool, the Bridge sends an empty text, and the web app shows "Tex is working…" with its progress line again.
+4. The worker publishes each piece as `message.draft`, with the turn's conversation, the turn's id and the message it answers. Nothing is saved, and nothing goes to Telegram or another chat app. A piece is cut at 16,000 characters.
+5. The answer itself arrives as always: the Bridge sends it through the tool server (section 10), and the web app gets `message.created`. The web app puts it in the draft's place.
+6. If the turn fails after a draft was shown, the worker first sends an empty draft, then the apology. So the half-written answer goes away before the user is told.
+
+The web app follows four rules:
+
+| Event | What the web app does |
+|---|---|
+| `message.draft` | Shows the latest text of the turn in its conversation, in place of "Tex is working…". An empty text brings "Tex is working…" back |
+| `message.created` from the agent | The message takes the draft's place. A later draft of the same turn is dropped. An approval card does not count: the agent may still be writing after it |
+| `agent.status` other than busy, or the incoming message `delivered` or `failed` | The turn is over: the draft goes |
+| The stream reconnects | The draft goes. If the turn still runs, its next piece brings the whole text back |
+
+Why the web app has to drop late drafts: the drafts come from the worker, but the answer comes from the api, where the tool server runs. Two senders, so the answer can arrive a moment before the last draft. The drafts and the end of the turn come from the same worker, in order, so no draft comes after the end of its turn.
+
+A slow connection does not fall behind on drafts. Each open stream keeps at most one waiting draft per turn: a newer one takes the older one's place.
+
 ### What can go wrong
 
 - **The connection drops.** Events sent in the meantime are not sent again, because Redis does not keep them. Messages, approvals and credits are saved in the database, so normal requests still return them.
+- **A draft is lost or the stream reconnects mid-answer.** The next draft has the whole text, so the bubble catches up. If the last ones are lost, the finished answer still arrives as a message.
+- **An older container, or an older vm-manager.** It sends no drafts, or drops them. The web chat then shows the answer at the end, as before.
+- **The agent writes something it later drops.** The words before a tool call show for a moment and then go. Only the finished answer is saved.
 
 ---
 
@@ -1938,6 +1967,8 @@ One turn goes like this:
 2. It hands the message to that engine in the chat's own session. Each chat keeps its own conversation.
 3. The engine works: model, tool call, result, and so on, until it has a final answer.
 4. The Bridge sends the final answer through the platform's `send_message` tool and reports "turn done". The agents cannot call that tool themselves.
+
+When the delivery asks for it (web chat, section 12), the Bridge also reports the answer while it is being written: the whole text so far, at most four times a second. It takes only the lead's own words. Claude Code gives them when it is started with its "partial messages" switch, which the Bridge adds only for such a turn; Hermes gives them in its run's event stream. The text starts over when the lead starts a new message or calls a tool.
 
 Risky actions never wait inside a turn. The agent asks the platform for approval, gets "pending", and ends its turn. The user's yes or no arrives later as a new message.
 

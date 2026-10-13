@@ -227,6 +227,56 @@ export async function startConversation(
 }
 
 /**
+ * A conversation of its own in a chat, beside the active one, which stays the active one: where
+ * an automation's runs reply when the conversation it was made in is gone. It gets the chat's next
+ * number, so the agent keeps a context of its own for it, and the title given. The chat's counter
+ * keeps its start time and start key: those belong to the chat's latest "New chat". `onStarted`
+ * runs inside the same transaction; if it fails, nothing is started.
+ */
+export async function startConversationAside(
+  userId: string,
+  sessionKey: string,
+  opts: { title: string; onStarted?: (tx: Tx, c: ConversationRow) => Promise<void> },
+): Promise<ConversationRow> {
+  const channel = parseSessionKey(sessionKey)?.channel;
+  if (!channel) throw new Error(`bad session key ${sessionKey}`);
+  const conversation = await db().transaction(async (tx) => {
+    await lockChat(tx, userId, sessionKey);
+    // One start time for both columns (and the counter, when the chat had none).
+    const { rows } = await tx.execute<{ ms: number }>(
+      sql`select round(extract(epoch from ${START}) * 1000)::float8 as ms`,
+    );
+    const at = new Date(rows[0]!.ms);
+    const [counter] = await tx
+      .insert(chatEpochs)
+      .values({ userId, sessionKey, epoch: 1, startedAt: at, startKey: null })
+      .onConflictDoUpdate({
+        target: [chatEpochs.userId, chatEpochs.sessionKey],
+        set: { epoch: sql`${chatEpochs.epoch} + 1` },
+      })
+      .returning();
+    const [row] = await tx
+      .insert(conversations)
+      .values({
+        id: newId('cnv'),
+        userId,
+        sessionKey,
+        channel,
+        epoch: counter!.epoch,
+        title: opts.title,
+        active: false,
+        startedAt: at,
+        lastMessageAt: at,
+      })
+      .returning();
+    await opts.onStarted?.(tx, row!);
+    return row!;
+  });
+  await announce(conversation);
+  return conversation;
+}
+
+/**
  * Makes a conversation its chat's active one. Null: not this user's. Whether a conversation of
  * that channel may be opened this way is the caller's rule.
  */

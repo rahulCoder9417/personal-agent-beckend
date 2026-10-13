@@ -7,7 +7,13 @@ import { getEvent, ingestEvent } from '../events/intake.ts';
 import type { ComposioTriggerEvent } from '../integrations/composio.ts';
 import { runTurn, type TurnKind, type TurnOutcome } from '../orchestrator/turn.ts';
 import { IGNORED } from '../../worker/ignored.ts';
-import { findByTriggerRef, recordRun, setEnabled, type Automation } from './automations.ts';
+import {
+  findByTriggerRef,
+  recordRun,
+  runConversation,
+  setEnabled,
+  type Automation,
+} from './automations.ts';
 import { finishPrReview, preparePrReview } from './pr-review.ts';
 import { automations } from './schema.ts';
 
@@ -44,6 +50,8 @@ async function runAutomationTurn(
   metadata: Record<string, unknown> = {},
 ): Promise<TurnOutcome> {
   const session = parseSessionKey(a.sessionKey) ?? { channel: 'web' as const };
+  // Web chat: the conversation it was made in, or its own; never the one the user has open.
+  const conversationId = await runConversation(a);
   const outcome = await runTurn({
     userId: a.userId,
     deliveryId,
@@ -51,6 +59,7 @@ async function runAutomationTurn(
     sessionKey: a.sessionKey,
     channel: session.channel,
     text,
+    ...(conversationId ? { conversationId } : {}),
     metadata: { automationId: a.id, title: a.title, ...metadata },
   });
   if (outcome === 'out_of_credits') {
@@ -63,6 +72,7 @@ async function runAutomationTurn(
     await queueOutbound({
       userId: a.userId,
       sessionKey: a.sessionKey,
+      conversationId: conversationId ?? null,
       text: `I paused the automation "${a.title}" because it failed ${MAX_FAILURES} times in a row. You can resume it in the web app.`,
     });
   }

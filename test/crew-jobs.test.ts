@@ -319,7 +319,7 @@ describe('the brief', () => {
         owner: 'acme',
         repo: 'web',
         branch: 'develop',
-        instructions: 'fix the redirect',
+        instructions: 'fix the redirect.',
         acceptance: 'lands on the dashboard',
         reportTo: { pullRequest: true },
       }),

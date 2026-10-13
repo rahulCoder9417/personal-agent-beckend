@@ -196,7 +196,8 @@ export function jobTitle(
   const name = `${job.owner}/${job.repo}`;
   if (job.member === 'patch')
     return job.pullNumber ? `Review ${name}#${job.pullNumber}` : `Review ${name} at ${job.branch}`;
-  const what = cut(job.instructions, 60);
+  // "Fix the login redirect." → "Fix the login redirect in acme/web" (no stop before "in").
+  const what = cut(job.instructions, 60).replace(/[\s.,;:!?]+$/, '');
   return `${what.charAt(0).toUpperCase()}${what.slice(1)} in ${name}`;
 }
 

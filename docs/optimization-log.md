@@ -62,6 +62,35 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 4. The log
 
+### 14 October 2026: admin tools for one user's apps, chats and automations
+
+- **Where it is:** on `main` since 14 October, in the backend. It reaches the server with `deploy.sh`, which also adds the new column.
+- **Why:** support had no way to see or fix a user's apps, linked chats or automations without the database. When a user wrote "my Gmail says connecting" or "my automation keeps failing", only the dev-user script on the server could tell why, and nothing could be changed safely by hand.
+- **What the user notices:**
+  - Nothing, until support acts for them. Then the action works exactly like their own button, and their activity log shows it, for example "Textcrew support paused "Daily summary"". The reason the admin gave is not shown to them.
+  - An automation paused by support says so: its paused reason is `admin`. Adding credits does not switch it on again; the user can resume it themselves.
+- **Backend:**
+  - **One user's apps:** a list of every connection in any state, with the app, the state, the account's label, where the app's Composio setup comes from on this server (`settings`, `server_made` or `none`), whether the app can be connected here, when the user started connecting it, and when the platform last heard from Composio about it. Disconnect is the user's own (the account is removed at Composio). Recheck asks Composio about that one connection now, whatever its state, and copies its answer; one still being set up gets a fresh series of checks.
+  - **One user's chats:** the linked chats with the chat id masked, whether the channel is on here, and whether the bot is blocked. Unlink is the user's own, with the same activity log entry. The unlink and its entry now live in one place that both use.
+  - **One user's automations:** every automation, finished reminders too, without the instruction text. Pause, resume and delete go through the automations module's own functions: timers removed or set again, the Composio trigger deleted on delete (for pull-request review, the watch on the repo).
+  - **Apps in numbers:** for each app, where its setup comes from, whether it can be connected, how many users connected it, and its connections by state.
+  - **Every action needs a reason** (up to 200 characters, not blank) and writes one activity log row with the admin's id and the reason. All the new operations are admin only.
+  - **No secrets:** no Composio account id, token or secret, and chat ids only masked.
+  - **Each connection now keeps when Composio last answered about it:** a check, the app list, Composio's webhook or a recheck.
+- **Cost and speed:** none for users. The list calls read our own tables only. A recheck is one Composio request. A pending connection's check writes one more small update when Composio answers.
+- **Contracts:** `openapi.yaml` changed: ten new admin operations under `/v1/admin/users/{userId}/apps`, `/channels` and `/automations`, `/v1/admin/automations/{automationId}` and `/v1/admin/apps/summary`; the automation's and the pull-request review's `pausedReason` can now be `admin`. The web app should show that one as "Paused by Textcrew support". `vm.proto` did not change.
+- **Database:** a new column, `checked_at`, on `connections` (migration 0021). The automations' paused reason is a text column; `admin` needed no migration.
+- **How it was checked:**
+  - 23 new backend tests: every operation refuses a user who is not an admin (403) and a call with no session (401); a missing or blank reason is refused; disconnect removes the account at Composio (the fake) and the row, leaves app-event automations as the user's disconnect does, and writes the audit row, which the user's activity log shows without the reason; another user's connection or chat answers 404 and changes nothing; recheck copies Composio's answer for a pending and for an active connection, marks one Composio no longer has as failed, queues fresh checks for one still being set up, and answers 503 with nothing changed when Composio is down; the summary counts per app and holds no user id; chat ids are masked, also a Telegram chat saved under its id; an admin's unlink writes the same entry as the user's; pause removes the timer and survives added credits; resume sets the timer again and clears the failures; delete removes the timer and the Composio trigger, for pull-request review too; a reminder that already ran answers 409. Three of them failed when the pause reason or the masking was broken on purpose.
+  - Lint, the type check and the OpenAPI lint pass. 684 of 685 backend tests pass; the one failure is the Hindi title test, which already failed before.
+  - Not with real Composio or Telegram: Composio is a stand-in in the tests. Not on the server.
+- **Still open:**
+  - Whether Composio removes its triggers when an account is deleted is not known from here. Neither the user's disconnect nor the admin's touches the user's app-event automations; they stay on and get no events.
+  - The admin panel has no screens for these yet.
+  - Your decision: should a user be able to resume an automation that support paused? Today they can, as with every other pause.
+- **Docs updated:** `backend-report.md` sections 7, 14, 18, 31 (a new part, "One user's apps, chats and automations"), 40 and 41.
+- **Commits:** backend `ee28db1`, `bfac455`, `daf9666`, `5eb0805`, `c65fb44`.
+
 ### 14 October 2026: every turn says where its time went; a greeting no longer waits for each step in turn
 
 - **Where it is:** on `main` since 14 October, in the backend and the vm-manager. It reaches the server with `deploy.sh`, which also adds the new table.

@@ -613,6 +613,65 @@ describe('dev-user script: approvals, pull-request review, memory, the browser',
     ).rejects.toBeInstanceOf(UsageError);
   });
 
+  it('timings: each of the last turns, stage by stage, with the biggest stage; never any text', async () => {
+    const email = `${randomUUID()}@example.com`;
+    const userId = field(await devUser(['create', '--email', email]), 'user');
+    expect(await devUser(['timings', '--user', userId])).toEqual([
+      'no turn timings yet (they are kept 30 days)',
+    ]);
+    fake.state.bridgeTimings = JSON.stringify({
+      v: 1,
+      engine: 'hermes',
+      runs: 1,
+      marks: {
+        engine_start: 5,
+        engine_ready: 40,
+        first_text: 2500,
+        engine_done: 2600,
+        answer_sent: 2650,
+      },
+      tools_ms: 0,
+      crew_ms: 0,
+      crew: [],
+    });
+    await devUser(['send', '--user', userId, '--text', 'my secret plan for Friday']);
+    await devUser(['send', '--user', userId, '--text', 'and the second one']);
+    const out = await devUser(['timings', '--email', email, '--last', '5']);
+    const turns = out.filter((l) => l.startsWith('turn '));
+    expect(turns).toHaveLength(2);
+    expect(turns[0]).toMatch(
+      /^turn evt_\S+ at \S+ \(web message\): route task, engine hermes, wake cold, done$/,
+    );
+    const stageNames = out
+      .filter(
+        (l) => l.startsWith('  ') && /^\s{2}\S/.test(l) && !/^  (answer|no answer|biggest)/.test(l),
+      )
+      .map((l) => l.trim().split(/\s{2,}/)[0]);
+    for (const name of [
+      'queue',
+      'route',
+      'wake',
+      'handover',
+      'engine start',
+      'first output',
+      'work',
+    ])
+      expect(stageNames, name).toContain(name);
+    expect(out.filter((l) => l.startsWith('  answer after '))).toHaveLength(2);
+    expect(out.filter((l) => l.startsWith('  biggest: '))).toHaveLength(2);
+    expect(out.at(-1)).toMatch(/^over these 2 turns: answer after .+ in the middle/);
+    expect(out.join('\n')).not.toMatch(/secret plan|second one/);
+    // --last picks how many; it is a whole number from 1 to 100.
+    expect(
+      (await devUser(['timings', '--user', userId, '--last', '1'])).filter((l) =>
+        l.startsWith('turn '),
+      ),
+    ).toHaveLength(1);
+    await expect(devUser(['timings', '--user', userId, '--last', '0'])).rejects.toBeInstanceOf(
+      UsageError,
+    );
+  });
+
   it('create, status and browser: Scout’s browser follows the plan and the setting', async () => {
     // The default: the deployed image has no browser, so not even a Max user gets one.
     const early = await devUser(['create', '--email', 'early@example.com', '--plan', 'max']);

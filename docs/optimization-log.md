@@ -62,6 +62,124 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 4. The log
 
+### 14 October 2026: admin tools for one user's apps, chats and automations
+
+- **Where it is:** on `main` since 14 October, in the backend. It reaches the server with `deploy.sh`, which also adds the new column.
+- **Why:** support had no way to see or fix a user's apps, linked chats or automations without the database. When a user wrote "my Gmail says connecting" or "my automation keeps failing", only the dev-user script on the server could tell why, and nothing could be changed safely by hand.
+- **What the user notices:**
+  - Nothing, until support acts for them. Then the action works exactly like their own button, and their activity log shows it, for example "Textcrew support paused "Daily summary"". The reason the admin gave is not shown to them.
+  - An automation paused by support says so: its paused reason is `admin`. Adding credits does not switch it on again; the user can resume it themselves.
+- **Backend:**
+  - **One user's apps:** a list of every connection in any state, with the app, the state, the account's label, where the app's Composio setup comes from on this server (`settings`, `server_made` or `none`), whether the app can be connected here, when the user started connecting it, and when the platform last heard from Composio about it. Disconnect is the user's own (the account is removed at Composio). Recheck asks Composio about that one connection now, whatever its state, and copies its answer; one still being set up gets a fresh series of checks.
+  - **One user's chats:** the linked chats with the chat id masked, whether the channel is on here, and whether the bot is blocked. Unlink is the user's own, with the same activity log entry. The unlink and its entry now live in one place that both use.
+  - **One user's automations:** every automation, finished reminders too, without the instruction text. Pause, resume and delete go through the automations module's own functions: timers removed or set again, the Composio trigger deleted on delete (for pull-request review, the watch on the repo).
+  - **Apps in numbers:** for each app, where its setup comes from, whether it can be connected, how many users connected it, and its connections by state.
+  - **Every action needs a reason** (up to 200 characters, not blank) and writes one activity log row with the admin's id and the reason. All the new operations are admin only.
+  - **No secrets:** no Composio account id, token or secret, and chat ids only masked.
+  - **Each connection now keeps when Composio last answered about it:** a check, the app list, Composio's webhook or a recheck.
+- **Cost and speed:** none for users. The list calls read our own tables only. A recheck is one Composio request. A pending connection's check writes one more small update when Composio answers.
+- **Contracts:** `openapi.yaml` changed: ten new admin operations under `/v1/admin/users/{userId}/apps`, `/channels` and `/automations`, `/v1/admin/automations/{automationId}` and `/v1/admin/apps/summary`; the automation's and the pull-request review's `pausedReason` can now be `admin`. The web app should show that one as "Paused by Textcrew support". `vm.proto` did not change.
+- **Database:** a new column, `checked_at`, on `connections` (migration 0021). The automations' paused reason is a text column; `admin` needed no migration.
+- **How it was checked:**
+  - 23 new backend tests: every operation refuses a user who is not an admin (403) and a call with no session (401); a missing or blank reason is refused; disconnect removes the account at Composio (the fake) and the row, leaves app-event automations as the user's disconnect does, and writes the audit row, which the user's activity log shows without the reason; another user's connection or chat answers 404 and changes nothing; recheck copies Composio's answer for a pending and for an active connection, marks one Composio no longer has as failed, queues fresh checks for one still being set up, and answers 503 with nothing changed when Composio is down; the summary counts per app and holds no user id; chat ids are masked, also a Telegram chat saved under its id; an admin's unlink writes the same entry as the user's; pause removes the timer and survives added credits; resume sets the timer again and clears the failures; delete removes the timer and the Composio trigger, for pull-request review too; a reminder that already ran answers 409. Three of them failed when the pause reason or the masking was broken on purpose.
+  - Lint, the type check and the OpenAPI lint pass. 684 of 685 backend tests pass; the one failure is the Hindi title test, which already failed before.
+  - Not with real Composio or Telegram: Composio is a stand-in in the tests. Not on the server.
+- **Still open:**
+  - Whether Composio removes its triggers when an account is deleted is not known from here. Neither the user's disconnect nor the admin's touches the user's app-event automations; they stay on and get no events.
+  - The admin panel has no screens for these yet.
+  - Your decision: should a user be able to resume an automation that support paused? Today they can, as with every other pause.
+- **Docs updated:** `backend-report.md` sections 7, 14, 18, 31 (a new part, "One user's apps, chats and automations"), 40 and 41.
+- **Commits:** backend `ee28db1`, `bfac455`, `daf9666`, `5eb0805`, `c65fb44`.
+
+### 14 October 2026: support can see and put right one user's agent
+
+- **Where it is:** on `main` since 14 October, in the backend. It reaches the server with `deploy.sh`.
+- **Why:** when a user writes in, support had no way to see their agent: whether the container is awake or stuck, which engine and model run, what pays for the AI, what waits for a yes. Nor to put it right without touching the database.
+- **What the user notices:**
+  - Nothing, until support acts. Then a short line in their activity log, such as "Textcrew support stopped the agent's container". Never the admin's reason.
+  - A crew job support cancels is shown as failed with "Cancelled by Textcrew support.", and the job's chat says it won't run.
+  - After a stop by force in the middle of a turn, that turn's answer is "Sorry, something went wrong on our side", and its credits come back.
+- **Backend:** eight new admin calls, for admins only:
+  - **The view** of one user's agent: the container as the vm-manager reports it (state, busy, last active, image, memory, the engine and browser switch on record, Claude signed in or not), the engine chosen and the one that runs, Claude plan connected and since when, the model and effort, the browser, what pays for the AI, and the usage charged since midnight UTC. If the vm-manager can't be asked, the rest still shows.
+  - **Stop the container**, politely (refused while it is in use) or by force, which is marked dangerous in the contract and the report. **Wake it**, the same wake a turn makes; the user must have credits, since the awake time is theirs to pay.
+  - **Reset settings**: the engine back to Hermes, the Claude model and the effort back to Default, the browser switch set again from the plan. The user's own settings functions make the change.
+  - **Approvals**: the list without the actions' inputs, and cancelling a waiting one the way the 24-hour expiry does.
+  - **Crew jobs**: the list without the brief's text (the report only when asked for), and cancelling one that hasn't started. A running job can't be stopped on its own, so that is refused.
+  - Every change needs a reason and is written to the audit log with the admin's id and the reason. No answer holds a container token, a Bridge secret, a LiteLLM key or an API key.
+- **Cost and speed:** none for users who are left alone. A wake by support costs the user its awake time, 1 credit per 10 minutes, about a third of a credit before the idle stop.
+- **Contracts:** `openapi.yaml` changed: the eight calls above and four new shapes for them, all under the `admin` tag. Nothing changed for the web app's existing calls. `vm.proto` did not change: only calls it already has are used (`GetSandbox`, `StopSandbox`, `WakeSandbox`, `SetAgentRuntime`, `SetBrowser`).
+- **Database:** none.
+- **How it was checked:**
+  - New backend tests (20): every call answers 401 without a session, 403 to a user who isn't an admin and 404 for an unknown user, and needs a real reason; the view's fields, with no container id, allowlist, token or LiteLLM key in it, and with the vm-manager down or no container; the fake vm-manager receives the polite stop, the forced stop and the wake with the plan's priority, and the engine is set again after the wake; a refused stop is 409 and audits nothing; a user without credits is not woken; the reset changes the settings and tells the fake vm-manager, and a browser switch that can't be sent answers 503 with the rest kept; approvals are listed without their inputs, and a cancelled one can't be answered or cancelled twice; crew jobs are listed without the brief or the report, a cancelled one never runs and its user is told, and running, finished and unknown jobs are refused. Two deliberate mistakes in the code (an approval's inputs in the answer; cancelling a running job) made three of these tests fail.
+  - Lint, the type check and the spec check pass. 681 of 682 backend tests pass; the one failure is the Hindi title test, which already failed before.
+  - Not run against a real vm-manager: the tests use the fake one. Not on the server.
+- **Still open:**
+  - The vm-manager does not say when a container woke, so the view has no "awake since". A new field on `Sandbox` would give it, if you want it.
+  - A running crew job can't be stopped on its own. That needs a new call to the vm-manager and the Bridge; today a stop by force ends it, as a failure on our side.
+  - No admin screen uses these calls yet.
+- **Docs updated:** `backend-report.md` sections 31 (a new part, "One user's agent and container"), 33 and 41.
+- **Commits:** backend `f43668f`, `81e5a1b`.
+
+### 14 October 2026: admin pages for the job queues, the audit log, turn timings, the settings and health
+
+- **Where it is:** on `main` since 14 October, in the backend. It reaches the server with `deploy.sh`.
+- **Why:** to run the beta, an admin needs to see what failed and act on it, read what happened for any user, see where replies spend their time, check the settings in use and see whether each service answers, without logging in to the server. Before, failed jobs were only on the queue board, turn timings only in a script run on the server, and the settings only in the server's `.env` file.
+- **What the user notices:** nothing. These are tools for admins. The admin panel can now be built on them.
+- **Backend:**
+  - **Jobs.** A list of the jobs of one queue, or of all four, in one state: failed (the default), waiting, running, delayed or finished. Each job shows its name, tries, times, the user, the first line of its last error and its ids. Its data is shown as ids only: the text of a message, buttons, tokens and keys are left out, and only the names of those fields are listed. A count per queue and state comes with it.
+  - **Retry and remove.** A failed job can be run once more; a failed or finished job can be removed. A job that is waiting, delayed or running is never removed or retried: the answer is "conflict" and nothing changes. Both need a reason, and both go to the audit log with the admin's id. A retry is the same as the queue board's retry button: one more run, and the job's own "already done?" check decides what is left, so no work is done twice.
+  - **The audit log of every user,** newest first, with filters for the user, the actor, the action and a time window. Secrets in an entry's details are replaced by "[redacted]", at any depth.
+  - **Turn timings over the last days** (7 by default, up to 30), from the timings table only: for each stage, the count, the median and the 90th percentile; the wake split into warm, cold, room made and made again; the turns per route, engine and outcome; and the 20 slowest turns with their biggest stage.
+  - **The settings in use,** read-only, from a fixed list: the switches, lists, limits, models and addresses (without any password in them). Each secret shows only whether it is set. The app catalog shows, per app, whether it can be connected on this server and how. `AWAKE_CAP` belongs to the vm-manager, which the backend cannot ask, so it is shown empty.
+  - **Health:** Postgres, Redis, the vm-manager (with its count of containers and awake ones), LiteLLM and Composio (with its key checked), each within 3 seconds, as ok, error or off, with a short message. It also shows the backend's version and the deployed commit, which `deploy.sh` now passes on as `GIT_COMMIT`.
+- **Cost and speed:** nothing for users. Each page is read only when an admin opens it. The health page sends one small request to LiteLLM and one to Composio each time. The timings summary reads at most 20,000 turns.
+- **Contracts:** `openapi.yaml` grew by eight admin operations, all tagged `admin`: `GET /v1/admin/jobs`, `GET /v1/admin/jobs/counts`, `POST /v1/admin/jobs/{queue}/{jobId}/retry`, `DELETE /v1/admin/jobs/{queue}/{jobId}`, `GET /v1/admin/audit`, `GET /v1/admin/timings/summary`, `GET /v1/admin/config` and `GET /v1/admin/health`. Nothing existing changed. `vm.proto` did not change.
+- **Database:** none. No new table and no migration.
+- **How it was checked:**
+  - New backend tests: every new operation answers 401 without a session and 403 to a user who is not an admin; the jobs list with ids only, the error scrubbed, and planted fake secrets (a message, a token, a key, a Telegram bot token, a password) never in the answer; waiting jobs with and without a priority, delayed jobs with the time they are due; paging through one queue and through all four without repeats; retry only of a failed job, with a reason, audited, and running exactly once more; remove only of a failed or finished job, never a running, waiting or delayed one; the audit log's filters, paging, newest first, and secrets removed at any depth; the timings math on sample turns (median, 90th percentile, wake kinds, routes, engines, the 20 slowest) and the window of days; the settings page with planted secrets, which shows none of them; the health page with each service ok, off, a refused key and the vm-manager down.
+  - Lint, the type check and the contract check pass. 677 of 678 backend tests pass; the one failure is the Hindi title test, which already failed before.
+  - Not on the server.
+- **Still open:**
+  - The awake cap can be shown only if the vm-manager says it. A small new call in `vm.proto` could return it with the number of awake containers. Not built; for your decision.
+  - The jobs list pages by position. A job that changes state while someone pages can be shown twice or skipped.
+  - Removing a finished job lifts, for that job, the 7-day guard against the same job being added twice. Its own "already done?" check still stops double work.
+  - Restarting the api or the worker by hand with `./dc up -d` leaves the commit empty until the next `deploy.sh`, as it already does for `AGENT_IMAGE_VERSION`.
+  - The admin panel has no screens yet.
+- **Docs updated:** `backend-report.md` sections 3, 31 (new parts: "Jobs", "The audit log", "Turn timings", "Settings", "Health"), 37, 41 and 42.
+- **Commits:** backend `9ded30d`, `87d7fa9`, `d8e75d4`, `4e13077`, `176a382`.
+
+### 14 October 2026: admins can change a role, suspend an account, delete one, and sign a user out
+
+- **Where it is:** on `main` since 14 October, in the backend. It reaches the server with `deploy.sh`, which also adds the two new columns.
+- **Why:** the admin tools could hand out and take back credits, but not act on an account. Making someone an admin meant editing Clerk by hand, there was no way to stop an abusive account short of deleting it in Clerk, and no way to sign a user out.
+- **What the user notices:**
+  - Nothing, unless an admin acts on their account.
+  - A suspended user: the web app gets "account suspended" on every call (403, code `account_suspended`), so it can say so. Telegram messages are saved but not answered, with one short notice a day at most: "Your Textcrew account is suspended, so I can't answer messages right now." Automations stop. When the suspension is lifted, everything works again and the automations come back (or wait for credits, at zero). Messages sent while suspended stay unanswered.
+  - A deleted user: the same as deleting their own account.
+  - A user signed out by an admin: asked to sign in again within about a minute.
+- **Backend:**
+  - **Four admin tools,** each with a required reason and one activity-log row holding the admin's id and that reason. The user's own activity list shows a plain line ("An admin suspended this account"), never the reason.
+  - **The role** is set in Clerk first, in the user's public metadata, through Clerk's Backend API, then on our own row at once. Clerk's next "user updated" webhook carries the same role. An admin cannot remove their own admin role. A suspended account cannot be made an admin.
+  - **Suspend:** the account gets a status, owned by the sign-in part of the backend. While suspended, every signed-in call is refused, the live stream too; the container's calls to the platform's tools and the git gateway are refused; chat messages are saved, marked handled and not answered; no turn runs and the container is never woken, also for a web message, an automation's run or a crew job queued just before. Automations that are on, or paused for lack of credits, are paused with a new reason, "suspended" (kept apart from "admin", which support uses to pause one automation). The container is stopped politely through the vm-manager; while a turn runs the vm-manager refuses, and the idle check stops it 3 minutes after the turn. The admin's answer says whether it stopped at once.
+  - **Unsuspend:** the account works again; the automations paused by the suspension come back on, or, at zero credits, wait paused for lack of credits.
+  - **Delete:** the admin types the user's email as a check. The user is deleted in Clerk, the account is marked deleted at once, and the same deletion job as a user's own deletion runs (the container and folder through `DeleteSandbox`, keys, connections, automations, chats, messages, files, memories; the subscription set to not renew). The log row keeps only the admin's id, the user's id and the reason.
+  - **Sign out everywhere:** every active Clerk session of the user is ended.
+  - An admin cannot suspend or delete themselves, nor another admin before taking their role away. Repeating an action changes nothing and writes no second row.
+  - Decided here: one notice a day per chat rather than none, so a Telegram user is not left guessing; a suspension does not ban the user in Clerk (they can still sign in, and the web app gets the clear `account_suspended` answer instead); held messages are never answered later; a paid subscription keeps renewing during a suspension.
+- **Cost and speed:** each call from a container to the platform's tools or the git gateway, and each turn, reads the account's status once more: one small database read. Not measured.
+- **Contracts:** `openapi.yaml` changed: five new admin operations (`PUT /v1/admin/users/{userId}/role`, `POST .../suspend`, `POST .../unsuspend`, `POST .../sessions/revoke`, `DELETE /v1/admin/users/{userId}`), the error code `account_suspended`, and the automation pause reason `suspended`. The web app should show a clear "account suspended" screen on that code. `vm.proto` did not change.
+- **Database:** two new columns on `users`, owned by the sign-in part: the status (active or suspended) and when the suspension started (migration 0021). No new table.
+- **How it was checked:**
+  - New tests: every tool is admin-only (403 for a normal user, 401 without a session) with the error shape; a blank reason is refused; an unknown user is 404; the role is set through the Clerk stand-in and applies at the next request, the following Clerk webhook keeps it, setting it twice writes nothing, removing your own admin role is refused and Clerk is not asked, Clerk down or not set up answers 503 and changes nothing; a suspended user is refused on the profile, the automations list, sending a web message and the live stream, the container's tool call and git call are refused, two Telegram messages are saved and not answered with exactly one notice, no wake and no delivery, a turn queued before does nothing, suspending twice writes one row; automations are paused and resumed (the user's own pause kept, the timer removed and set again), at zero credits they wait for credits, a run that fires during a suspension goes back to paused; the container stop is asked of the vm-manager fake, and a refused stop is reported; self and admins are refused; delete refuses a wrong email, yourself and an admin, deletes in Clerk, runs the deletion job through `DeleteSandbox`, keeps no email in the log row, and Clerk down changes nothing; signing out ends the sessions and is logged.
+  - Lint, the type check and the contract check pass. The 18 new tests pass, three runs in a row. The whole suite: 677 of 680 pass. The three failures are not from this change: the Hindi title test, which already failed before, and two Jev-routing tests that depend on timing; they pass when run alone (3 runs of 3), and one of them failed the same way on `main` without this change.
+  - Not run against the real Clerk, nor on the server.
+- **Still open:**
+  - The web app needs a screen for `account_suspended`, and the admin panel needs buttons for these tools.
+  - A live stream already open when an account is suspended stays open until it reconnects.
+  - Whether a suspension should also cancel a paid subscription is your decision; today it does not.
+- **Docs updated:** `backend-report.md` sections 4, 6, 13, 17, 18, 31 (new parts on the account tools), 33, 38, 40, 41 and 43.
+- **Commits:** backend `e95e033`, `d8cc52f`, `560f17b`, `a7cee95`.
+
 ### 14 October 2026: every turn says where its time went; a greeting no longer waits for each step in turn
 
 - **Where it is:** on `main` since 14 October, in the backend and the vm-manager. It reaches the server with `deploy.sh`, which also adds the new table.

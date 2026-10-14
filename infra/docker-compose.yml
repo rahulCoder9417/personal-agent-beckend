@@ -197,6 +197,7 @@ services:
       REDIS_URL: redis://redis:6379
       VM_MANAGER_URL: http://vm-manager:9090
       LITELLM_URL: http://litellm:4000
+      GIT_COMMIT: ${GIT_COMMIT:-}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -215,6 +216,7 @@ services:
       REDIS_URL: redis://redis:6379
       VM_MANAGER_URL: http://vm-manager:9090
       LITELLM_URL: http://litellm:4000
+      GIT_COMMIT: ${GIT_COMMIT:-}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

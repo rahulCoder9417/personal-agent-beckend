@@ -187,7 +187,7 @@ A job can run a second time, for example after a crash. Three things stop double
 
 ### Retries
 
-A job that fails is tried again, 5 tries in total. The waits are 5 seconds, 30 seconds, 2 minutes and 10 minutes. After the last try the event is marked `failed`, with the error text. An alert is raised: an error line in the log. If `ALERT_WEBHOOK_URL` is set, the alert is also posted there. The failed job stays on the admin page for 30 days.
+A job that fails is tried again, 5 tries in total. The waits are 5 seconds, 30 seconds, 2 minutes and 10 minutes. After the last try the event is marked `failed`, with the error text. An alert is raised: an error line in the log. If `ALERT_WEBHOOK_URL` is set, the alert is also posted there. The failed job stays on the admin page for 30 days. An admin can run it once more or remove it there (section 31).
 
 ### The per-user lock
 
@@ -225,7 +225,7 @@ This section follows one request from the web app through the api, check by chec
 The web app signs the user in with Clerk. Clerk gives the browser a session token, a signed text that proves who the user is. The web app sends it with every request.
 
 1. The api checks the token's signature with Clerk's key. A missing, old or forged token is refused.
-2. The token holds Clerk's id of the user. The api finds the matching row in `users`. A deleted account is refused.
+2. The token holds Clerk's id of the user. The api finds the matching row in `users`. A deleted account is refused. A suspended account is refused with `account_suspended` (section 31).
 3. If there is no row yet, the api reads the user from Clerk and creates the account. This covers a user who arrives before Clerk's sign-up webhook.
 
 ### The error shape
@@ -238,6 +238,7 @@ Every error looks the same: an `error` object with a `code`, a `message` and som
 | 401 | `unauthorized` | No session, or a bad one |
 | 402 | `out_of_credits` | The balance is zero |
 | 403 | `forbidden`, `plan_limit`, `channel_disabled` | Not allowed, not in the plan, or the channel is off |
+| 403 | `account_suspended` | An admin suspended the account. Every signed-in call answers this until it is lifted |
 | 404 | `not_found` | Unknown address or item |
 | 409 | `conflict` | The action does not fit the current state |
 | 429 | `rate_limited` | Too many requests. `Retry-After` says how long to wait |
@@ -305,8 +306,9 @@ This section follows a new person from sign-up to an account with credits and a 
 ### Other paths
 
 - **The web app arrives first.** If a request comes before Clerk's webhook, the api creates the account from Clerk's data. The same onboarding job is added once.
-- **Clerk reports a change.** The email, its verified state and the role are updated. An admin is a user whose role is set to admin in Clerk.
+- **Clerk reports a change.** The email, its verified state and the role are updated. An admin is a user whose role is set to admin in Clerk. The admin tool that changes a role sets it in Clerk first and on our row at once, so this webhook then agrees (section 31).
 - **Clerk reports a deletion.** The account is marked deleted and a delete job runs. It removes the container and its data, the LiteLLM key, app connections, automations, linked chats, conversations, messages, files and memories. It also stops the subscription from renewing.
+- **An admin deletes the account.** The admin tool deletes the user in Clerk, marks the account deleted and adds the same delete job. Clerk's deletion webhook then finds nothing left to do (section 31).
 
 ### What can go wrong
 
@@ -361,6 +363,8 @@ Example: Rahul's Telegram is linked to his first account. He signs in to a secon
 ### Unlinking
 
 The user removes a link in the web app, in Settings → Channels. The activity log records it, like the link: the channel and the name shown when it was linked, never the chat id. From then on the chat gets the "not linked yet" reply.
+
+An admin can remove a link for the user (section 31). It goes the same way and writes the same activity log entry, marked as done by an admin.
 
 ## 8. Channels
 
@@ -777,7 +781,7 @@ The Platform MCP is the platform's tool server. MCP is a standard way for an AI 
 2. The backend gets only a hash of the token. A hash is a one-way fingerprint: nobody can turn it back into the token.
 3. The backend saves the hash next to the user id, in the table `sandbox_tokens`.
 4. On every call, the container sends its token. The api makes its hash and looks it up.
-5. Found: the call runs as that user. Not found: the call is refused.
+5. Found: the call runs as that user. Not found: the call is refused. Found, but an admin suspended the account: the call is refused too (section 31).
 6. The user id always comes from this lookup. No tool has an input for a user id. So an agent cannot act as another user, whatever a web page tells it.
 
 ### The tools
@@ -862,6 +866,8 @@ A connection becomes `active`, `expired` or `error` in one of four ways. The fir
 - That is six checks in about 16 minutes. They stop as soon as the connection is no longer pending. After the last one, the other ways can still finish it.
 
 Each way asks Composio about each pending connection by its own account id, the ten newest at most. It used to read the user's whole list of accounts at Composio. Composio gives that list in pages, so for a user with many accounts the new one could be on a later page, and it stayed pending for good.
+
+Each connection keeps the time the platform last heard from Composio about it: a check that got an answer, Composio's webhook, or an admin's recheck. Only admins see it. An admin can also ask Composio again about any connection, whatever its state, and disconnect one for the user (section 31).
 
 ### How the agent finds and runs an action
 
@@ -992,7 +998,7 @@ The git gateway lets the agent use normal git on the user's GitHub repositories.
 
 1. Inside the container, git is set up to send every `github.com` address to the gateway, at `/git` on the api.
 2. Git adds the container token to each request. The agent runs a normal clone and needs no password.
-3. The api turns the container token into the user id, exactly as the tool server does. An unknown token is refused.
+3. The api turns the container token into the user id, exactly as the tool server does. An unknown token is refused, and so is the token of a suspended account.
 4. The api takes that user's GitHub access from their GitHub connection at Composio. It is never logged and never saved.
 5. The api passes the request on to GitHub and streams the answer back.
 
@@ -1119,6 +1125,8 @@ The worker's start used to drop such a run at times. On start the worker sets ev
 
 - **Zero credits.** All the user's automations are paused. When credits are added, these are switched on again by themselves.
 - **Three failures in a row.** That automation is paused. The user is told in chat and can resume it in the web app. A paused automation has no timer, and app events for it are ignored.
+- **An admin suspends the account.** Every automation that is on, or paused for lack of credits, is paused with the reason "suspended". When the suspension is lifted they come back, or wait for credits if the balance is zero. A run that fires during a suspension does nothing and is paused the same way (section 31).
+- **Paused by Textcrew support.** An admin can pause any automation (section 31). Its paused reason is then `admin`, so the web app can say who paused it. Adding credits does not switch it on again. The user can resume it, or an admin can.
 - **After a restart.** The timers live in the job queue, which can lose its data. So every time the worker starts, it sets the timer of every enabled automation again. A timer that is still there is left as it is, so a run that came due while the worker was stopped is not lost. It runs late and says so (above).
 - **The job queue lost its jobs.** A run whose job was lost is put back from the saved event. It still knows its automation and when it was due.
 
@@ -1996,9 +2004,11 @@ Example: a user has a connected Claude plan and a saved OpenAI key. With Claude 
 
 ## 31. Admin tools
 
-Admin tools are for the founder and trusted staff. They hand out free credits, correct balances and show what failed.
+Admin tools are for the founder and trusted staff. They hand out free credits, correct balances, show what failed and show how the running system is doing. They act on accounts: the role, a suspension, a deletion, signing a user out. They also let support look at one user's agent and container and put it right.
 
 Only a user with the role admin may use them. The role is set in Clerk, the sign-in service, in the user's public metadata. The backend copies it when Clerk sends the user's data. Anyone else gets "Admins only".
+
+Every admin action that changes something goes to the audit log with the admin's id. Retrying or removing a job also needs a reason, written there too. No admin answer ever holds a secret.
 
 | Tool | What it does | Where |
 |---|---|---|
@@ -2007,7 +2017,28 @@ Only a user with the role admin may use them. The role is set in Clerk, the sign
 | Disable or enable a coupon | Switches a campaign off or on; can revoke unspent credits | `/v1/admin/coupons/{id}` |
 | Adjust credits | Adds or removes credits for one user | `/v1/admin/users/{id}/credits` |
 | Free-credit numbers | Shows this month's free credits, the cap and abuse flags | `/v1/admin/stats/free-credits` |
+| Change the role | Makes a user an admin, or takes the role away | `/v1/admin/users/{id}/role` |
+| Suspend, unsuspend | Puts an account on hold, or lifts the hold | `/v1/admin/users/{id}/suspend`, `/unsuspend` |
+| Delete an account | Deletes the account, as the user's own deletion does | `/v1/admin/users/{id}` |
+| Sign out everywhere | Ends every sign-in session of the user | `/v1/admin/users/{id}/sessions/revoke` |
+| One user's apps | Lists each connection; disconnects one, or asks Composio about it again | `/v1/admin/users/{id}/apps` |
+| One user's chats | Lists the linked chats, with the chat id masked; unlinks one | `/v1/admin/users/{id}/channels` |
+| One user's automations | Lists every automation; pauses, resumes or deletes any one | `/v1/admin/users/{id}/automations`, `/v1/admin/automations/{id}` |
+| Apps in numbers | For each app: how many users connected it, its connections by state, and whether it can be connected here | `/v1/admin/apps/summary` |
 | Failed jobs board | Shows the four job queues and their failed jobs | `/admin/queues` |
+| Jobs | Lists the jobs of a queue in one state, newest first | `/v1/admin/jobs` |
+| Job counts | How many jobs each queue holds, by state | `/v1/admin/jobs/counts` |
+| Retry a job | Runs a failed job once more, with a reason | `/v1/admin/jobs/{queue}/{jobId}/retry` |
+| Remove a job | Removes a failed or finished job, with a reason | `/v1/admin/jobs/{queue}/{jobId}` |
+| Audit log | Every user's activity log, with filters | `/v1/admin/audit` |
+| Turn timings | Where turns spent their time over the last days | `/v1/admin/timings/summary` |
+| Settings | The settings that shape behaviour, read-only | `/v1/admin/config` |
+| Health | Whether each service the backend needs answers | `/v1/admin/health` |
+| One user's agent | Shows the container, the engine, the AI and today's usage | `/v1/admin/users/{id}/agent` |
+| Stop or wake a container | Stops a user's container (politely, or by force) or wakes it | `/v1/admin/users/{id}/container/stop` and `/wake` |
+| Reset agent settings | Puts the engine, the Claude model, the effort or the browser switch back to the default | `/v1/admin/users/{id}/agent/reset` |
+| A user's approvals | Lists them; cancels a waiting one | `/v1/admin/users/{id}/approvals`, `/v1/admin/approvals/{id}/cancel` |
+| A user's crew jobs | Lists them; cancels one that has not started | `/v1/admin/users/{id}/crew-jobs`, `/v1/admin/crew-jobs/{id}/cancel` |
 
 ### Credit adjustments
 
@@ -2023,6 +2054,188 @@ Only a user with the role admin may use them. The role is set in Clerk, the sign
 - **Free-credit numbers.** One call shows the current month's numbers: sign-up credits granted and coupon credits granted. It also shows the cap, if one is set, and whether it is reached.
 - **Abuse flags** come with the same call. A flag is one IP address from which 3 or more accounts redeemed coupons that month. Up to 50 addresses are listed.
 - **Failed jobs.** A job that fails is retried, 5 tries in all, with waits of 5 seconds, 30 seconds, 2 minutes and 10 minutes. After the last try it is marked failed and an alert is logged. If `ALERT_WEBHOOK_URL` is set, the alert is also sent there. The board at `/admin/queues` shows the failed jobs. It opens in a browser for a signed-in admin.
+
+### One user's apps, chats and automations
+
+These tools are for support: a user writes in that an app won't connect, a chat should be unlinked, or an automation keeps failing. Each action works exactly like the user's own button, so nothing is left half done.
+
+The rules for all of them:
+
+- **A reason is required.** Every action asks for a short reason, up to 200 characters. A blank one is refused.
+- **Every action is audited.** It writes one row in the activity log with the admin's id and the reason. The user sees the entry in their own activity log, for example "Textcrew support paused "Daily summary"". The admin's id and the reason are kept in the row but not shown to the user.
+- **No secrets.** No Composio account id, token or secret is ever shown. A chat id or phone number is shown only masked: a Telegram chat keeps its last 4 digits ("•••• 3645"), a phone number its country code and last 4 digits. An automation's instruction text, its trigger settings and the chat it was made in are left out.
+
+**Apps.**
+
+- **The list** shows each of the user's connections in any state: the app, the state (active, pending, expired or failed), the account's label (usually its email), where the app's Composio setup comes from on this server, whether the app can be connected here, when the user started connecting it, and when the platform last heard from Composio about it. It reads our own table only; Composio is not asked.
+- **Where the setup comes from:** `settings` means it is named in `COMPOSIO_AUTH_CONFIGS`; `server_made` means the server made it itself; `none` means there is none yet. With `none`, "can be connected" is still true when `COMPOSIO_MANAGED_APPS` lets the server make one on the first connect (section 14).
+- **Disconnect** is the user's own disconnect: the account is removed at Composio and the connection is deleted. Like the user's own, it leaves the user's app-event automations as they are.
+- **Recheck** asks Composio about that one connection now, whatever its state, and copies the answer: active, expired or failed. An account that Composio no longer has becomes failed, unless it was still pending. One still being set up stays pending and gets a fresh series of checks, as after a new connect. If Composio can't be asked, the api answers 503 and nothing changes.
+
+**Chats.** The list shows each linked chat: the channel, what the user sees for it in Settings → Channels, the masked chat id, when it was linked, whether the channel is switched on here, whether the user blocked the bot, and when the chat last wrote. Unlink is the user's own unlink, with the same activity log entry (section 7). The chat then gets the "not linked yet" reply.
+
+**Automations.**
+
+- **The list** shows every automation of the user, also the one-time reminders that already ran: the title, the kind, the moment or the schedule or the app event, the time zone, on or paused and why, the failures in a row, the last and next run, and for pull-request review the repo.
+- **Pause** is the user's own pause: the timer is removed and app events for it are ignored. The paused reason is `admin`, so the user can see that Textcrew paused it. Adding credits does not switch it on again; the user or an admin can.
+- **Resume** is the user's own resume: the timer is set again and the failure count goes back to 0.
+- **Delete** is the user's own delete: the timer goes, and the Composio trigger with it. For pull-request review that is the watch on the repo, and with it the standing permission to post reviews there (section 19).
+- A one-time reminder that already ran cannot be paused or resumed: the api answers 409.
+
+**Apps in numbers.** For each app in the catalog: where its setup comes from, whether it can be connected here, how many users have a connection of it in any state, and its connections by state: active, pending, expired and failed. Numbers only, no user.
+
+Example: Rahul writes that his Gmail shows "connecting" for an hour. The admin opens his apps, sees Gmail pending and last checked an hour ago, and presses recheck with the reason "ticket 41". Composio says it is active, so Gmail becomes active and the agent can use it. Rahul's activity log shows "Textcrew support checked the Gmail connection: active".
+
+### One user's agent and container
+
+These tools look at one user's agent and change a few things about it. They work only through the vm-manager's existing calls (section 32) and the backend's own functions, the same ones a turn or the user's own settings use. They never talk to Docker or to a container.
+
+**The rules for all of them**
+
+- Every change needs a reason. It goes to the audit log with the admin's id and the reason.
+- The user's activity log shows a short line, such as "Textcrew support stopped the agent's container". It never shows the reason.
+- A change that is refused writes nothing.
+- No answer ever holds a container token, a Bridge secret, a LiteLLM key or an API key. For own keys, only the names of the providers are shown.
+- An approval is shown without its inputs: only the action's name, its app and the short summary the user was shown. A crew job is shown without the brief's text, and without its report unless the admin asks for it (`?withReport=1`).
+
+**The view** shows, for one user:
+
+| What | Where it comes from |
+|---|---|
+| The container's state (none, stopped, waking, awake, busy, broken), busy or not, last active, the image, the memory in use | The vm-manager's `GetSandbox` |
+| The engine and the browser switch the vm-manager has on record, and whether Claude Code has its sign-in | The same |
+| The engine chosen and the one that really runs (section 30) | The backend |
+| Claude plan connected, and since when. Never the sign-in | The backend |
+| Claude Code's model and effort ("Default" shows as empty) | The backend |
+| Scout's browser: on this server, wanted by the plan, on record | The backend and the vm-manager |
+| What pays for the AI, the user's choice, the server's `AI_ACCESS_MODE`, and which providers have a key | The backend |
+| Awake seconds, browser seconds and credits charged since midnight UTC | The 5-minute usage syncs (the last few minutes may be missing) |
+
+The vm-manager does not report when a container woke, so there is no "awake since". If the vm-manager cannot be asked, the rest is still shown, and the container is marked "unknown".
+
+**Stopping a container**
+
+- By default the stop is polite, like the idle stop: Hermes saves to the user's folder first. The vm-manager refuses it while a turn runs, a message is being delivered or a Claude sign-in waits for its code. The admin gets "in use" and can try again later.
+- **A stop by force is dangerous.** It ends the container at once, even in the middle of a turn, and Hermes does not save first. That turn fails as our fault: the user gets "Sorry, something went wrong on our side" and the turn's credits back. A crew job in that turn fails. Use it only for a turn that is stuck. The vm-manager's own 15-minute timer does the same to a stuck turn.
+
+**Waking a container** is the same wake a turn makes. The container is made first if the user has none. Afterwards the engine and the browser switch are set again if they differ. The awake time is charged to the user, 1 credit per 10 minutes. So the user must have credits, and a container woken and left alone costs about a third of a credit before the idle stop. When the server is at its awake limit with nothing to stop, the admin is told to try again shortly.
+
+**Resetting settings.** The admin picks any of four:
+
+| Setting | Goes back to |
+|---|---|
+| The engine | Hermes. A connected Claude plan stays connected, and the user can choose Claude Code again |
+| Claude Code's model | Default: Claude Code's own choice |
+| The thinking effort | Default: Claude Code's own choice |
+| Scout's browser switch | What the user's plan and the server say, as after a change of plan |
+
+The same functions as the user's own settings make the change, so the vm-manager is told in the same way. If the browser switch cannot be sent, the other settings are still reset, and the admin is told to try again.
+
+**Cancelling an approval.** Only a waiting one. It ends the way the 24-hour expiry ends one (section 15): it becomes "expired", the agent is not woken, and nothing can run with it. A late tap on its button gets "That approval was already answered or has expired."
+
+**Cancelling a crew job.** Only one that waits (section 20). It is marked failed with "Cancelled by Textcrew support." and never runs. The user is told in the job's chat. A job that already runs cannot be stopped on its own: the Bridge has no way to stop one job. The admin is refused, and the job ends by itself within 15 minutes. A stop by force ends it now, as a failure on our side.
+
+**Example.** Rahul writes to support that his agent "keeps using the wrong model". The admin opens his agent: Claude Code, Sonnet 4.6, effort max, the container busy. The admin resets the model and the effort with the reason "user report: wrong model". Rahul's next turn runs on Claude Code's own choice. His activity log shows "Textcrew support reset the agent's Claude model (back to Default), thinking effort (back to Default)".
+
+### Jobs
+
+The jobs list shows one state at a time: failed (the default), waiting, running, delayed or finished. It can show one queue, or the four queues one after the other. It comes in pages of 30, newest first within a queue.
+
+For each job it shows its id, queue, name and state, the tries made, when it was added, started and finished, when a delayed job is due, and the user it is for. A failed job also shows the first line of its last error. Anything in that line that looks like a secret is replaced by "[redacted]".
+
+A job's data is shown as ids only: the user, the event, the message, the automation, and so on. Every other field is left out, and only its name is listed. So the list never shows the text of a message, a button, a token or a key.
+
+"Waiting" includes the jobs waiting with a priority. These are the inbound jobs of paying users, which go first.
+
+- **Retry** works only on a failed job. The job goes back in line and runs once more, with no new tries after it. This is what the retry button of the board does. The job keeps its count of tries, so its own "last try" rules apply to this run. Every job checks "already done?" first (section 3), so a retry never does work twice. Example: a reply that was marked failed after its last try is not sent by a retry, because the job finds it is no longer waiting to go. A failed refund of a turn, retried, works the refund out again and gives back what it can.
+- **Remove** works only on a failed or a finished job. A job that is waiting, delayed or running is never removed: the answer is "conflict", and nothing changes. A removed job's event keeps its status in the database.
+- **Reason.** Both need a reason of up to 200 characters. The audit log gets the admin's id, the queue, the job's id and name, and the reason.
+
+Removing a finished job has one effect to know about. A finished job is kept 7 days so that the same job cannot be added twice (section 3). Once removed, that guard is gone for it. The job's own "already done?" check still stops any double work.
+
+### The audit log
+
+The audit log is the activity log of every user in one list, newest first, in pages of 30. It can be narrowed to one user, one actor (user, agent, admin or system), one action, and a time window.
+
+Each entry's details are shown with every field that holds a secret replaced by "[redacted]": passwords, tokens, keys, sign-in codes and cookies, at any depth. Text that looks like a secret is replaced too, for example a bearer token or a key in an address.
+
+### Turn timings
+
+The timings summary reads only the turn timings (section 9), for the last 7 days or up to 30. For each stage it gives how many turns had it, the median and the 90th percentile, in milliseconds. A stage counts only as long as it kept the user waiting.
+
+The stages are the queue, preparing the message, the route, the quick reply, the wake (warm, cold, room made on the server, or the container made again, each apart), building the turn, the hand-over, the engine's start, the model's first output, the work, sending the answer and the wrap-up. "Total" is the time from the message being queued to the answer.
+
+It also counts the turns per route, engine and outcome, and lists the 20 slowest turns: the user, when, the total and the biggest stage.
+
+The median is the middle value, read between the two middle ones when the count is even. Example: four turns waited 100, 200, 300 and 400 ms in the queue. The median is 250 ms and the 90th percentile 370 ms.
+
+### Settings
+
+The settings page shows the settings that shape what the backend does: the channels that are on, the crew, the browser, the waking during routing, the models, the apps the server may set up at Composio, the plan products, the limits and the addresses. An address is shown without any user name or password in it.
+
+It is built from a fixed list, never by reading the whole environment. A setting that is not on the list is not shown. For each secret it says only whether it is set. For `COMPOSIO_AUTH_CONFIGS` it shows the app names, not the setup ids.
+
+It also lists every app of the catalog with whether it can be connected on this server, and how: named in the settings, set up by the server earlier, allowed to be set up on the first connect, or not at all.
+
+`AWAKE_CAP` is the vm-manager's own setting. The backend cannot read it, so the page shows it empty.
+
+### Health
+
+The health page asks Postgres, Redis, the vm-manager, LiteLLM and Composio, each with a limit of 3 seconds. For each it says ok, error or off, with a short message. Off means the service is not set up on this server, for example Composio without its key. For the vm-manager it also says how many containers there are and how many are awake. For Composio it checks that the key is accepted.
+
+It also shows the backend's version and the deployed commit. The commit is there when the server was updated with `deploy.sh`, which passes it on as `GIT_COMMIT`.
+
+Example: Composio's key was replaced and the old one is still in the settings. The health page says "composio: error, reachable, but the key was refused (401)".
+
+### The account tools: the rules they share
+
+- **A reason is required.** Each call carries a short reason. A blank one is refused.
+- **Each is in the activity log.** One row for the user, with the admin's id and the reason. The user's own activity list shows only a plain line, such as "An admin suspended this account". The reason stays out of it.
+- **Not on yourself, not on an admin.** An admin cannot remove their own admin role, suspend themselves or delete themselves. Another admin can be suspended or deleted only after their admin role is taken away. These answer "conflict" and change nothing.
+- **Twice is safe.** Setting the role a user already has, suspending a suspended account, or lifting a suspension that is not there changes nothing and writes no second row.
+
+### Changing the role
+
+1. The admin sends the new role (user or admin) and a reason.
+2. The backend sets the role in Clerk first, in the user's public metadata, through Clerk's Backend API. If Clerk cannot be reached, or `CLERK_SECRET_KEY` is not set, the answer is "unavailable" and nothing changes.
+3. Then it sets the role on our own row at once. The user's next request already has it.
+4. Clerk then sends its usual "user updated" webhook. It carries the same role, so the two agree.
+
+A suspended account cannot be made an admin: the suspension must be lifted first.
+
+Example: Asha joins the support team. The founder makes her an admin with the reason "joins support". Her next page load shows the admin screens.
+
+### Suspending an account
+
+A suspension puts an account on hold until an admin lifts it. Nothing is deleted.
+
+| What | While suspended |
+|---|---|
+| The web app | Every signed-in call answers 403 with the code `account_suspended`, the live stream too. The web app can say so plainly |
+| Telegram and the other chat apps | Messages are saved but not answered. The chat gets one short notice at most once a day: "Your Textcrew account is suspended, so I can't answer messages right now." Files are not downloaded and voice notes are not transcribed. Link codes, `/new`, coupon codes and approval buttons do nothing |
+| Web messages sent just before | Saved, never answered. The turn sees the suspension and stops |
+| Automations | Those that are on, or paused because credits ran out, are paused with the reason "admin". Ones the user paused, or that were paused after failures, stay as they are |
+| The container | Stopped politely through the vm-manager. If a turn is running, the vm-manager refuses; the turn finishes, its tool calls are refused, and the idle check stops the container 3 minutes later. It is never woken while the account is suspended |
+| The container's own calls | The platform's tools and the git gateway refuse them |
+| Crew jobs | One that was waiting fails with "The account was suspended when the job was due to start" |
+| Credits and the plan | Unchanged. A paid subscription keeps renewing; cancel it apart if needed |
+
+**Lifting it.** The account works again at once. The automations the suspension paused come back: switched on if the user has credits, or else paused for lack of credits, so they come back with the next credits like any other. The container wakes with the user's next message. Messages held during the suspension stay unanswered. The agent may see them in the chat's history, marked as earlier messages and not as requests.
+
+Example: three people report spam from Ravi's agent. The founder suspends his account with the reason "spam reports". Ravi's Telegram messages get one notice that day and no answers. His daily summary does not run. A week later the founder lifts it. His summary runs again the next morning.
+
+### Deleting an account
+
+1. The admin sends a reason and the user's email, typed out as a check. If the email does not match, nothing happens. Letter case and spaces around it don't matter.
+2. The backend deletes the user in Clerk, through its Backend API. If Clerk cannot be reached, nothing changes. If Clerk no longer has the user, the backend goes on.
+3. It marks the account deleted at once, so every sign-in is refused, and adds the same delete job a user's own deletion adds (section 6): the container and the user's folder through the vm-manager's `DeleteSandbox`, the LiteLLM key, app connections, automations, linked chats, conversations, messages, files and memories. A renewing subscription is set to not renew.
+4. Clerk's "user deleted" webhook arrives later, finds the account deleted already, and adds nothing.
+
+The activity-log row keeps the admin's id, the deleted user's id and the reason. Never the email or the name. A second delete of the same account answers "not found".
+
+### Signing a user out everywhere
+
+The backend asks Clerk to end every active session of the user. The answer says how many were ended. A session token the browser already holds still works until it expires, about one minute, because the api checks tokens without asking Clerk each time. After that the user must sign in again. This does not suspend the account.
 
 ---
 
@@ -2082,7 +2295,7 @@ Each user has one container, named `pa-sbx-` plus the user id. Each user also ha
 
 ### Waking, in steps
 
-1. The backend checks that the user has credits. At zero credits nothing is woken, and the user is told.
+1. The backend checks that the user has credits. At zero credits nothing is woken, and the user is told. A suspended account's container is never woken, and nothing is said in the turn (section 31).
 2. The backend sends `WakeSandbox` with the user's plan priority. The vm-manager locks this user, so two operations never overlap.
 3. If the container is already running, the vm-manager answers at once.
 4. It checks the limit on awake containers and reserves a place. The state is "waking".
@@ -2091,6 +2304,8 @@ Each user has one container, named `pa-sbx-` plus the user id. Each user also ha
 7. It writes this container's rule for the egress proxy, the only way out of a container. The state is "awake", and an awake period opens for credits.
 
 If the start or the ready check fails, the vm-manager makes the container again from the image and tries once more. If that fails too, the state is "broken". After a good wake, the backend checks the engine and the browser switch, and sends the right value if one differs.
+
+Support can also wake a container from the admin tools (section 31). It is the same wake, and the user must have credits for it.
 
 ### Delivering a message
 
@@ -2111,11 +2326,13 @@ The answer itself is not in this stream. The Bridge sends it through the platfor
 |---|---|---|
 | The idle check, every minute | Awake, quiet for 3 minutes, no turn, no delivery in flight | Politely |
 | The backend, after a crew job | The job's turn has ended | Politely. Refused while a turn runs, a delivery is in flight or a Claude sign-in waits; the idle check then does it later |
+| The backend, when an admin suspends the account | At once | Politely, refused in the same cases. The idle check then does it, and nothing wakes it again until the suspension is lifted |
 | The limit on awake containers | Another user needs the place | Politely |
 | The stuck-turn timer | A turn runs longer than 15 minutes | By force |
 | The health check | The container does not answer, even after restarts | By force, then "broken" |
+| Support, with the admin tools (section 31) | An admin asks, with a reason | Politely, refused like the backend's own stop. By force only when the admin says so |
 
-A container is never stopped in the middle of a turn, unless the turn is stuck. "Quiet" means no delivered message, no tool call and no git call. Each of those resets the clock. A Claude sign-in that waits for its code also keeps the container awake. A polite stop goes like this:
+A container is never stopped in the middle of a turn, unless the turn is stuck or support stops it by force. "Quiet" means no delivered message, no tool call and no git call. Each of those resets the clock. A Claude sign-in that waits for its code also keeps the container awake. A polite stop goes like this:
 
 1. The vm-manager tells the Bridge to shut down. Hermes saves its memory to the user's folder, within 20 seconds.
 2. Docker stops the container. A stop by force skips step 1 and ends it at once.
@@ -2371,12 +2588,15 @@ This section says how the running system is watched, backed up and brought back 
 | The api's `/healthz` | When asked | Answers "ok" when the api is up |
 | The worker's health check job | Every 5 minutes | Over 50 failed jobs in a queue, over 1,000 waiting, or the vm-manager out of reach |
 | The vm-manager's container check | Every 30 seconds | The Bridge of each awake container |
+| The admin health page, `/v1/admin/health` | When an admin opens it | Postgres, Redis, the vm-manager, LiteLLM and Composio, each within 3 seconds, and the deployed version and commit (section 31) |
 
 ### Logs, metrics and alerts
 
 The api and the worker write one log line per request and per job. Fields that look like a secret are replaced by "[redacted]": passwords, tokens, keys, sign-in codes, login headers and cookies. Request contents are never logged.
 
 The api serves numbers at `/metrics`: requests by path and result, and for each queue the jobs waiting, running, delayed, failed and finished. The page needs the secret in `METRICS_TOKEN`. Without that setting it answers "not found".
+
+Admins can also look from the api, without a server login (section 31): the jobs of each queue with their errors, the count per queue and state, the audit log of every user, where turns spent their time over the last days, and the settings in use. A failed job can be run once more or removed there, with a reason that goes to the audit log.
 
 An alert is an error line in the log, marked as an alert. If `ALERT_WEBHOOK_URL` is set, the same text is also posted there, for example to a Slack channel. The backend raises an alert in three cases: a job failed after all its tries, the backup failed, or the health check found a problem. The vm-manager writes its alerts only to its own log.
 
@@ -2438,6 +2658,8 @@ These are the rules that must never be broken. Each one closes a way in that wou
 | Approvals before risky actions | Sending to others, deleting and paying need the user's yes. One approval fits one exact action, once |
 | Every user query is filtered by user id | One user can never read another user's rows |
 | Every action is in the activity log | The user can see what the agent did, and when |
+| Every admin action on an account needs a reason and is logged | The admin's id and the reason are kept. An admin cannot demote, suspend or delete their own account, and must take another admin's role away before suspending or deleting them |
+| A suspended account can do nothing | Its signed-in calls, its container's tool and git calls and its turns are all refused, and its container is not woken |
 | Containers are locked down | gVisor, hard limits, read-only system files, no privileges, no internet of their own |
 | No secrets in logs | A secret written to a log would sit there in plain text |
 
@@ -2473,7 +2695,7 @@ This section lists every table of the backend's database, grouped by the module 
 
 | Module | Table | What it holds |
 |---|---|---|
-| auth | `users` | One row per person: email, name, time zone and whether anyone set it, plan, role |
+| auth | `users` | One row per person: email, name, time zone and whether anyone set it, plan, role, and whether an admin suspended the account (and since when) |
 | auth | `link_codes` | One-time codes to link a chat app, stored as hashes, with an expiry |
 | auth | `channel_links` | Which chat belongs to which user |
 | auth | `waitlist_entries` | People waiting for access, with request details for abuse checks |
@@ -2489,7 +2711,7 @@ This section lists every table of the backend's database, grouped by the module 
 | orchestrator | `memories` | Short facts about the user that every engine gets |
 | orchestrator | `chat_engines` | Which engine last finished a turn in each conversation |
 | orchestrator | `turn_timings` | Where each turn's time went, stage by stage, for 30 days. Never any text (section 9) |
-| integrations | `connections` | A user's connected app accounts and their status |
+| integrations | `connections` | A user's connected app accounts, their status, and when Composio last answered about each |
 | integrations | `composio_auth_configs` | The Composio setups the server made itself, one per app. Not per user |
 | integrations | `user_mcp_servers` | The user's own MCP servers, with the secret encrypted |
 | integrations | `composio_triggers` | Made for app triggers. No code reads or writes it today |
@@ -2506,7 +2728,7 @@ This section lists every table of the backend's database, grouped by the module 
 | billing | `coupons` | Coupon campaigns: credits, limits, expiry |
 | billing | `coupon_codes` | The codes of a campaign, stored as hashes |
 | billing | `coupon_redemptions` | Who redeemed which campaign, once per user |
-| admin | `audit_log` | The activity log: who did what, when, and credits charged |
+| admin | `audit_log` | The activity log: who did what, when, and credits charged. An admin's action also keeps the admin's id and reason |
 
 No table holds a "balance" number: the balance is the sum of what is left in a user's grants. The vm-manager has its own small database with three tables: `sandboxes`, `awake_periods` and `browser_usage`. The backend never reads it directly. Example: one Telegram message adds one row in `events` and two rows in `messages`: the message and the answer. The first message of a chat also adds one row in `conversations` and one in `chat_epochs`. It also adds entries in `audit_log`, and one row each in `usage_periods` and `credit_ledger` for the charge.
 
@@ -2523,7 +2745,7 @@ This section says what the web app can do through the api, group by group. Almos
 | Apps | See the app list with status and plan, and which apps can be connected on this server. Start connecting an app. Disconnect one |
 | MCP servers | List the user's own MCP servers. Add one (Max plan), rename it, switch it on or off, remove it |
 | Own AI keys | See which providers have a key and which one is in use, never the key itself. Set, replace or remove one |
-| Automations | List reminders and automations. Pause, resume or delete one |
+| Automations | List reminders and automations, with why one is paused (by the user, after failures, out of credits, or by Textcrew support). Pause, resume or delete one |
 | Pull-request review | List the repositories with review on. Turn review on or off for one |
 | Agent settings and the Claude sign-in | See the container's state and which engine runs. Choose the engine, and Claude Code's model and thinking effort. Start, finish or undo the Claude sign-in |
 | The crew | See the four members, which are available, and the state of Scout's browser |
@@ -2534,9 +2756,9 @@ This section says what the web app can do through the api, group by group. Almos
 | Coupons | Redeem a coupon code |
 | Activity | Read the log of what the agent did |
 | Waitlist | Join the waitlist. The answer is always the same, so nobody can test an email |
-| Admin | Manage coupons, adjust a user's credits, see free-credit totals, and handle the waitlist |
+| Admin | Manage coupons, adjust a user's credits, see free-credit totals, and handle the waitlist. For one user: see their app connections, linked chats and automations; disconnect or recheck an app, unlink a chat, pause, resume or delete an automation, each with a reason. See each app in numbers. See one user's agent and container, stop or wake it, reset its settings, and list or cancel the user's approvals and crew jobs. See the jobs in each queue, run a failed one once more or remove a failed or finished one, with a reason. Read the audit log of every user. See where turns spend their time. Read the settings in use (secrets only as set or not) and check that each service answers. Change a user's role, suspend an account or lift the suspension, delete an account, and sign a user out everywhere |
 
-The live stream pushes new messages, message status, conversation changes, approvals, the agent's state, progress lines and credit changes. Long lists come in pages of 30 by default, and 100 at most. Every error has the same shape: a code, a message, and sometimes details. Some addresses are not for the web app. Webhooks are for outside services. `/oauth/callback` is the way back from an app's sign-in, for a provider to send the browser to. `/mcp` and `/git` are for containers only. `/metrics` is for monitoring. Admins also have a page that shows the job queues.
+The live stream pushes new messages, message status, conversation changes, approvals, the agent's state, progress lines and credit changes. Long lists come in pages of 30 by default, and 100 at most. Every error has the same shape: a code, a message, and sometimes details. While an admin has suspended an account, every signed-in call of that user answers 403 with the code `account_suspended`. Some addresses are not for the web app. Webhooks are for outside services. `/oauth/callback` is the way back from an app's sign-in, for a provider to send the browser to. `/mcp` and `/git` are for containers only. `/metrics` is for monitoring. Admins also have a page that shows the job queues.
 
 Example: linking Telegram takes three steps. The app asks for a link code and shows it. The user sends the code to the bot. The app reads the channel list again and shows the new chat.
 
@@ -2579,6 +2801,7 @@ This section lists the backend's settings by group. They are environment setting
 | Backups and alerts | `BACKUP_UPLOAD_CMD` | The command that copies a backup off the server | Backups stay on the same disk as the data |
 | | `ALERT_WEBHOOK_URL` | Where alerts are posted | Alerts are only in the logs |
 | | `METRICS_TOKEN` | The secret for `/metrics` | `/metrics` answers "not found" |
+| | `GIT_COMMIT` | The deployed commit, shown on the admin health page. `deploy.sh` sets it | The health page shows no commit |
 
 The vm-manager has its own settings. The main ones are `AWAKE_CAP`, `IDLE_TIMEOUT` (3 minutes) and `DELIVER_TIMEOUT` (15 minutes). `AWAKE_CAP` is 20 if not set. The compose file's default is 15. The AWS test server sets 3. A new value of `AGENT_IMAGE_VERSION` makes each container again at its next wake.
 
@@ -2676,11 +2899,15 @@ These were found by reading the code while this report was written. Each is desc
 - Backups stay on the same disk as the data until an outside store is set.
 - With no alert channel set, failures are only in the logs.
 - A saved memory cannot be checked against what the user really said. A planted "fact" stays until the user sees and deletes it.
+- **The account tools have not run against the real Clerk.** Setting the role, deleting a user in Clerk and ending sessions were checked with a stand-in for Clerk only (section 31).
+- **A live stream that is open when an account is suspended stays open.** New calls are refused, but the web app's open stream keeps receiving that user's own updates until it reconnects.
+- **Signing a user out takes up to a minute.** A session token the browser already holds is checked without asking Clerk, so it works until it expires.
+- **A suspension does not stop a turn that is running.** The turn finishes; its calls to the platform's tools are refused, so it can do little. The container stops at the idle check after it.
 - Any LiteLLM key can list the names of the models in LiteLLM and the provider model each one calls. With own keys, that shows that some user uses a given model, under a name that does not say who. The keys themselves are never shown.
 
 ## 44. What has run for real
 
-The backend has 662 automated tests. They use a real database and real queues, and stand-ins for outside services. "Run for real" below means it ran on the AWS test server against the real outside service.
+The backend has 739 automated tests. They use a real database and real queues, and stand-ins for outside services. "Run for real" below means it ran on the AWS test server against the real outside service.
 
 | Area | Run for real |
 |---|---|

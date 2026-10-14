@@ -1,5 +1,5 @@
 import { CronExpressionParser } from 'cron-parser';
-import { and, count, desc, eq, isNull } from 'drizzle-orm';
+import { and, count, desc, eq, isNull, or } from 'drizzle-orm';
 import { db } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import { logger } from '../../shared/logger.ts';
@@ -308,6 +308,55 @@ export async function resumeAfterCredits(userId: string): Promise<void> {
       ),
     );
   for (const a of rows) await setEnabled(userId, a.id, true);
+}
+
+/**
+ * An admin suspended the account: every automation that is on, or paused for lack of credits, is
+ * paused with the reason `suspended` (no timer; app events for it are ignored). Ones the user paused,
+ * or that were paused after failures, stay as they are. Safe to run again. Returns how many
+ * changed.
+ */
+export async function pauseAllForAdmin(userId: string): Promise<number> {
+  const rows = await db()
+    .select()
+    .from(automations)
+    .where(
+      and(
+        eq(automations.userId, userId),
+        isNull(automations.completedAt),
+        or(eq(automations.enabled, true), eq(automations.pausedReason, 'out_of_credits')),
+      ),
+    );
+  for (const a of rows) await setEnabled(userId, a.id, false, 'suspended');
+  return rows.length;
+}
+
+/**
+ * The suspension was lifted: the automations it paused come back. With credits they are switched
+ * on; at zero they wait, paused for lack of credits, and come back with the next credits like any
+ * other. Safe to run again.
+ */
+export async function resumeAfterAdmin(
+  userId: string,
+  hasCredits: boolean,
+): Promise<{ resumed: number; waitingForCredits: number }> {
+  const rows = await db()
+    .select()
+    .from(automations)
+    .where(
+      and(
+        eq(automations.userId, userId),
+        eq(automations.pausedReason, 'suspended'),
+        isNull(automations.completedAt),
+      ),
+    );
+  for (const a of rows) {
+    if (hasCredits) await setEnabled(userId, a.id, true);
+    else await setEnabled(userId, a.id, false, 'out_of_credits');
+  }
+  return hasCredits
+    ? { resumed: rows.length, waitingForCredits: 0 }
+    : { resumed: 0, waitingForCredits: rows.length };
 }
 
 export async function findByTriggerRef(triggerRef: string): Promise<Automation | undefined> {

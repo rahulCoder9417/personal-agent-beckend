@@ -130,6 +130,46 @@ export async function setPlan(userId: string, plan: PlanId, tx: Tx = db()): Prom
   return rows.length > 0;
 }
 
+/**
+ * Sets the role on our row. The admin tool sets Clerk's copy first (clerk-admin.ts); Clerk's next
+ * `user.updated` webhook then carries the same role. True: it changed.
+ */
+export async function setRole(userId: string, role: User['role'], tx: Tx = db()): Promise<boolean> {
+  const rows = await tx
+    .update(users)
+    .set({ role })
+    .where(and(eq(users.id, userId), ne(users.role, role)))
+    .returning({ id: users.id });
+  return rows.length > 0;
+}
+
+export type AccountStatus = User['status'];
+
+/**
+ * Suspends an account or makes it active again (an admin's decision). `changed` is false when it
+ * already had that status. Undefined: no such account, or it is deleted.
+ */
+export async function setAccountStatus(
+  userId: string,
+  status: AccountStatus,
+  tx: Tx = db(),
+): Promise<{ user: User; changed: boolean } | undefined> {
+  const [row] = await tx
+    .update(users)
+    .set({ status, suspendedAt: status === 'suspended' ? new Date() : null })
+    .where(and(eq(users.id, userId), isNull(users.deletedAt), ne(users.status, status)))
+    .returning();
+  if (row) return { user: row, changed: true };
+  const user = await getActiveUser(userId, tx);
+  return user ? { user, changed: false } : undefined;
+}
+
+/** An admin suspended this account: no signed-in call, no answer, no wake until it is lifted. */
+export async function isSuspended(userId: string): Promise<boolean> {
+  const [row] = await db().select({ status: users.status }).from(users).where(eq(users.id, userId));
+  return row?.status === 'suspended';
+}
+
 export async function flagUser(userId: string): Promise<void> {
   await db().update(users).set({ flagged: true }).where(eq(users.id, userId));
 }

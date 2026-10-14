@@ -1,5 +1,6 @@
 import type { Job } from 'bullmq';
 import { config, isChannelEnabled } from '../../shared/config.ts';
+import { redis } from '../../shared/redis.ts';
 import { badRequest, channelDisabled, outOfCredits } from '../../shared/errors.ts';
 import { enforce, hit } from '../../shared/rate-limit.ts';
 import { audit } from '../admin/audit.ts';
@@ -10,6 +11,7 @@ import {
   normalizeLinkCode,
   touchInbound,
 } from '../auth/links.ts';
+import { isSuspended } from '../auth/users.ts';
 import { getEvent, ingestEvent } from '../events/intake.ts';
 import { getUserAttachments } from '../channels/files.ts';
 import { acknowledgeButton, parseInbound } from '../channels/inbound.ts';
@@ -81,6 +83,10 @@ export async function handleProcessMessage(job: Job): Promise<unknown> {
   await touchInbound(link.id);
   const userId = link.userId;
   const sessionKey = sessionKeyFor(msg.channel, msg.externalChatId);
+  if (await isSuspended(userId)) {
+    await holdWhileSuspended(msg, userId, sessionKey, eventId);
+    return null;
+  }
 
   if (msg.buttonReply) {
     await acknowledgeButton(msg.channel, msg.buttonReply.callbackId);
@@ -128,6 +134,46 @@ export async function handleProcessMessage(job: Job): Promise<unknown> {
     conversationId: saved.conversationId,
   });
   return null;
+}
+
+/** What a chat of a suspended account is told, at most once a day. */
+export const SUSPENDED_TEXT =
+  "Your Textcrew account is suspended, so I can't answer messages right now.";
+/** One notice a day per chat. */
+export const SUSPENDED_NOTICE_SECONDS = 24 * 60 * 60;
+
+/**
+ * An admin suspended the account. The message is saved, as it came (no file is downloaded, no
+ * voice note is transcribed), and marked handled: it is never answered, also not after the
+ * suspension is lifted. A tapped button is only acknowledged. Nothing else runs: no link code, no
+ * `/new`, no coupon, no approval. The chat gets one short notice, at most once a day; a job that
+ * runs again sends none.
+ */
+async function holdWhileSuspended(
+  msg: InboundMessage,
+  userId: string,
+  sessionKey: string,
+  eventId: string,
+): Promise<void> {
+  if (msg.buttonReply) {
+    await acknowledgeButton(msg.channel, msg.buttonReply.callbackId);
+  } else {
+    const saved = await saveInbound({
+      userId,
+      channel: msg.channel,
+      text: msg.text,
+      media: msg.media,
+      eventId,
+      sessionKey,
+      externalId: msg.externalMessageId,
+    });
+    if (saved.status === 'queued') await setMessageStatus(saved.id, 'delivered');
+  }
+  const first = await redis()
+    .set(`suspended-notice:${userId}:${sessionKey}`, eventId, 'EX', SUSPENDED_NOTICE_SECONDS, 'NX')
+    .catch(() => null);
+  if (first === 'OK')
+    await queueRawOutbound(msg.channel, msg.externalChatId, SUSPENDED_TEXT, `suspended-${eventId}`);
 }
 
 const TOO_MANY_LINK_TRIES = 'Too many attempts. Please try again in an hour.';

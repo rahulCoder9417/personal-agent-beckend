@@ -169,6 +169,11 @@ async function runAutomationTurn(
     inAutomationsChat: true,
     metadata: { automationId: a.id, title: a.title, ...metadata },
   });
+  // Suspended by an admin: the run did nothing. Paused like the rest, back on unsuspend.
+  if (outcome === 'suspended') {
+    await setEnabled(a.userId, a.id, false, 'suspended');
+    return outcome;
+  }
   await copyToChat(a, await turnReply(a.userId, deliveryId));
   if (outcome === 'out_of_credits') {
     await setEnabled(a.userId, a.id, false, 'out_of_credits');

@@ -57,12 +57,10 @@ import {
   listPrReviews,
   toApiPrReview,
 } from '../src/modules/automations/pr-review.ts';
-import { adjustCredits } from '../src/modules/billing/admin.ts';
-import { afterCreditsAdded, afterCreditsRemoved } from '../src/modules/billing/enforce.ts';
-import { firePlanChanged } from '../src/modules/billing/hooks.ts';
+import { adjustCredits, setPlanByHand } from '../src/modules/billing/admin.ts';
 import { getBalance } from '../src/modules/billing/index.ts';
 import { getKeyRow } from '../src/modules/billing/litellm.ts';
-import { creditExpiry, PLAN_IDS, PLANS, type PlanId } from '../src/modules/billing/plans.ts';
+import { creditExpiry, PLAN_IDS, type PlanId } from '../src/modules/billing/plans.ts';
 import { getCurrentSubscription } from '../src/modules/billing/subscriptions.ts';
 import {
   getConversation,
@@ -427,20 +425,13 @@ export async function devUser(argv: string[]): Promise<string[]> {
       const plan = need(flags, 'plan') as PlanId;
       if (!PLAN_IDS.includes(plan))
         throw new UsageError(`--plan must be one of ${PLAN_IDS.join(', ')}`);
-      const changed = await setPlan(user.id, plan);
-      // Free comes from a subscription that ended; a paid plan from a new period or a change.
-      if (plan === 'free') await afterCreditsRemoved(user.id);
-      else await afterCreditsAdded(user.id);
-      if (changed) {
-        await firePlanChanged(user.id);
-        await audit({
-          userId: user.id,
-          actor: 'admin',
-          action: 'plan_changed',
-          summary: `Plan set to ${PLANS[plan].name} by hand (no payment)`,
-          details: { from: user.plan, to: plan, adminId: ADMIN_ID },
-        });
-      }
+      // The same function as the admin api's PATCH /v1/admin/users/{id}.
+      const { changed } = await setPlanByHand({
+        userId: user.id,
+        from: user.plan,
+        plan,
+        adminId: ADMIN_ID,
+      });
       const [key, sub, balance] = await Promise.all([
         getKeyRow(user.id),
         getCurrentSubscription(user.id),

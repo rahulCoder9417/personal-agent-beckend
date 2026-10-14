@@ -34,6 +34,7 @@ No secret values are written here. Secrets live in two files on the server (`com
 | **Server** | `m7i-flex.large`: 2 vCPU, 7.6 GB RAM, 30 GB disk, Ubuntu 24.04 |
 | **Address** | Fixed IP `3.111.132.222`, reached as `https://api.textcrew.in` since 2026-10-08. Before that it was `https://3-111-132-222.sslip.io`, which no longer answers |
 | **What runs** | The whole platform in Docker Compose: api, worker, vm-manager, Postgres, Redis, LiteLLM, Caddy, the egress proxy, and one sandboxed container per user |
+| **Databases** | Today in the `postgres` container on the server. The code on `main` since 14 October 2026 expects them on Neon (managed Postgres, in Ohio); the move is a script still to be run (section 8, "Moving the databases to Neon") |
 | **Code source** | GitHub `main` of both repos, pulled with read-only deploy keys |
 | **Deploy** | One command on the server: `/opt/textcrew/deploy.sh` |
 | **Paid from** | AWS credits (about $82 left on 2026-09-30) |
@@ -109,7 +110,7 @@ aws ec2 associate-address --instance-id $IID --allocation-id <allocation id>
 - **`sslip.io` host name:** free and needs no DNS setup. `3-111-132-222.sslip.io` simply resolves to `3.111.132.222`, which is enough for a real Let's Encrypt certificate. You own `textcrew.in` and can switch to it later.
 - **Shutdown behaviour:** left at the AWS default, **stop**. So shutting the server down from inside stops it and keeps the disk. It does not delete anything.
 
-**Not created:** no IAM users or access keys, no load balancer, no managed database (Postgres runs in Docker on the server), no S3 bucket, no DNS records, no CloudWatch alarms.
+**Not created:** no IAM users or access keys, no load balancer, no managed database in AWS (Postgres runs in Docker on the server until it moves to Neon, which is outside AWS: section 8), no S3 bucket, no DNS records, no CloudWatch alarms.
 
 ---
 
@@ -171,6 +172,8 @@ Everything is under `/opt/textcrew`, owned by the `ubuntu` user.
 
 **What `compose.env` sets** (names only): `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `LITELLM_MASTER_KEY`, `VM_INTERNAL_SECRET`, `API_DOMAIN`, `API_UPSTREAM`, `AWAKE_CAP` (3), `PLATFORM_MCP_URL`, `BACKUP_HOST_DIR`, `SANDBOX_RUNTIME` (`runsc`).
 
+**Added for the move to Neon** (section 8): `BACKEND_DATABASE_URL`, `VM_MANAGER_DATABASE_URL` and `LITELLM_DATABASE_URL`, the three Neon addresses. Their values are in `.env.deploy` on the laptop. With them set, the api, worker, vm-manager and LiteLLM use Neon, and `beckend/.env`'s own `DATABASE_URL` is no longer read. The `POSTGRES_*` lines stay: they are what the move script uses to read the old copy.
+
 **What `beckend/.env` sets:** every variable from `.env.example`, checked on 2026-10-01 (names only):
 
 - **Set:** the database and Redis URLs, `PUBLIC_API_URL` and `WEB_APP_URL` (both `https://3-111-132-222.sslip.io`), the encryption key, `CLERK_SECRET_KEY`, the vm-manager URL and shared secret, the LiteLLM URL, master key and model names, the Telegram bot token, bot name and webhook secret, `COMPOSIO_API_KEY` and `COMPOSIO_AUTH_CONFIGS`, `METRICS_TOKEN`, `NODE_ENV=production`, `TRUST_PROXY=true`, `AI_ACCESS_MODE=platform`.
@@ -180,7 +183,7 @@ Everything is under `/opt/textcrew`, owned by the `ubuntu` user.
 
 **SSH on the server** (`~/.ssh/`): two deploy keys, `deploy_beckend` and `deploy_vmm`, and a config with two host aliases, `gh-beckend` and `gh-vmm`, that point at `github.com` with the matching key.
 
-**Docker volumes** (the data that must survive): `personal-agent_pgdata` (Postgres), `personal-agent_redisdata` (Redis), `personal-agent_caddydata` (the TLS certificate), and one `pa-data-<user id>` volume per user (the agent's memory, workspace and Claude sign-in).
+**Docker volumes** (the data that must survive): `personal-agent_pgdata` (Postgres; after the move to Neon it is kept, untouched, as the way back), `personal-agent_redisdata` (Redis), `personal-agent_caddydata` (the TLS certificate), and one `pa-data-<user id>` volume per user (the agent's memory, workspace and Claude sign-in).
 
 ---
 
@@ -194,7 +197,7 @@ Started with `./dc --profile app up -d`. All long-running services restart on th
 | `api` | built from `beckend/infra/Dockerfile` | REST, webhooks, the Platform MCP (`/mcp`) and the git gateway (`/git`) |
 | `worker` | same image as the api | Runs the BullMQ jobs: messages, replies, schedules, backups |
 | `vm-manager` | built from `vm-manager/` | Creates, wakes and stops the user containers. The only service with the Docker socket |
-| `postgres` | `postgres:16` | Both databases (backend and vm-manager) |
+| `postgres` | `postgres:16` | The three databases (backend, vm-manager, LiteLLM). After the move to Neon it is stopped and no longer started: it is behind the `localdb` profile, which only the laptop uses |
 | `redis` | `redis:7` | Queues, locks, rate limits |
 | `litellm` | `ghcr.io/berriai/litellm:main-stable` | Model gateway and per-user keys |
 | `egress-proxy` | `ubuntu/squid` | The only way out of user containers |
@@ -225,13 +228,39 @@ Started with `./dc --profile app up -d`. All long-running services restart on th
    1. fetch both repos and hard-reset them to `origin/main`
    2. build the images (cached layers are reused)
    3. record the new agent image id, so user containers are re-created from it on their next wake
-   4. run the database migrations
+   4. check that `compose.env` has the three Neon database addresses (it stops here if not), then run the backend's database migrations on Neon
    5. `up -d`, and recreate Caddy, LiteLLM or the egress proxy if their config file changed
    6. check `/healthz` and that every service is running; exit with an error otherwise
 
 **To ship a change:** push to `main`, then run `ssh -i ~/.ssh/textcrew_aws ubuntu@3.111.132.222 /opt/textcrew/deploy.sh`. A push alone does not update the server; there is no GitHub Actions workflow.
 
 A deploy restarts the api and worker for a few seconds. A Telegram message that arrives in that window is saved and retried.
+
+### Moving the databases to Neon
+
+Decided on 14 October 2026: the three databases leave the server's `postgres` container for Neon, a managed Postgres. The Neon project is in Ohio (`us-east-2`), not Mumbai, and you chose that knowing each database query from the server then takes about 260 ms instead of under 1 ms.
+
+| On the server today | On Neon |
+|---|---|
+| `agent` (the backend) | `agent` |
+| `vm_manager` | `vm_manager` |
+| `litellm` | `litellm` |
+
+Neon's own `neondb` database is not used by the backend: the landing page's waitlist already lives there, with its own migration records in the same place the backend keeps its own. Sharing it would make the backend skip some of its migrations.
+
+All three services connect to Neon's **direct** address (the host name without `-pooler`), not the pooled one. LiteLLM sets up its tables at start in a way that does not work through Neon's pooler, the vm-manager's migrations hold a lock for the whole connection, and the nightly backup's `pg_dump` also needs the direct address. The backend works through the pooler too (tested), but one rule for all three is simpler, and the server keeps few long-lived connections, well under Neon's limit of 901.
+
+**What runs the move:** `beckend/infra/deploy/move-to-neon.sh`. It checks everything first and changes nothing until every check passes: the three addresses are in `compose.env`, the old copy answers, and each Neon database is empty or missing (a missing one is created). Then it stops the api, worker, vm-manager and LiteLLM, copies each database with the Postgres 18 tools, compares the number of rows in every table on both sides, stops the old `postgres` (its volume is kept) and runs `deploy.sh`, which starts everything on Neon. It refuses to copy into a Neon database that already has tables, unless it is run with `--force`. The copies and the row counts stay in `backups/neon-move-<time>/`.
+
+**Steps, on the server, from `/opt/textcrew`:**
+
+1. `./deploy.sh`, before touching `compose.env`. It pulls the new code, then stops on purpose with "compose.env has no ...". Nothing is rebuilt or restarted; the services keep running on the old copy. Do not add the lines first: a deploy with them in place would start everything on the empty Neon databases.
+2. Keep a copy of `compose.env`, then add the three lines from `.env.deploy` (`BACKEND_DATABASE_URL`, `VM_MANAGER_DATABASE_URL`, `LITELLM_DATABASE_URL`).
+3. `beckend/infra/deploy/move-to-neon.sh --dry-run`. It prints each database, its table count here, and whether it is missing or empty on Neon. Nothing is changed.
+4. `beckend/infra/deploy/move-to-neon.sh`. Expect a few minutes: the bot does not answer while it runs. It ends with the deploy's health check.
+5. Send the bot a message, and open the web app.
+
+**To go back** (if the move fails part way, or something is wrong after it): remove the three lines from `compose.env`, then `./dc --profile localdb --profile app up -d`. The old copy is exactly as it was when the services stopped. Anything written on Neon after the move would be lost by going back.
 
 ---
 
@@ -360,7 +389,8 @@ aws ec2 authorize-security-group-ingress --group-id sg-0a41006d88aefe928 --proto
 **Not proven yet**
 
 - **The git gateway against real GitHub:** a real clone, a branch push, and the refusal of a push to the default branch. It also depends on Composio returning the GitHub token to the api, which has not been confirmed.
-- **The nightly backup** after the `pg_dump` fix, and a restore from it.
+- **The nightly backup** after the `pg_dump` fix, and a restore from it. Since 14 October the image has `pg_dump` 18, to match Neon. Neon also keeps its own history of the databases, so the nightly copy is a second, independent one.
+- **The move to Neon** (section 8) is written and was tried from the laptop into scratch Neon databases, but has not been run on the server.
 - **RAM with several users awake.** One user's container with the browser used 625 to 661 MiB of its 2 GiB limit after a turn (2026-10-05); the peak with a heavy page open was not measured.
 - **Composio's webhook reaching the server.** The secret is set (2026-10-05); no delivery from Composio has been seen yet, so pull-request review's trigger is unproven.
 - **Clerk's webhook reaching the server.** The secret is set (2026-10-05); it is used once the web app has an address and someone signs in there.

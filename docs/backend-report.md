@@ -122,7 +122,7 @@ There are two because some work is slow. One agent turn can take up to 15 minute
 
 | Service | What it is for |
 |---|---|
-| Postgres | The database. Keeps what must last: users, messages, events, credits. |
+| Postgres | The database. Keeps what must last: users, messages, events, credits. On the laptop it is a container. On the server it moves to Neon, a managed Postgres in Ohio (section 40). |
 | Redis | A fast store in memory. Holds the job queues, locks, counters and live updates. |
 | vm-manager | Our Go service. The only one that may create, wake or delete containers. |
 | LiteLLM | A gateway to the AI models. Gives each user a key with a spending limit. |
@@ -2672,7 +2672,7 @@ An alert is an error line in the log, marked as an alert. If `ALERT_WEBHOOK_URL`
 
 The backup job runs every night at 02:00 on the worker's clock.
 
-1. It dumps the whole backend database into one file, in a folder named by the date.
+1. It dumps the whole backend database into one file, in a folder named by the date. The dump tool must be at least as new as the database; the image has version 18, the same as Neon. It uses the database address's encryption settings, and the password is passed in a way that never shows in the list of running programs.
 2. It asks the vm-manager for all containers and has each user's folder packed into an archive file.
 3. If `BACKUP_UPLOAD_CMD` is set, it runs that command to copy the backup off the server.
 4. It deletes dump folders older than `BACKUP_KEEP_DAYS`, which is 7 by default.
@@ -2760,6 +2760,16 @@ Example: Composio is down while the agent tries to send an email the user approv
 ## 40. What the database holds
 
 This section lists every table of the backend's database, grouped by the module that owns it. A module reads another module's tables only through that module's own code.
+
+### Where the database lives
+
+There are three databases: the backend's, the vm-manager's and LiteLLM's. Each program has its own and none reads another's.
+
+- **On the laptop** they are in one `postgres` container, which starts only when Docker Compose is given the `localdb` profile.
+- **On the server** they move to Neon, a managed Postgres, decided on 14 October 2026. The Neon project is in Ohio while the server is in Mumbai, so each query takes about 260 ms there and back. You chose Ohio knowing this. Opening a new connection takes longer, about 1.5 to 2.5 seconds, so the backend keeps its idle connections open for 5 minutes instead of 10 seconds. The move itself is a script still to be run on the server (`aws-setup.md`, section 8).
+- The server's addresses come from three settings in `compose.env`: `BACKEND_DATABASE_URL`, `VM_MANAGER_DATABASE_URL` and `LITELLM_DATABASE_URL`. All three use Neon's direct address, not its pooled one: LiteLLM's table set-up and the vm-manager's migration lock do not work through the pooler, and the nightly copy needs the direct address too.
+- The backend's database on Neon is called `agent`, like today. Neon's ready-made `neondb` belongs to the landing page's waitlist.
+- The connection is encrypted and the server's certificate is checked. The admin settings page says only whether the database address is set, never the address itself.
 
 | Module | Table | What it holds |
 |---|---|---|

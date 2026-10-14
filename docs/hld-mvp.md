@@ -121,7 +121,7 @@ Picture: GoDraw, page 1, "The big picture".
 | Caddy | The only door open to the internet. Handles HTTPS |
 | api | Receives requests and webhooks. Also serves the agent's tools |
 | worker | Runs the jobs |
-| Postgres | The database: users, messages, credits, the activity log |
+| Postgres | The database: users, messages, credits, the activity log. Today a container on the server. Decided on 14 October 2026: it moves to Neon, a managed Postgres in Ohio, together with the vm-manager's and LiteLLM's databases. Each query then takes about 260 ms from the Mumbai server; you chose Ohio knowing that. The move is a script still to be run (`aws-setup.md`, section 8) |
 | Redis | The job queues, locks and rate limits |
 | vm-manager | Controls the containers |
 | LiteLLM | The gateway to AI models for Textcrew AI |
@@ -406,6 +406,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 
 ### Built, never run for real
 
+- The databases on Neon (14 October). The backend, the vm-manager and LiteLLM were each run against scratch Neon databases from the laptop, and the move script copied a local database into Neon with matching row counts. The server still uses its own `postgres` until the move script is run there.
 - Textcrew AI on the Hermes engine. There is no working model key.
 - The user's own API key. Every model call goes to the user's provider with their key, through LiteLLM on our server. There is no key with balance to test it.
 - Payments through Polar.

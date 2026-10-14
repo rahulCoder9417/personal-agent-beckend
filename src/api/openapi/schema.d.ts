@@ -1222,6 +1222,188 @@ export interface paths {
         patch: operations["adminUpdateWaitlistEntry"];
         trace?: never;
     };
+    "/v1/admin/users/{userId}/agent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One user's agent and container, as support sees it (admin)
+         * @description The container as the vm-manager reports it, the engine, whether a Claude plan is connected
+         *     (never its sign-in), Claude Code's model and effort, Scout's browser, what pays for the AI,
+         *     and the usage charged since midnight UTC. When the vm-manager can't be asked, the rest is
+         *     still answered and `container.reachable` is false.
+         */
+        get: operations["adminGetUserAgent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/users/{userId}/container/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop one user's container now (admin)
+         * @description A polite stop by default, the way the idle stop does it: Hermes saves to the user's folder
+         *     first. The vm-manager refuses it (409) while a turn runs, a message is being delivered or a
+         *     Claude sign-in waits for its code.
+         *
+         *     **`force: true` is dangerous.** It ends the container at once, in the middle of a turn if
+         *     there is one, without letting Hermes save. That turn fails as our fault: the user is told
+         *     "something went wrong on our side" and its credits are given back. Use it only for a turn
+         *     that is stuck.
+         */
+        post: operations["adminStopContainer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/users/{userId}/container/wake": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Wake one user's container now (admin)
+         * @description The same wake a turn makes: the container is made first if the user has none, then started
+         *     and checked for ready; afterwards the engine and the browser switch are set again if they
+         *     differ. It needs the user to have credits, because awake time is charged to them (1 credit
+         *     per 10 minutes; the idle stop puts it back to sleep after 3 quiet minutes).
+         */
+        post: operations["adminWakeContainer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/users/{userId}/agent/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Put chosen agent settings back to their defaults (admin)
+         * @description `engine`: the chosen engine goes back to Hermes (a Claude plan stays connected; the user
+         *     can choose Claude Code again). `model` and `effort`: Claude Code's model and thinking effort
+         *     go back to Default, Claude Code's own choice. `browser`: Scout's browser switch is set again
+         *     from the user's plan and the deployment, as a plan change does. The same functions the user's
+         *     own settings use make each change, so the vm-manager is told the same way.
+         */
+        post: operations["adminResetAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/users/{userId}/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One user's approvals, newest first (admin)
+         * @description Every state unless `status` is given. Only the action's name, its app and the short summary
+         *     the user was shown: never the action's inputs.
+         */
+        get: operations["adminListUserApprovals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/approvals/{approvalId}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a waiting approval (admin)
+         * @description Ends it the way the 24-hour expiry does: it becomes `expired`, the agent is not woken, and
+         *     nothing can run with it. A late tap on its button gets "That approval was already answered
+         *     or has expired". Only a waiting approval can be cancelled (409 otherwise).
+         */
+        post: operations["adminCancelApproval"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/users/{userId}/crew-jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One user's crew jobs, newest first (admin)
+         * @description Without the brief's text and without the report. `withReport=1` adds each job's report.
+         */
+        get: operations["adminListUserCrewJobs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/crew-jobs/{crewJobId}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a crew job that has not started (admin)
+         * @description Only a `queued` job: it is marked `failed` with the error "Cancelled by Textcrew support",
+         *     it never runs, and the user is told in the job's chat. A running job can't be stopped
+         *     midway (409): the crew job has no stop signal yet. A finished one is 409 too.
+         */
+        post: operations["adminCancelCrewJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/webhooks/clerk": {
         parameters: {
             query?: never;
@@ -2175,6 +2357,150 @@ export interface components {
                 /** Format: date-time */
                 lastAt: string;
             }[];
+        };
+        /**
+         * @description The user's container as the vm-manager reports it. Never its token or its Bridge secret.
+         *     The vm-manager does not report when the container woke, so there is no "awake since".
+         */
+        AdminContainer: {
+            /** @description False when the vm-manager could not be asked. The other fields are then null, and `state` is `unknown`. */
+            reachable: boolean;
+            /** @enum {string} */
+            state: "none" | "stopped" | "waking" | "awake" | "busy" | "broken" | "unknown";
+            /** @description In the middle of a turn. */
+            busy: boolean | null;
+            /**
+             * Format: date-time
+             * @description The last delivered message, tool call or git call.
+             */
+            lastActiveAt: string | null;
+            /** @description The agent image the container was made from. */
+            imageVersion: string | null;
+            /** @description Memory in use, while it runs. */
+            memoryBytes: number | null;
+            /**
+             * @description The engine the vm-manager has on record for the container.
+             * @enum {string|null}
+             */
+            engine: "hermes" | "claude_code" | null;
+            /** @description Claude Code has its sign-in in the user's folder, as the vm-manager last saw it. Never the sign-in itself. */
+            claudeSignedIn: boolean | null;
+            /** @description Scout's browser as the vm-manager has it on record (a running container gets a change at its next wake). */
+            browserOn: boolean | null;
+        };
+        AdminAgent: {
+            userId: string;
+            plan: components["schemas"]["PlanId"];
+            container: components["schemas"]["AdminContainer"];
+            engine: {
+                chosen: components["schemas"]["AgentRuntime"];
+                /**
+                 * @description What runs (null when the user has no AI source).
+                 * @enum {string|null}
+                 */
+                effective: "hermes" | "claude_code" | null;
+            };
+            claude: {
+                connected: boolean;
+                /** Format: date-time */
+                connectedAt: string | null;
+            };
+            /** @description Null: Default (Claude Code's own choice). */
+            claudeModel: string | null;
+            /**
+             * @description Null: Default (Claude Code's own choice).
+             * @enum {string|null}
+             */
+            claudeEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+            browser: {
+                /** @description This deployment has the browser (`BROWSER_AVAILABLE`). */
+                available: boolean;
+                /** @description The deployment has it and the user's plan includes it. */
+                wanted: boolean;
+                /** @description What the vm-manager has on record (null without a container or when it can't be asked). */
+                onRecord: boolean | null;
+            };
+            ai: {
+                /**
+                 * @description What pays for the AI now (`platform` is Textcrew AI, paid in credits).
+                 * @enum {string}
+                 */
+                access: "claude_plan" | "own_key" | "platform" | "none";
+                preference: components["schemas"]["AiPreference"];
+                /**
+                 * @description The server's `AI_ACCESS_MODE`.
+                 * @enum {string}
+                 */
+                serverMode: "platform" | "own_only";
+                /** @description The providers the user saved a key for. Never the key. */
+                ownKeyProviders: components["schemas"]["ByokProvider"][];
+            };
+            /**
+             * @description Usage charged since midnight UTC, from the 5-minute usage syncs (the last few minutes
+             *     may not be in it yet).
+             */
+            today: {
+                /** Format: date-time */
+                since: string;
+                awakeSeconds: number;
+                browserSeconds: number;
+                /** @description AI, awake time and browser time charged by those syncs. */
+                creditsCharged: number;
+            };
+        };
+        /** @description An approval without the action's inputs. */
+        AdminApproval: {
+            id: string;
+            userId: string;
+            status: components["schemas"]["ApprovalStatus"];
+            /** @description The short summary the user was shown. */
+            summary: string;
+            /** @example gmail */
+            app: string | null;
+            /** @example GMAIL_SEND_EMAIL */
+            action: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            expiresAt: string;
+            /** Format: date-time */
+            decidedAt: string | null;
+            /** @description How it was answered (`web`, `telegram:button`, ...), or `admin` when support cancelled it. */
+            decidedVia: string | null;
+            /** @description An approved action already ran with it. */
+            used: boolean;
+        };
+        /** @description A crew job without the brief's text. `report` only with `withReport=1`. */
+        AdminCrewJob: {
+            id: string;
+            userId: string;
+            /** @enum {string} */
+            member: "patch" | "byte";
+            /** @enum {string} */
+            status: "queued" | "running" | "done" | "failed";
+            /** @enum {string} */
+            source: "app" | "chat";
+            owner: string;
+            repo: string;
+            pullNumber: number | null;
+            branch: string | null;
+            reportTo: {
+                channel: components["schemas"]["ChannelType"];
+                pullRequest: boolean;
+                issue: boolean;
+            };
+            /** @description The one review the brief allowed was posted. */
+            postedOnPullRequest: boolean;
+            hasReport: boolean;
+            /** @description Only with `withReport=1`. */
+            report?: string | null;
+            error: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            startedAt: string | null;
+            /** Format: date-time */
+            finishedAt: string | null;
         };
         /** @enum {string} */
         AgentRuntime: "hermes" | "claude_code";
@@ -4415,6 +4741,330 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    adminGetUserAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAgent"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    adminStopContainer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Why. Kept in the audit log, not shown to the user. */
+                    reason: string;
+                    /**
+                     * @description **Dangerous**: stops it even in the middle of a turn (see above).
+                     * @default false
+                     */
+                    force?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Stopped */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        container: components["schemas"]["AdminContainer"];
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description No such user, or the user has no container */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description A polite stop was refused (a turn runs, a delivery is in flight, or a Claude sign-in waits) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The vm-manager could not be asked */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    adminWakeContainer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Why. Kept in the audit log, not shown to the user. */
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Awake */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        container: components["schemas"]["AdminContainer"];
+                        /** @description It was asleep and was started now. */
+                        wasStopped: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description The user is out of credits */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The server is at its awake limit with nothing to stop, or the vm-manager could not be asked. Try again shortly. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    adminResetAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Why. Kept in the audit log, not shown to the user. */
+                    reason: string;
+                    what: ("engine" | "model" | "effort" | "browser")[];
+                };
+            };
+        };
+        responses: {
+            /** @description Reset; the agent as it is now */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAgent"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description The browser switch could not be sent to the vm-manager (the other settings were reset) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    adminListUserApprovals: {
+        parameters: {
+            query?: {
+                status?: components["schemas"]["ApprovalStatus"];
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["AdminApproval"][];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    adminCancelApproval: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                approvalId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Why. Kept in the audit log, not shown to the user. */
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Cancelled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminApproval"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    adminListUserCrewJobs: {
+        parameters: {
+            query?: {
+                /** @description `1` or `true` adds the report to each job. */
+                withReport?: "0" | "1" | "false" | "true";
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["AdminCrewJob"][];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    adminCancelCrewJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                crewJobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Why. Kept in the audit log, not shown to the user. */
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Cancelled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCrewJob"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     webhookClerk: {

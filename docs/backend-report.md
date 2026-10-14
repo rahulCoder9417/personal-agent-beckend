@@ -10,7 +10,7 @@ Read `hld-mvp.md` first. It gives the short version and explains the words. This
 | **What it does** | Receives messages, runs each user's agent through the vm-manager, charges credits, sends replies |
 | **What it does not do** | It does not run the AI itself. Each user's agent runs in its own container |
 | **Where it runs** | On the AWS test server (see `aws-setup.md`) |
-| **How it is tested** | 626 automated tests, with a real database and real queues |
+| **How it is tested** | 749 automated tests, with a real database and real queues |
 | **What is in this report** | The backend, and the parts it depends on: the vm-manager, the container, the proxy |
 
 ## How to read this report
@@ -1703,7 +1703,7 @@ The ways to move:
 - **Free to Pro or Max:** a checkout. The first month's credits arrive with the plan.
 - **Pro to Max, or Max to Pro:** the checkout refuses a second plan while one is set to renew. The user cancels first and then buys the other plan. If the plan is changed on Polar's side instead, it applies at once. The new amount of credits comes with the next paid month.
 - **Paid to Free:** the user cancels. The plan stays until the paid month ends. Then the user is on Free.
-- **By hand, for tests:** the founder's command-line script, run inside the api container, moves a user to any plan. It takes the same steps as a paid change: the plan, the LiteLLM key's models and budget, and the browser switch. The priority follows by itself. There is no payment and no credits are given. The activity log says the plan was set by hand. Example: to test Scout's browser, the founder moves his test user to Max, and the browser is on from the agent's next start.
+- **By hand:** an admin moves a user to any plan, from the admin panel ("Change plan", section 31) or with the founder's command-line script inside the api container. Both use the same function and take the same steps as a paid change: the plan, the LiteLLM key's models and budget, and the browser switch. The priority follows by itself. There is no payment and no credits are given. The activity log says the plan was set by hand, with the admin's id and, from the panel, the reason. A Polar subscription that still runs can set its own plan again at its next event. Example: to test Scout's browser, the founder moves his test user to Max, and the browser is on from the agent's next start.
 
 ## 28. Payments with Polar
 
@@ -2010,8 +2010,14 @@ Only a user with the role admin may use them. The role is set in Clerk, the sign
 
 Every admin action that changes something goes to the audit log with the admin's id. Retrying or removing a job also needs a reason, written there too. No admin answer ever holds a secret.
 
+The admin panel is where admins use these tools: a web app of its own, apart from the user's web app, for example at `admin.textcrew.in` (the repo `personal-agent-admin-panel`). It signs in with the same Clerk application and reaches only these admin calls and "who is signed in" (last part of this section).
+
 | Tool | What it does | Where |
 |---|---|---|
+| Overview | The platform's numbers at a glance, counts only | `/v1/admin/overview` |
+| Users | Every account, newest first, with search by email, name or id | `/v1/admin/users` |
+| One user | One user's details: plan, credits, apps, automations, crew jobs, turn timings, activity, container | `/v1/admin/users/{id}` |
+| Set a plan by hand | Moves a user to Free, Pro or Max, with no payment | `/v1/admin/users/{id}` |
 | List coupons | Shows all campaigns with their use counts | `/v1/admin/coupons` |
 | Create a coupon | Makes a campaign and returns its codes once | `/v1/admin/coupons` |
 | Disable or enable a coupon | Switches a campaign off or on; can revoke unspent credits | `/v1/admin/coupons/{id}` |
@@ -2236,6 +2242,68 @@ The activity-log row keeps the admin's id, the deleted user's id and the reason.
 ### Signing a user out everywhere
 
 The backend asks Clerk to end every active session of the user. The answer says how many were ended. A session token the browser already holds still works until it expires, about one minute, because the api checks tokens without asking Clerk each time. After that the user must sign in again. This does not suspend the account.
+
+### The overview
+
+One call gives the platform's numbers, and only numbers: no name, email, id or text.
+
+| Number | What it counts |
+|---|---|
+| Accounts | Accounts that are not deleted; the deleted ones apart |
+| New today, new in 7 days | Sign-ups since midnight UTC, and in the last 7 × 24 hours. An account deleted since still counts: it signed up |
+| Active in 7 days | Accounts that sent at least one message in the last 7 days, on any channel. The agent's answers don't count |
+| Plans | Accounts that are not deleted, on Free, Pro and Max |
+| Turns today, in 7 days, and the failed ones | From the turn timings (section 9, kept 30 days). Failed means the turn ended in an error or failed |
+| Awake containers | Containers waking, awake or busy now, as the vm-manager lists them. Empty when it can't be asked |
+| Credits this month | Granted: every grant made since the first of the month (UTC), from any source; refunds and chargebacks are left out. Spent: credits charged since then, less the charges of failed turns given back |
+| Open approvals | Approvals still waiting for an answer and not expired |
+| Failed jobs | Failed jobs in the four queues, kept 30 days. Empty when the queues can't be read |
+| Waitlist | Everyone on it, and those still pending |
+
+Each number is asked of the module that owns its table (section 2). When the vm-manager or Redis does not answer, its number is empty and the rest still come.
+
+### Users and one user's page
+
+**The list** shows every account, newest first, in pages of 30, deleted and suspended ones too. Search looks for part of an email or a name, in any letter case, or a whole user id. A `%` or `_` typed in the search is a letter, not a wildcard. For each user: the email, the name, the time zone, the plan, the role, active, suspended or deleted, the chargeback mark, when they joined, when they last sent a message, the balance, the engine they chose, the kinds of chat linked (never a chat id or number) and how many app connections are active.
+
+The balance is worked out from the grants, the same way as everywhere else (section 23). No balance number is stored for it.
+
+**One user's page** adds, in one call:
+
+- the Polar subscription, with its own plan when there is one;
+- the grants that make up the balance, and the last 20 changes in the credit history;
+- the app connections: the app, the state and when it was connected, never a token or the account's name;
+- the automations that are not finished: the title, the kind, on or paused and why, the next and last run, never the instruction;
+- the last 20 crew jobs: the member, the repo, the state, when given and finished, never the brief or the report;
+- the last 20 turn timings: the stages and their milliseconds only (section 9);
+- the last 20 activity-log entries: the one-line summary the user sees, never the details behind it;
+- the engine chosen, the one that runs and what pays for the AI;
+- the container's state from the vm-manager, empty when it can't be asked.
+
+It never holds a message, a memory, a key, a token or a coupon code. The tools above (one user's apps, chats, automations, agent and container) give more of each part, and the actions on it.
+
+### A plan set by hand
+
+The admin picks Free, Pro or Max and may give a reason. The backend takes the same steps as the founder's script (section 27): the plan, the LiteLLM key's models and budget, Scout's browser switch, and the priority from the next message. There is no payment and no credits are given.
+
+- The activity log gets one entry: "Plan set to Max by hand (no payment)", with the reason after it, and the admin's id, the old and the new plan in its details.
+- Setting the plan the user already has changes nothing and writes nothing.
+- A deleted account is refused (conflict).
+- The answer says the old plan, the new one, whether it changed, and the Polar subscription. A subscription that still runs keeps its own plan: its next event from Polar can set the plan again. The panel warns about it.
+
+Example: the founder moves Priya from Pro to Max for a week to test Scout's browser, with the reason "testing Scout". Her browser is on from the agent's next start. Her Pro subscription renews as Pro, so at the renewal she is on Pro again.
+
+### The admin panel
+
+The panel is a Next.js app of its own (`personal-agent-admin-panel`), deployed apart from the web app, for example at `admin.textcrew.in`. Its README says how to put it live.
+
+- **Who gets in.** Anyone can reach the sign-in page. After sign-in the panel asks the api who is signed in. Someone without the admin role sees "Admins only". Every admin call checks the role again in the backend.
+- **What it can reach.** The panel's pages call its own server, which adds the Clerk session token and forwards only two kinds of call: "who is signed in" and the admin calls. Nothing else of the api, and no webhook.
+- **The backend must know it.** Its address goes in `CLERK_AUTHORIZED_PARTIES`, next to the web app's. Without it every call answers "unauthorized".
+- **Every action asks first.** Each one opens a dialog that says what will happen and asks for the reason that goes to the audit log. Adjusting credits makes one idempotency key per adjustment, kept while the form stays the same, so sending again after a lost answer can't apply it twice.
+- **Coupon codes** are shown once, on the screen that made them, with a button to copy them all.
+- **On a phone** it works with four tabs and a "More" page.
+- **With nothing set** it runs on made-up users and needs no backend, for trying it out.
 
 ---
 
@@ -2756,9 +2824,9 @@ This section says what the web app can do through the api, group by group. Almos
 | Coupons | Redeem a coupon code |
 | Activity | Read the log of what the agent did |
 | Waitlist | Join the waitlist. The answer is always the same, so nobody can test an email |
-| Admin | Manage coupons, adjust a user's credits, see free-credit totals, and handle the waitlist. For one user: see their app connections, linked chats and automations; disconnect or recheck an app, unlink a chat, pause, resume or delete an automation, each with a reason. See each app in numbers. See one user's agent and container, stop or wake it, reset its settings, and list or cancel the user's approvals and crew jobs. See the jobs in each queue, run a failed one once more or remove a failed or finished one, with a reason. Read the audit log of every user. See where turns spend their time. Read the settings in use (secrets only as set or not) and check that each service answers. Change a user's role, suspend an account or lift the suspension, delete an account, and sign a user out everywhere |
+| Admin | See the platform's numbers at a glance. List and search users, and open one user's details (counts and metadata, never their messages). Set a user's plan by hand. Manage coupons, adjust a user's credits, see free-credit totals, and handle the waitlist. For one user: see their app connections, linked chats and automations; disconnect or recheck an app, unlink a chat, pause, resume or delete an automation, each with a reason. See each app in numbers. See one user's agent and container, stop or wake it, reset its settings, and list or cancel the user's approvals and crew jobs. See the jobs in each queue, run a failed one once more or remove a failed or finished one, with a reason. Read the audit log of every user. See where turns spend their time. Read the settings in use (secrets only as set or not) and check that each service answers. Change a user's role, suspend an account or lift the suspension, delete an account, and sign a user out everywhere |
 
-The live stream pushes new messages, message status, conversation changes, approvals, the agent's state, progress lines and credit changes. Long lists come in pages of 30 by default, and 100 at most. Every error has the same shape: a code, a message, and sometimes details. While an admin has suspended an account, every signed-in call of that user answers 403 with the code `account_suspended`. Some addresses are not for the web app. Webhooks are for outside services. `/oauth/callback` is the way back from an app's sign-in, for a provider to send the browser to. `/mcp` and `/git` are for containers only. `/metrics` is for monitoring. Admins also have a page that shows the job queues.
+The live stream pushes new messages, message status, conversation changes, approvals, the agent's state, progress lines and credit changes. Long lists come in pages of 30 by default, and 100 at most. Every error has the same shape: a code, a message, and sometimes details. While an admin has suspended an account, every signed-in call of that user answers 403 with the code `account_suspended`. Some addresses are not for the web app. Webhooks are for outside services. `/oauth/callback` is the way back from an app's sign-in, for a provider to send the browser to. `/mcp` and `/git` are for containers only. `/metrics` is for monitoring. Admins also have a page that shows the job queues. The admin panel, a web app of its own, uses only the admin calls and "who is signed in" (section 31).
 
 Example: linking Telegram takes three steps. The app asks for a link code and shows it. The user sends the code to the bot. The app reads the channel list again and shows the new chat.
 

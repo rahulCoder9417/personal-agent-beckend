@@ -191,7 +191,9 @@ A job that fails is tried again, 5 tries in total. The waits are 5 seconds, 30 s
 
 ### The per-user lock
 
-Only one inbound job per user runs at a time. Two turns at once would mix up the conversation. Before an inbound job starts, the worker takes a lock for that user in Redis. If the lock is taken, the job goes back in line for 2 seconds. When the job ends, the worker gives the lock back.
+Only one inbound job per user runs at a time. Two turns at once would mix up the conversation. Before an inbound job starts, the worker takes a lock for that user in Redis. If the lock is taken, the job goes back in line for a quarter of a second, and after it has waited 10 seconds, for 2 seconds at a time. When the job ends, the worker gives the lock back.
+
+Why the short wait first: the lock is often held only by the end of the turn before, its usage sync, after the answer is already out. A message sent right after an answer then starts within a quarter of a second of the lock coming free, not up to 2 seconds later. A long turn still sees the next message look again only every 2 seconds.
 
 So one user's messages are handled one by one, in order. The lock ends on its own after 16 minutes, a little longer than the longest turn. Paying users go first in the inbound queue: Max, then Pro, then Free.
 
@@ -493,7 +495,15 @@ The router is an outside service named Jev. It judges only plain text of up to 1
 
 Every message is a task when the router has no key (`JEV_API_KEY` is empty), is too slow or fails. The same holds when the user's own Claude plan pays for the AI. It also holds when the cheap model says it cannot answer alone. So routing can save work, and it can never lose a message.
 
-The cheap model is told where its answer will be read. In web chat it may use formatting where that helps, such as a list for steps. In a chat app it is asked for plain text only. Section 10 says why.
+The cheap model is told where its answer will be read. In web chat it may use formatting where that helps, such as a list for steps. In a chat app it is asked for plain text only. Section 10 says why. It is also told to pass the message on (ESCALATE) when it answers or continues something said earlier in the chat: a yes, a no, a choice, a follow-up.
+
+Three things run side by side, so a quick answer does not wait for each step in turn:
+
+- **The quick reply is written while Jev decides.** For a message of up to 200 characters, the worker asks the cheap model for its reply at the same moment it asks Jev. The reply is used only if Jev says "simple" and the model did not pass it on. Otherwise the request to the model is stopped and the reply is dropped. A longer message is rarely simple, so its quick reply is asked for only after Jev says "simple". Example: Rahul writes "hlo". Before, he waited for Jev, then for the model. Now he waits for whichever of the two is slower.
+- **The container starts waking while Jev decides.** As soon as the message is one Jev will judge, the worker starts the wake of steps 11 and 12. A task then waits for the slower of the routing and the wake, not for both. A message that turns out simple or spam leaves the container awake but idle, and the idle check stops it after 3 minutes. That awake time is charged as usual (section 24), about a third of a credit. The setting `WAKE_WHILE_ROUTING` switches this off.
+- **The user's agent settings are read while the container wakes,** once per turn.
+
+A user whose Claude plan pays never reaches Jev: the turn goes straight to the wake.
 
 ### Waking and delivering
 
@@ -514,7 +524,36 @@ The cheap model is told where its answer will be read. In web chat it may use fo
 
 ### What is recorded
 
-The `events` table keeps the webhook and its state: received, queued, then done, ignored or failed. Every way the job ends sets the last state, also the special cases of step 6. A quick job can end before the api has written "queued". The api then leaves the final state alone, so the next worker start does not queue the event again. The `messages` table keeps Rahul's message and the reply, each with a status and its conversation. Files are in `attachments`. The activity log keeps the tool calls the agent made. The credit ledger keeps the charges of the turn.
+The `events` table keeps the webhook and its state: received, queued, then done, ignored or failed. Every way the job ends sets the last state, also the special cases of step 6. A quick job can end before the api has written "queued". The api then leaves the final state alone, so the next worker start does not queue the event again. The `messages` table keeps Rahul's message and the reply, each with a status and its conversation. Files are in `attachments`. The activity log keeps the tool calls the agent made. The credit ledger keeps the charges of the turn. The `turn_timings` table keeps where the turn's time went (next part).
+
+### Where a turn's time goes
+
+Every turn writes one row in `turn_timings` when it ends, whatever the outcome. The row holds the moment of each stage, counted from the moment the message was queued, and a few facts: the route, the engine, how the wake went, the outcome and the try. It never holds the message, the answer or anything else the user or the agent wrote. Rows are kept 30 days and are removed with the account. Writing the row never fails a turn.
+
+| Stage | From and to | What it is |
+|---|---|---|
+| queue | Queued to taken by the worker | The worker was busy, or another turn of the same user held the lock |
+| prepare | Taken to the turn's start | Reading the message, downloading files, turning voice into text, saving it |
+| route | The turn's start to the route | The credit check, Jev, and the quick reply. Jev's time and the quick reply's time are noted apart |
+| reply | The route to the quick reply saved | A simple message only: the reply is saved and sent |
+| wake | The route to the container ready | Only what is left of the wake once the route is known. Noted: warm (it was awake), cold (it was asleep), room made under the awake cap, or made again from a new image, with the vm-manager's own parts |
+| context | The container ready to the delivery sent | The engine check, the memory block and the recap |
+| handover | The delivery sent to "accepted" | The vm-manager and the Bridge take the message |
+| engine start | "Accepted" to the engine ready | The Bridge starts Claude Code, which connects its tool servers, or starts the Hermes run |
+| first output | The engine ready to the model's first words or tool call | On web chat also the model's first response and its thinking time, and, on Claude Code, the prompt cache |
+| work | The first output to the engine done | The model's later rounds, the tools and the crew. The time in tools and in the crew is noted, with the number of model rounds |
+| send answer | The engine done to the answer sent | `send_message` saves the answer and it reaches the user |
+| wrap up | The answer sent to the turn's end | The Bridge and the vm-manager end the turn |
+
+The stages up to "accepted" are measured by the worker. The ones after it come from the Bridge, which reports them with the turn's last event (section 34); they are placed after the moment the worker heard "accepted". After the answer, the worker still syncs the usage; that time is shown apart, because the user already has the answer.
+
+To see them on the server:
+
+```bash
+cd /opt/textcrew && ./dc --profile app exec -T api node --import tsx scripts/dev-user.ts timings --email <your email> --last 10
+```
+
+It prints each turn, newest first: what it was (route, engine, wake, outcome), each stage with its time and what it was, how long the user waited for the answer, and a line on the biggest stage. A last line gives the middle answer time of those turns and the stage most often the biggest. Example: "biggest: first output (58% of 9.4 s): the model's first answer: thinking before its first words or tool call".
 
 ### A message from web chat
 
@@ -834,7 +873,7 @@ Each way asks Composio about each pending connection by its own account id, the 
    - **needs reconnecting**: the connection expired or failed. Same advice.
    - **not on plan**: connected, but the app is not on the user's plan any more.
    An active connection of an app wins over any other of the same app. The notes carry the Apps page address, so the agent sends the user there and nowhere else.
-3. `actions` lists the actions of the connected apps, at most 100. The api asks Composio once per app. It used to ask once for all of them, with one limit of 200 tools in all. GitHub alone has more than 200, so it left no room for the next app. That is the most likely reason why, on 13 October, the agent saw only GitHub after the founder connected Google Calendar (not confirmed on the server). Now the 100 places are shared fairly: an app with few actions gets them all, and the rest goes to the big ones. An app that is cut short gets a note: "Showing 97 of its 200 actions", and to ask again with that app and a search word.
+3. `actions` lists the actions of the connected apps, at most 100. The api asks Composio once per app. It used to ask once for all of them, with one limit of 200 tools in all. GitHub alone has more than 200, so it left no room for the next app. That is the most likely reason why, on 13 October, the agent saw only GitHub after the founder connected Google Calendar (not confirmed on the server). Now the 100 places are shared fairly: an app with few actions gets them all, and the rest goes to the big ones. An app that is cut short gets a note: "Showing 97 of its 200 actions", and to ask again with that app and a search word. An app's actions are the same for every user, so the api keeps each app's listing for 10 minutes and serves every call from it, for every user. Before, every call asked Composio again for every connected app, and the lead calls `list_app_actions` on many turns. A listing that failed is not kept.
 4. Each action carries two marks: whether it needs approval, and whether it costs a credit.
 5. The agent calls `run_app_action` with the action's name and its inputs. For an app that is not ready, the answer is the same note as above, for example "Google Calendar is still connecting".
 6. The api checks the app, the credits and the approval (next section).
@@ -1997,7 +2036,7 @@ The backend never talks to Docker, the program that runs containers, and never t
 | Call | What it does | When the backend makes it |
 |---|---|---|
 | `CreateSandbox` | Makes the container and the user's folder. Leaves it stopped | At sign-up, and before a turn if none exists |
-| `WakeSandbox` | Starts the container and waits until it is ready | At the start of every turn |
+| `WakeSandbox` | Starts the container and waits until it is ready. Says where its time went: a wait for another operation on the container, making room under the awake cap, a container made again, the start, and the Bridge's ready check | At the start of every turn, from the moment the message is one Jev will judge (section 9) |
 | `Deliver` | Hands one message in and streams events back | Once per turn, right after the wake |
 | `Touch` | Notes that the user was active just now | On every tool call and git call from the container |
 | `StopSandbox` | Stops a container, politely or by force | Politely, right after a crew job, so the container sleeps at once (section 20). Otherwise the vm-manager stops containers by its own rules |
@@ -2144,6 +2183,10 @@ One turn goes like this:
 When the delivery asks for it (web chat, section 12), the Bridge also reports the answer while it is being written: the whole text so far, at most four times a second. It takes only the lead's own words. Claude Code gives them when it is started with its "partial messages" switch, which the Bridge adds only for such a turn; Hermes gives them in its run's event stream. The text starts over when the lead starts a new message or calls a tool.
 
 Risky actions never wait inside a turn. The agent asks the platform for approval, gets "pending", and ends its turn. The user's yes or no arrives later as a new message.
+
+**Where the turn's time went.** The Bridge times each turn from the moment it takes the delivery, and reports the times with the turn's last event: when the engine started, when it was ready (for Claude Code: the program is up and has asked its tool servers for their tools), the model's first response and the start of its thinking (web chat turns only, where the Bridge sees the model's own stream), the lead's first words and first tool call, the time spent in the lead's own tools and in specialists, when the engine finished, and when the answer was sent. Claude Code also gives its own numbers: its total time, the time in calls to the model, the number of model rounds, and the token counts with the prompt cache. Only names and numbers: no text the user or the agent wrote. The worker stores them with its own (section 9, "Where a turn's time goes").
+
+**Fewer waits around a turn.** The Bridge sends each answer through the platform's tool server, which answers every request on its own. So it introduces itself to that server once per container start, then sends each answer in one request. Before, every answer took three round trips through the egress proxy. Claude Code's two settings files, its tool servers and the hook that keeps the lead off the web, are written only when what they hold changes, not before every turn. On Hermes, after the first check that no specialist is still at work, the second check comes after half a second instead of 2 seconds, so the answer's last round starts sooner.
 
 ### The two engines
 
@@ -2355,7 +2398,7 @@ Every job is safe to run again, so a job that did not finish is simply run again
 2. It registers the timer of every enabled automation again.
 3. It registers the repeating jobs again: usage sync, credit expiry, approval expiry, clean-up, backup and health check.
 
-A failing job is tried 5 times, with waits of 5 seconds, 30 seconds, 2 minutes and 10 minutes. After the last failure its event is marked "failed" and an alert is raised. A daily clean-up removes finished events older than 30 days and messages older than 365 days. A conversation that has had no message for 365 days, has none left and is not the active one is removed too.
+A failing job is tried 5 times, with waits of 5 seconds, 30 seconds, 2 minutes and 10 minutes. After the last failure its event is marked "failed" and an alert is raised. A daily clean-up removes finished events older than 30 days, turn timings older than 30 days, and messages older than 365 days. A conversation that has had no message for 365 days, has none left and is not the active one is removed too.
 
 ### Rate limits on public endpoints
 
@@ -2444,6 +2487,7 @@ This section lists every table of the backend's database, grouped by the module 
 | orchestrator | `approvals` | Risky actions waiting for a yes or no, with their exact details |
 | orchestrator | `memories` | Short facts about the user that every engine gets |
 | orchestrator | `chat_engines` | Which engine last finished a turn in each conversation |
+| orchestrator | `turn_timings` | Where each turn's time went, stage by stage, for 30 days. Never any text (section 9) |
 | integrations | `connections` | A user's connected app accounts and their status |
 | integrations | `composio_auth_configs` | The Composio setups the server made itself, one per app. Not per user |
 | integrations | `user_mcp_servers` | The user's own MCP servers, with the secret encrypted |
@@ -2520,6 +2564,7 @@ This section lists the backend's settings by group. They are environment setting
 | | `COMPOSIO_MANAGED_APPS` | `all`, or app names such as `googlecalendar,notion`: apps the server may set up at Composio by itself, with Composio's shared sign-in, on the first connect | None |
 | | `COMPOSIO_API_URL` | Composio's address. `/oauth/callback` sends the browser on to it | `https://backend.composio.dev` |
 | Routing | `JEV_API_KEY` | Turns the router on | Every message goes to the agent |
+| | `WAKE_WHILE_ROUTING` | Starts waking the container while Jev decides (section 9). `false` wakes it only for a task | On |
 | Payments | `POLAR_ACCESS_TOKEN` | Opens checkouts and cancels subscriptions | No checkout can be opened |
 | | `POLAR_WEBHOOK_SECRET` | Checks Polar's webhooks | No payment reaches the system |
 | | `POLAR_SERVER` | Test mode or real money | Test mode |

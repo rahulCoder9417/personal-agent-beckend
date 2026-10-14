@@ -120,6 +120,34 @@ Each entry has a heading with the date and the name of the feature, then the par
 - **Docs updated:** `backend-report.md` sections 31 (a new part, "One user's agent and container"), 33 and 41.
 - **Commits:** backend `f43668f`, `81e5a1b`.
 
+### 14 October 2026: admin pages for the job queues, the audit log, turn timings, the settings and health
+
+- **Where it is:** on `main` since 14 October, in the backend. It reaches the server with `deploy.sh`.
+- **Why:** to run the beta, an admin needs to see what failed and act on it, read what happened for any user, see where replies spend their time, check the settings in use and see whether each service answers, without logging in to the server. Before, failed jobs were only on the queue board, turn timings only in a script run on the server, and the settings only in the server's `.env` file.
+- **What the user notices:** nothing. These are tools for admins. The admin panel can now be built on them.
+- **Backend:**
+  - **Jobs.** A list of the jobs of one queue, or of all four, in one state: failed (the default), waiting, running, delayed or finished. Each job shows its name, tries, times, the user, the first line of its last error and its ids. Its data is shown as ids only: the text of a message, buttons, tokens and keys are left out, and only the names of those fields are listed. A count per queue and state comes with it.
+  - **Retry and remove.** A failed job can be run once more; a failed or finished job can be removed. A job that is waiting, delayed or running is never removed or retried: the answer is "conflict" and nothing changes. Both need a reason, and both go to the audit log with the admin's id. A retry is the same as the queue board's retry button: one more run, and the job's own "already done?" check decides what is left, so no work is done twice.
+  - **The audit log of every user,** newest first, with filters for the user, the actor, the action and a time window. Secrets in an entry's details are replaced by "[redacted]", at any depth.
+  - **Turn timings over the last days** (7 by default, up to 30), from the timings table only: for each stage, the count, the median and the 90th percentile; the wake split into warm, cold, room made and made again; the turns per route, engine and outcome; and the 20 slowest turns with their biggest stage.
+  - **The settings in use,** read-only, from a fixed list: the switches, lists, limits, models and addresses (without any password in them). Each secret shows only whether it is set. The app catalog shows, per app, whether it can be connected on this server and how. `AWAKE_CAP` belongs to the vm-manager, which the backend cannot ask, so it is shown empty.
+  - **Health:** Postgres, Redis, the vm-manager (with its count of containers and awake ones), LiteLLM and Composio (with its key checked), each within 3 seconds, as ok, error or off, with a short message. It also shows the backend's version and the deployed commit, which `deploy.sh` now passes on as `GIT_COMMIT`.
+- **Cost and speed:** nothing for users. Each page is read only when an admin opens it. The health page sends one small request to LiteLLM and one to Composio each time. The timings summary reads at most 20,000 turns.
+- **Contracts:** `openapi.yaml` grew by eight admin operations, all tagged `admin`: `GET /v1/admin/jobs`, `GET /v1/admin/jobs/counts`, `POST /v1/admin/jobs/{queue}/{jobId}/retry`, `DELETE /v1/admin/jobs/{queue}/{jobId}`, `GET /v1/admin/audit`, `GET /v1/admin/timings/summary`, `GET /v1/admin/config` and `GET /v1/admin/health`. Nothing existing changed. `vm.proto` did not change.
+- **Database:** none. No new table and no migration.
+- **How it was checked:**
+  - New backend tests: every new operation answers 401 without a session and 403 to a user who is not an admin; the jobs list with ids only, the error scrubbed, and planted fake secrets (a message, a token, a key, a Telegram bot token, a password) never in the answer; waiting jobs with and without a priority, delayed jobs with the time they are due; paging through one queue and through all four without repeats; retry only of a failed job, with a reason, audited, and running exactly once more; remove only of a failed or finished job, never a running, waiting or delayed one; the audit log's filters, paging, newest first, and secrets removed at any depth; the timings math on sample turns (median, 90th percentile, wake kinds, routes, engines, the 20 slowest) and the window of days; the settings page with planted secrets, which shows none of them; the health page with each service ok, off, a refused key and the vm-manager down.
+  - Lint, the type check and the contract check pass. 677 of 678 backend tests pass; the one failure is the Hindi title test, which already failed before.
+  - Not on the server.
+- **Still open:**
+  - The awake cap can be shown only if the vm-manager says it. A small new call in `vm.proto` could return it with the number of awake containers. Not built; for your decision.
+  - The jobs list pages by position. A job that changes state while someone pages can be shown twice or skipped.
+  - Removing a finished job lifts, for that job, the 7-day guard against the same job being added twice. Its own "already done?" check still stops double work.
+  - Restarting the api or the worker by hand with `./dc up -d` leaves the commit empty until the next `deploy.sh`, as it already does for `AGENT_IMAGE_VERSION`.
+  - The admin panel has no screens yet.
+- **Docs updated:** `backend-report.md` sections 3, 31 (new parts: "Jobs", "The audit log", "Turn timings", "Settings", "Health"), 37, 41 and 42.
+- **Commits:** backend `9ded30d`, `87d7fa9`, `d8e75d4`, `4e13077`, `176a382`.
+
 ### 14 October 2026: every turn says where its time went; a greeting no longer waits for each step in turn
 
 - **Where it is:** on `main` since 14 October, in the backend and the vm-manager. It reaches the server with `deploy.sh`, which also adds the new table.

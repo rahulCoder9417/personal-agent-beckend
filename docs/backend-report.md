@@ -187,7 +187,7 @@ A job can run a second time, for example after a crash. Three things stop double
 
 ### Retries
 
-A job that fails is tried again, 5 tries in total. The waits are 5 seconds, 30 seconds, 2 minutes and 10 minutes. After the last try the event is marked `failed`, with the error text. An alert is raised: an error line in the log. If `ALERT_WEBHOOK_URL` is set, the alert is also posted there. The failed job stays on the admin page for 30 days.
+A job that fails is tried again, 5 tries in total. The waits are 5 seconds, 30 seconds, 2 minutes and 10 minutes. After the last try the event is marked `failed`, with the error text. An alert is raised: an error line in the log. If `ALERT_WEBHOOK_URL` is set, the alert is also posted there. The failed job stays on the admin page for 30 days. An admin can run it once more or remove it there (section 31).
 
 ### The per-user lock
 
@@ -2001,9 +2001,11 @@ Example: a user has a connected Claude plan and a saved OpenAI key. With Claude 
 
 ## 31. Admin tools
 
-Admin tools are for the founder and trusted staff. They hand out free credits, correct balances and show what failed. They also let support look at one user's agent and container and put it right.
+Admin tools are for the founder and trusted staff. They hand out free credits, correct balances, show what failed and show how the running system is doing. They also let support look at one user's agent and container and put it right.
 
 Only a user with the role admin may use them. The role is set in Clerk, the sign-in service, in the user's public metadata. The backend copies it when Clerk sends the user's data. Anyone else gets "Admins only".
+
+Every admin action that changes something goes to the audit log with the admin's id. Retrying or removing a job also needs a reason, written there too. No admin answer ever holds a secret.
 
 | Tool | What it does | Where |
 |---|---|---|
@@ -2017,6 +2019,14 @@ Only a user with the role admin may use them. The role is set in Clerk, the sign
 | One user's automations | Lists every automation; pauses, resumes or deletes any one | `/v1/admin/users/{id}/automations`, `/v1/admin/automations/{id}` |
 | Apps in numbers | For each app: how many users connected it, its connections by state, and whether it can be connected here | `/v1/admin/apps/summary` |
 | Failed jobs board | Shows the four job queues and their failed jobs | `/admin/queues` |
+| Jobs | Lists the jobs of a queue in one state, newest first | `/v1/admin/jobs` |
+| Job counts | How many jobs each queue holds, by state | `/v1/admin/jobs/counts` |
+| Retry a job | Runs a failed job once more, with a reason | `/v1/admin/jobs/{queue}/{jobId}/retry` |
+| Remove a job | Removes a failed or finished job, with a reason | `/v1/admin/jobs/{queue}/{jobId}` |
+| Audit log | Every user's activity log, with filters | `/v1/admin/audit` |
+| Turn timings | Where turns spent their time over the last days | `/v1/admin/timings/summary` |
+| Settings | The settings that shape behaviour, read-only | `/v1/admin/config` |
+| Health | Whether each service the backend needs answers | `/v1/admin/health` |
 | One user's agent | Shows the container, the engine, the AI and today's usage | `/v1/admin/users/{id}/agent` |
 | Stop or wake a container | Stops a user's container (politely, or by force) or wakes it | `/v1/admin/users/{id}/container/stop` and `/wake` |
 | Reset agent settings | Puts the engine, the Claude model, the effort or the browser switch back to the default | `/v1/admin/users/{id}/agent/reset` |
@@ -2119,6 +2129,56 @@ The same functions as the user's own settings make the change, so the vm-manager
 **Cancelling a crew job.** Only one that waits (section 20). It is marked failed with "Cancelled by Textcrew support." and never runs. The user is told in the job's chat. A job that already runs cannot be stopped on its own: the Bridge has no way to stop one job. The admin is refused, and the job ends by itself within 15 minutes. A stop by force ends it now, as a failure on our side.
 
 **Example.** Rahul writes to support that his agent "keeps using the wrong model". The admin opens his agent: Claude Code, Sonnet 4.6, effort max, the container busy. The admin resets the model and the effort with the reason "user report: wrong model". Rahul's next turn runs on Claude Code's own choice. His activity log shows "Textcrew support reset the agent's Claude model (back to Default), thinking effort (back to Default)".
+
+### Jobs
+
+The jobs list shows one state at a time: failed (the default), waiting, running, delayed or finished. It can show one queue, or the four queues one after the other. It comes in pages of 30, newest first within a queue.
+
+For each job it shows its id, queue, name and state, the tries made, when it was added, started and finished, when a delayed job is due, and the user it is for. A failed job also shows the first line of its last error. Anything in that line that looks like a secret is replaced by "[redacted]".
+
+A job's data is shown as ids only: the user, the event, the message, the automation, and so on. Every other field is left out, and only its name is listed. So the list never shows the text of a message, a button, a token or a key.
+
+"Waiting" includes the jobs waiting with a priority. These are the inbound jobs of paying users, which go first.
+
+- **Retry** works only on a failed job. The job goes back in line and runs once more, with no new tries after it. This is what the retry button of the board does. The job keeps its count of tries, so its own "last try" rules apply to this run. Every job checks "already done?" first (section 3), so a retry never does work twice. Example: a reply that was marked failed after its last try is not sent by a retry, because the job finds it is no longer waiting to go. A failed refund of a turn, retried, works the refund out again and gives back what it can.
+- **Remove** works only on a failed or a finished job. A job that is waiting, delayed or running is never removed: the answer is "conflict", and nothing changes. A removed job's event keeps its status in the database.
+- **Reason.** Both need a reason of up to 200 characters. The audit log gets the admin's id, the queue, the job's id and name, and the reason.
+
+Removing a finished job has one effect to know about. A finished job is kept 7 days so that the same job cannot be added twice (section 3). Once removed, that guard is gone for it. The job's own "already done?" check still stops any double work.
+
+### The audit log
+
+The audit log is the activity log of every user in one list, newest first, in pages of 30. It can be narrowed to one user, one actor (user, agent, admin or system), one action, and a time window.
+
+Each entry's details are shown with every field that holds a secret replaced by "[redacted]": passwords, tokens, keys, sign-in codes and cookies, at any depth. Text that looks like a secret is replaced too, for example a bearer token or a key in an address.
+
+### Turn timings
+
+The timings summary reads only the turn timings (section 9), for the last 7 days or up to 30. For each stage it gives how many turns had it, the median and the 90th percentile, in milliseconds. A stage counts only as long as it kept the user waiting.
+
+The stages are the queue, preparing the message, the route, the quick reply, the wake (warm, cold, room made on the server, or the container made again, each apart), building the turn, the hand-over, the engine's start, the model's first output, the work, sending the answer and the wrap-up. "Total" is the time from the message being queued to the answer.
+
+It also counts the turns per route, engine and outcome, and lists the 20 slowest turns: the user, when, the total and the biggest stage.
+
+The median is the middle value, read between the two middle ones when the count is even. Example: four turns waited 100, 200, 300 and 400 ms in the queue. The median is 250 ms and the 90th percentile 370 ms.
+
+### Settings
+
+The settings page shows the settings that shape what the backend does: the channels that are on, the crew, the browser, the waking during routing, the models, the apps the server may set up at Composio, the plan products, the limits and the addresses. An address is shown without any user name or password in it.
+
+It is built from a fixed list, never by reading the whole environment. A setting that is not on the list is not shown. For each secret it says only whether it is set. For `COMPOSIO_AUTH_CONFIGS` it shows the app names, not the setup ids.
+
+It also lists every app of the catalog with whether it can be connected on this server, and how: named in the settings, set up by the server earlier, allowed to be set up on the first connect, or not at all.
+
+`AWAKE_CAP` is the vm-manager's own setting. The backend cannot read it, so the page shows it empty.
+
+### Health
+
+The health page asks Postgres, Redis, the vm-manager, LiteLLM and Composio, each with a limit of 3 seconds. For each it says ok, error or off, with a short message. Off means the service is not set up on this server, for example Composio without its key. For the vm-manager it also says how many containers there are and how many are awake. For Composio it checks that the key is accepted.
+
+It also shows the backend's version and the deployed commit. The commit is there when the server was updated with `deploy.sh`, which passes it on as `GIT_COMMIT`.
+
+Example: Composio's key was replaced and the old one is still in the settings. The health page says "composio: error, reachable, but the key was refused (401)".
 
 ---
 
@@ -2470,12 +2530,15 @@ This section says how the running system is watched, backed up and brought back 
 | The api's `/healthz` | When asked | Answers "ok" when the api is up |
 | The worker's health check job | Every 5 minutes | Over 50 failed jobs in a queue, over 1,000 waiting, or the vm-manager out of reach |
 | The vm-manager's container check | Every 30 seconds | The Bridge of each awake container |
+| The admin health page, `/v1/admin/health` | When an admin opens it | Postgres, Redis, the vm-manager, LiteLLM and Composio, each within 3 seconds, and the deployed version and commit (section 31) |
 
 ### Logs, metrics and alerts
 
 The api and the worker write one log line per request and per job. Fields that look like a secret are replaced by "[redacted]": passwords, tokens, keys, sign-in codes, login headers and cookies. Request contents are never logged.
 
 The api serves numbers at `/metrics`: requests by path and result, and for each queue the jobs waiting, running, delayed, failed and finished. The page needs the secret in `METRICS_TOKEN`. Without that setting it answers "not found".
+
+Admins can also look from the api, without a server login (section 31): the jobs of each queue with their errors, the count per queue and state, the audit log of every user, where turns spent their time over the last days, and the settings in use. A failed job can be run once more or removed there, with a reason that goes to the audit log.
 
 An alert is an error line in the log, marked as an alert. If `ALERT_WEBHOOK_URL` is set, the same text is also posted there, for example to a Slack channel. The backend raises an alert in three cases: a job failed after all its tries, the backup failed, or the health check found a problem. The vm-manager writes its alerts only to its own log.
 
@@ -2633,7 +2696,7 @@ This section says what the web app can do through the api, group by group. Almos
 | Coupons | Redeem a coupon code |
 | Activity | Read the log of what the agent did |
 | Waitlist | Join the waitlist. The answer is always the same, so nobody can test an email |
-| Admin | Manage coupons, adjust a user's credits, see free-credit totals, and handle the waitlist. For one user: see their app connections, linked chats and automations; disconnect or recheck an app, unlink a chat, pause, resume or delete an automation, each with a reason. See each app in numbers. See one user's agent and container, stop or wake it, reset its settings, and list or cancel the user's approvals and crew jobs |
+| Admin | Manage coupons, adjust a user's credits, see free-credit totals, and handle the waitlist. For one user: see their app connections, linked chats and automations; disconnect or recheck an app, unlink a chat, pause, resume or delete an automation, each with a reason. See each app in numbers. See one user's agent and container, stop or wake it, reset its settings, and list or cancel the user's approvals and crew jobs. See the jobs in each queue, run a failed one once more or remove a failed or finished one, with a reason. Read the audit log of every user. See where turns spend their time. Read the settings in use (secrets only as set or not) and check that each service answers |
 
 The live stream pushes new messages, message status, conversation changes, approvals, the agent's state, progress lines and credit changes. Long lists come in pages of 30 by default, and 100 at most. Every error has the same shape: a code, a message, and sometimes details. Some addresses are not for the web app. Webhooks are for outside services. `/oauth/callback` is the way back from an app's sign-in, for a provider to send the browser to. `/mcp` and `/git` are for containers only. `/metrics` is for monitoring. Admins also have a page that shows the job queues.
 
@@ -2678,6 +2741,7 @@ This section lists the backend's settings by group. They are environment setting
 | Backups and alerts | `BACKUP_UPLOAD_CMD` | The command that copies a backup off the server | Backups stay on the same disk as the data |
 | | `ALERT_WEBHOOK_URL` | Where alerts are posted | Alerts are only in the logs |
 | | `METRICS_TOKEN` | The secret for `/metrics` | `/metrics` answers "not found" |
+| | `GIT_COMMIT` | The deployed commit, shown on the admin health page. `deploy.sh` sets it | The health page shows no commit |
 
 The vm-manager has its own settings. The main ones are `AWAKE_CAP`, `IDLE_TIMEOUT` (3 minutes) and `DELIVER_TIMEOUT` (15 minutes). `AWAKE_CAP` is 20 if not set. The compose file's default is 15. The AWS test server sets 3. A new value of `AGENT_IMAGE_VERSION` makes each container again at its next wake.
 

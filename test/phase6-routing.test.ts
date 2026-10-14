@@ -39,6 +39,7 @@ let wakes: string[];
 let jevCalls: JevRequest[];
 let jevAnswer: JevDecision | Error;
 let chatCalls: ChatMessage[][];
+let chatSignals: Array<AbortSignal | undefined>;
 let chatAnswer: string | Error;
 
 beforeAll(() => {
@@ -74,9 +75,11 @@ beforeEach(() => {
     },
   });
   chatCalls = [];
+  chatSignals = [];
   chatAnswer = "I'm great, thanks for asking!";
-  setChatCompleter(async ({ messages: m }) => {
+  setChatCompleter(async ({ messages: m, signal }) => {
     chatCalls.push(m);
+    chatSignals.push(signal);
     if (chatAnswer instanceof Error) throw chatAnswer;
     return chatAnswer;
   });
@@ -96,7 +99,7 @@ async function inboundStatus(userId: string, text: string) {
 }
 
 describe('Phase 6: Jev routing', () => {
-  it("a simple question is answered by the cheap model and doesn't wake a container", async () => {
+  it('a simple question is answered by the cheap model and never reaches the agent', async () => {
     const { user, number } = await linkedUser();
     jevAnswer = { route: 'simple', confidence: 0.93, apps: [] };
     await postWhatsapp(waWebhook([waText(number, 'hi, how are you?')]));
@@ -105,7 +108,8 @@ describe('Phase 6: Jev routing', () => {
     );
     expect(reply.type).toBe('text');
     await waitFor(async () => (await inboundStatus(user.id, 'hi, how are you?')) === 'delivered');
-    expect(wakes).toHaveLength(0);
+    // The container was woken while Jev decided (WAKE_WHILE_ROUTING), and it just idles.
+    expect(wakes).toEqual([user.id]);
     expect(vmFake.deliveries).toHaveLength(0);
 
     expect(jevCalls).toHaveLength(1);
@@ -159,7 +163,7 @@ describe('Phase 6: Jev routing', () => {
     // The saved message keeps what the model wrote.
     const rows = await db().select().from(messages).where(eq(messages.userId, user.id));
     expect(rows.find((r) => r.direction === 'out' && r.text === chatAnswer)).toBeTruthy();
-    expect(wakes).toHaveLength(0);
+    expect(vmFake.deliveries).toHaveLength(0);
   });
 
   it('a task wakes the container and carries the apps Jev picked', async () => {
@@ -188,7 +192,10 @@ describe('Phase 6: Jev routing', () => {
     await postWhatsapp(waWebhook([waText(number, 'what is 2+2?')]));
     await waitFor(async () => wa.sent.find((m) => m.text === 'echo: what is 2+2?'));
     expect(vmFake.deliveries).toHaveLength(1);
-    expect(chatCalls).toHaveLength(0);
+    // The quick reply was started next to Jev (a short message), then dropped and its request aborted.
+    expect(chatCalls).toHaveLength(1);
+    expect(chatSignals[0]?.aborted).toBe(true);
+    expect(wa.sent.find((m) => m.text === "I'm great, thanks for asking!")).toBeUndefined();
   });
 
   it('Jev not configured → every message is a task (no Jev call at all)', async () => {
@@ -224,7 +231,9 @@ describe('Phase 6: Jev routing', () => {
     jevAnswer = { route: 'simple', confidence: 0.5, apps: [] };
     await postWhatsapp(waWebhook([waText(number, 'one')]));
     await waitFor(async () => wa.sent.find((m) => m.text === 'echo: one'));
-    expect(chatCalls).toHaveLength(0);
+    // Written next to Jev's decision, never used: Jev was not sure enough.
+    expect(chatCalls).toHaveLength(1);
+    expect(chatSignals[0]?.aborted).toBe(true);
 
     jevAnswer = { route: 'simple', confidence: 0.95, apps: [] };
     chatAnswer = 'ESCALATE';

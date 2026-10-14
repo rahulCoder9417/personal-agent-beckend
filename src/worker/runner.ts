@@ -5,6 +5,7 @@ import { markEvent } from '../modules/events/intake.ts';
 import { QUEUES, RETRY_DELAYS_MS, type QueueName } from '../modules/events/queues.ts';
 import { acquireUserLock, releaseUserLock } from '../modules/orchestrator/lock.ts';
 import { config } from '../shared/config.ts';
+import { runInJob } from '../shared/job-context.ts';
 import { logger } from '../shared/logger.ts';
 import { createRedis } from '../shared/redis.ts';
 import { IGNORED } from './ignored.ts';
@@ -19,6 +20,13 @@ export interface RunnerOptions {
   retryDelaysMs?: number[];
   /** A busy user's job is pushed back this long (HLD 0.2: 2 s). */
   busyDelayMs?: number;
+  /**
+   * ... but only this long while the job has waited less than `quickRetryForMs` since it was
+   * queued: the turn before it is often just finishing (its usage sync), so a message sent right
+   * after an answer does not lose up to 2 s.
+   */
+  busyQuickDelayMs?: number;
+  quickRetryForMs?: number;
   /** Queues whose jobs take the per-user lock. */
   lockedQueues?: QueueName[];
 }
@@ -33,6 +41,8 @@ const DEFAULT_CONCURRENCY: Record<QueueName, number> = {
 export function startWorkers(processors: Processors, opts: RunnerOptions = {}): Worker[] {
   const retry = opts.retryDelaysMs ?? RETRY_DELAYS_MS;
   const busyDelay = opts.busyDelayMs ?? 2000;
+  const quickDelay = opts.busyQuickDelayMs ?? 250;
+  const quickFor = opts.quickRetryForMs ?? 10_000;
   const locked = new Set(opts.lockedQueues ?? ['inbound']);
   const log = logger();
 
@@ -44,16 +54,25 @@ export function startWorkers(processors: Processors, opts: RunnerOptions = {}): 
         const handler = handlers[job.name];
         if (!handler) throw new Error(`no handler for ${queueName}/${job.name}`);
         const userId = (job.data as { userId?: string | null }).userId;
+        // When the job was queued, or became due: what its time in the queue is counted from.
+        const queuedAt = job.timestamp + (job.opts.delay ?? 0);
         let lockToken: string | null = null;
         if (locked.has(queueName) && userId) {
           lockToken = await acquireUserLock(userId);
           if (!lockToken) {
-            await job.moveToDelayed(Date.now() + busyDelay, token);
+            const waited = Date.now() - queuedAt;
+            await job.moveToDelayed(
+              Date.now() + (waited < quickFor ? quickDelay : busyDelay),
+              token,
+            );
             throw new DelayedError();
           }
         }
         try {
-          const result = await handler(job);
+          const result = await runInJob(
+            { queuedAt, pickedUpAt: Date.now(), attempt: job.attemptsMade + 1 },
+            () => handler(job),
+          );
           const eventId = (job.data as { eventId?: string }).eventId;
           if (eventId) await markEvent(eventId, result === IGNORED ? 'ignored' : 'done');
           return result === IGNORED ? 'ignored' : (result ?? null);

@@ -180,6 +180,15 @@ export const configSchema = z.object({
   JEV_MODEL: z.string().default('jev-latest'),
   /** Jev is sub-second; past this the message is simply treated as a task. */
   JEV_TIMEOUT_MS: z.coerce.number().int().positive().default(3000),
+  /**
+   * Start waking the container while Jev decides, so a task does not wait for the routing and the
+   * wake one after the other. A message that turns out simple leaves the container idling until
+   * its idle stop (awake time is charged as usual). Default on; `false` wakes only for tasks.
+   */
+  WAKE_WHILE_ROUTING: z
+    .enum(['true', 'false', '1', '0'])
+    .optional()
+    .transform((v) => v !== 'false' && v !== '0'),
   /** Speech-to-text (OpenAI-compatible /audio/transcriptions), via LiteLLM by default. */
   STT_MODEL: z.string().default('whisper'),
 

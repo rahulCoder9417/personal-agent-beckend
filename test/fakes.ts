@@ -112,6 +112,23 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
      * draft comes before the answer's send_message). Off: they come after the agent is done.
      */
     live: false,
+    /** What WakeSandbox says about where its time went (the vm-manager's WakeTimings). */
+    wakeTimings: undefined as
+      | {
+          lockWaitMs: bigint;
+          capacityWaitMs: bigint;
+          evicted: boolean;
+          recreated: boolean;
+          containerStartMs: bigint;
+          bridgeReadyMs: bigint;
+        }
+      | undefined,
+    /** WakeSandbox's `was_stopped` (a cold start). */
+    wasStopped: true,
+    /** Called at each WakeSandbox before it answers (a test can hold the wake there). */
+    onWake: undefined as (() => Promise<void>) | undefined,
+    /** The Bridge's stage-times report on the turn's last event (`timings_json`). */
+    bridgeTimings: '',
   };
   // Agent runtime + the in-container Claude Code sign-in (the code Anthropic shows the user).
   const runtimes = new Map<string, AgentRuntime>();
@@ -155,8 +172,13 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
     async wakeSandbox(req: { userId: string; priority?: number }) {
       wakes.push(req.userId);
       wakePriorities.push({ userId: req.userId, priority: req.priority });
+      if (state.onWake) await state.onWake();
       if (state.wakeError) throw state.wakeError;
-      return { sandbox: sandboxView(req.userId, SandboxState.AWAKE), wasStopped: true };
+      return {
+        sandbox: sandboxView(req.userId, SandboxState.AWAKE),
+        wasStopped: state.wasStopped,
+        ...(state.wakeTimings ? { timings: state.wakeTimings } : {}),
+      };
     },
     async *deliver(req: Delivery) {
       deliveries.push({ ...req });
@@ -165,7 +187,7 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
       const failure = state.turnError;
       state.turnError = null;
       if (failure) {
-        yield { type: DeliverEventType.ERROR, ...failure };
+        yield { type: DeliverEventType.ERROR, ...failure, timingsJson: state.bridgeTimings };
         return;
       }
       type Ev = { type: DeliverEventType; message: string; platformFault: boolean };
@@ -203,7 +225,12 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
         yield { type: DeliverEventType.ERROR, ...late };
         return;
       }
-      yield { type: DeliverEventType.TURN_DONE, message: '', platformFault: false };
+      yield {
+        type: DeliverEventType.TURN_DONE,
+        message: '',
+        platformFault: false,
+        timingsJson: state.bridgeTimings,
+      };
     },
     async stopSandbox(req: { userId: string; force?: boolean; reason?: string }) {
       stops.push({ userId: req.userId, force: req.force ?? false, reason: req.reason ?? '' });

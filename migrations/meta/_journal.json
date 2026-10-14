@@ -155,6 +155,13 @@
       "when": 1791980343151,
       "tag": "0021_connection_checked_at",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1791981654459,
+      "tag": "0022_user_account_status",
+      "breakpoints": true
     }
   ]
 }

@@ -625,6 +625,7 @@ const OUTCOME_ERRORS: Partial<Record<TurnOutcome, string>> = {
   out_of_credits: 'You were out of credits when the job was due to start.',
   simple: 'Connect your own AI first, then give the job again.',
   spam: 'The job was not run.',
+  suspended: 'The account was suspended when the job was due to start.',
 };
 
 /** The last try of a queue job: after it the job is failed for good. */

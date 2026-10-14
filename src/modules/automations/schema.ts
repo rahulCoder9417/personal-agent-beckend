@@ -40,10 +40,11 @@ export const automations = pgTable(
     conversationId: text(),
     enabled: boolean().notNull().default(true),
     /**
-     * Why it is paused. `admin`: by Textcrew support (admin tools); adding credits does not resume
-     * it, the user or an admin can.
+     * Why it is paused. `admin`: by Textcrew support for this automation (admin tools); adding credits
+     * does not resume it, the user or an admin can. `suspended`: an admin suspended the account; it
+     * comes back when the account is unsuspended.
      */
-    pausedReason: text({ enum: ['out_of_credits', 'failures', 'user', 'admin'] }),
+    pausedReason: text({ enum: ['out_of_credits', 'failures', 'user', 'admin', 'suspended'] }),
     failCount: integer().notNull().default(0),
     nextRunAt: timestamp({ withTimezone: true }),
     lastRunAt: timestamp({ withTimezone: true }),

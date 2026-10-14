@@ -7,7 +7,8 @@ import { config } from '../../shared/config.ts';
 import { logger } from '../../shared/logger.ts';
 import { recentConversationMessages, recentSessionMessages } from '../channels/messages.ts';
 import type { Channel } from '../channels/types.ts';
-import { setTurnHooks, type RouteDecision, type TurnInput } from './turn.ts';
+import type { RouteTimes } from './timings.ts';
+import { setTurnHooks, type RouteContext, type RouteDecision, type TurnInput } from './turn.ts';
 
 /** A candidate app for the "which apps" question (the user's connected apps). */
 export interface RoutingApp {
@@ -40,6 +41,12 @@ export const SPAM_MIN_CONFIDENCE = 0.9;
 export const APP_MIN_PROBABILITY = 0.5;
 /** Longer messages are always tasks. */
 const MAX_ROUTABLE_CHARS = 1000;
+/**
+ * A message up to this long gets its quick reply written while Jev decides (it is used only if Jev
+ * says "simple"). Small talk is short; a longer message is rarely simple, so its quick reply would
+ * mostly be thrown away.
+ */
+export const QUICK_REPLY_EARLY_MAX_CHARS = 200;
 const CONTEXT_MESSAGES = 6;
 const CONTEXT_CHARS = 500;
 /** The cheap model says this when it shouldn't answer on its own. */
@@ -124,7 +131,12 @@ export function setJevClient(fake: JevClient | undefined): void {
 // --- cheap-model reply (LiteLLM, OpenAI-compatible chat completions) --------------------------
 
 export type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
-export type ChatCompleter = (req: { userId: string; messages: ChatMessage[] }) => Promise<string>;
+/** `signal`: aborted when the reply is no longer wanted (Jev said the message is a task). */
+export type ChatCompleter = (req: {
+  userId: string;
+  messages: ChatMessage[];
+  signal?: AbortSignal;
+}) => Promise<string>;
 
 type KeyProvider = (userId: string) => Promise<string | null>;
 let userKey: KeyProvider = async () => null;
@@ -137,7 +149,7 @@ export function setRoutingKeyProvider(fn: KeyProvider): void {
   userKey = fn;
 }
 
-const litellmChat: ChatCompleter = async ({ userId, messages }) => {
+const litellmChat: ChatCompleter = async ({ userId, messages, signal }) => {
   const c = config();
   const key = (await userKey(userId)) || c.LITELLM_MASTER_KEY;
   const res = await fetch(`${c.LITELLM_URL}/v1/chat/completions`, {
@@ -152,7 +164,9 @@ const litellmChat: ChatCompleter = async ({ userId, messages }) => {
       max_tokens: 600,
       user: userId,
     }),
-    signal: AbortSignal.timeout(30_000),
+    signal: signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(30_000)])
+      : AbortSignal.timeout(30_000),
   });
   if (!res.ok) throw new Error(`litellm chat failed: ${res.status}`);
   const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
@@ -181,7 +195,7 @@ const REPLY_STYLE = {
 export function quickReplyPrompt(channel: Channel): string {
   const where = channel === 'web' ? 'a web chat' : 'a chat app';
   const style = channel === 'web' ? REPLY_STYLE.web : REPLY_STYLE.chatApp;
-  return `You are a friendly personal assistant replying in ${where}. Answer in a few short sentences. ${style} If answering needs tools, the web, current information, the user's accounts, files, reminders, memory of the user, or anything you are unsure about, reply with exactly ${ESCALATE} and nothing else.`;
+  return `You are a friendly personal assistant replying in ${where}. Answer in a few short sentences. ${style} If answering needs tools, the web, current information, the user's accounts, files, reminders, memory of the user, or anything you are unsure about, reply with exactly ${ESCALATE} and nothing else. Do the same when the message answers or continues something said earlier in the chat (a yes, a no, a choice, a follow-up to the assistant's question or work).`;
 }
 
 // --- apps -----------------------------------------------------------------------------------
@@ -197,6 +211,38 @@ export function setRoutingAppsProvider(fn: AppsProvider): void {
 // --- the route hook -------------------------------------------------------------------------
 
 const TASK: RouteDecision = { kind: 'task' };
+
+/** A quick reply in progress: its answer, and a way to drop it when it is not wanted. */
+interface QuickReply {
+  result: Promise<string>;
+  /** Time from the start until the model answered (set when it has). */
+  ms: () => number | undefined;
+  cancel: () => void;
+}
+
+function startQuickReply(
+  input: TurnInput,
+  history: Array<{ role: 'user' | 'assistant'; text: string }>,
+  text: string,
+): QuickReply {
+  const abort = new AbortController();
+  const started = Date.now();
+  let ms: number | undefined;
+  const result = chat({
+    userId: input.userId,
+    messages: [
+      { role: 'system', content: quickReplyPrompt(input.channel) },
+      ...history.map((m) => ({ role: m.role, content: m.text })),
+      { role: 'user', content: text },
+    ],
+    signal: abort.signal,
+  }).finally(() => {
+    ms = Date.now() - started;
+  });
+  // A reply nobody waits for (Jev said task, or routing failed) must not end as an unhandled error.
+  result.catch(() => {});
+  return { result, ms: () => ms, cancel: () => abort.abort() };
+}
 
 function taskWithApps(_input: TurnInput, apps: string[]): RouteDecision {
   // The likely apps reach the agent as a hint (Deliver.metadata_json.apps).
@@ -217,8 +263,17 @@ async function conversation(input: TurnInput) {
     }));
 }
 
-/** The `route` turn hook: simple / task / spam. Any failure → task. */
-export async function routeTurn(input: TurnInput): Promise<RouteDecision> {
+/**
+ * The `route` turn hook: simple / task / spam. Any failure → task.
+ *
+ * What runs at the same time, so a quick answer does not wait for each step in turn: once the
+ * message is one Jev will judge, the container starts waking (`ctx.wakeEarly`), and a short
+ * message's quick reply is written while Jev decides. The quick reply is used only when Jev says
+ * "simple" (and the model did not say ESCALATE); otherwise it is dropped and the request to the
+ * model is aborted. A woken container that turns out not to be needed just idles until its idle
+ * stop.
+ */
+export async function routeTurn(input: TurnInput, ctx: RouteContext = {}): Promise<RouteDecision> {
   // Only fresh user messages are routed; approval answers, automations and app events are tasks.
   if (input.kind !== 'message' || input.attachments?.length) return TASK;
   const text = input.text.trim();
@@ -226,30 +281,44 @@ export async function routeTurn(input: TurnInput): Promise<RouteDecision> {
   const jev = jevOverride ?? sdkClient();
   if (!jev) return TASK;
   const log = logger().child({ userId: input.userId, deliveryId: input.deliveryId });
+  const times: RouteTimes = ctx.times ?? {};
+  ctx.wakeEarly?.();
+  let quick: QuickReply | undefined;
   try {
-    const history = await conversation(input);
-    const apps = await appsFor(input.userId);
+    const reading = Date.now();
+    const [history, apps] = await Promise.all([conversation(input), appsFor(input.userId)]);
+    times.contextMs = Date.now() - reading;
+    if (text.length <= QUICK_REPLY_EARLY_MAX_CHARS) {
+      quick = startQuickReply(input, history, text);
+      times.quickReplyEarly = true;
+    }
+    const asking = Date.now();
     const decision = await jev.decide({ state: { conversation: history, message: text }, apps });
+    times.jevMs = Date.now() - asking;
     if (decision.route === 'spam' && decision.confidence >= SPAM_MIN_CONFIDENCE) {
+      quick?.cancel();
       log.info('routing: spam, ignored');
       return { kind: 'spam' };
     }
-    if (decision.route !== 'simple' || decision.confidence < SIMPLE_MIN_CONFIDENCE)
+    if (decision.route !== 'simple' || decision.confidence < SIMPLE_MIN_CONFIDENCE) {
+      quick?.cancel();
       return taskWithApps(input, decision.apps);
+    }
 
-    const reply = await chat({
-      userId: input.userId,
-      messages: [
-        { role: 'system', content: quickReplyPrompt(input.channel) },
-        ...history.map((m) => ({ role: m.role, content: m.text })),
-        { role: 'user', content: text },
-      ],
-    });
-    if (!reply || reply.toUpperCase().startsWith(ESCALATE))
+    quick ??= startQuickReply(input, history, text);
+    const waiting = Date.now();
+    const reply = await quick.result;
+    times.quickReplyWaitMs = Date.now() - waiting;
+    times.quickReplyMs = quick.ms();
+    if (!reply || reply.toUpperCase().startsWith(ESCALATE)) {
+      times.escalated = true;
       return taskWithApps(input, decision.apps);
+    }
     log.info('routing: simple, answered without the agent');
     return { kind: 'simple', reply };
   } catch (err) {
+    quick?.cancel();
+    times.failed = true;
     log.warn({ err: (err as Error).message }, 'routing failed; treating the message as a task');
     return TASK;
   }

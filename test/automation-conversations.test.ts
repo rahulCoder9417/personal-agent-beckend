@@ -265,7 +265,12 @@ describe('the Automations chat: where every run answers', () => {
       code: 'conflict',
       message: "The Automations chat can't be deleted",
     });
-    expect(await findAutomationsChat(user.id)).toEqual(chat);
+    // (Not the whole row: the run's reply may still be moving its `lastMessageAt` on.)
+    expect(await findAutomationsChat(user.id)).toMatchObject({
+      id: chat.id,
+      kind: 'automations',
+      title: 'Automations',
+    });
     expect(await textsIn(user.id, chat.id)).toEqual(['ran: Kept']);
     const logged = await db()
       .select()

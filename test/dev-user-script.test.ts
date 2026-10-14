@@ -644,7 +644,8 @@ describe('dev-user script: approvals, pull-request review, memory, the browser',
     );
     const stageNames = out
       .filter(
-        (l) => l.startsWith('  ') && /^\s{2}\S/.test(l) && !/^  (answer|no answer|biggest)/.test(l),
+        (l) =>
+          l.startsWith('  ') && /^\s{2}\S/.test(l) && !/^ {2}(answer|no answer|biggest)/.test(l),
       )
       .map((l) => l.trim().split(/\s{2,}/)[0]);
     for (const name of [

@@ -29,6 +29,9 @@ export const unauthorized = (message = 'Missing or invalid session') =>
   new AppError(401, 'unauthorized', message);
 export const forbidden = (message = 'Not allowed') => new AppError(403, 'forbidden', message);
 export const notFound = (message = 'Not found') => new AppError(404, 'not_found', message);
+/** An admin suspended the account: every signed-in call answers this until it is lifted. */
+export const accountSuspended = () =>
+  new AppError(403, 'account_suspended', 'This account is suspended');
 export const conflict = (message: string) => new AppError(409, 'conflict', message);
 export const unavailable = (message: string) => new AppError(503, 'unavailable', message);
 export const planLimit = (message: string, details?: Record<string, unknown>) =>

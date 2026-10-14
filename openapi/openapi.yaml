@@ -20,6 +20,9 @@ info:
     - Lists use cursor pagination (`cursor`, `limit`); responses carry `nextCursor` (null at the end).
     - Money is in US cents; credits are integers (1 credit = $0.01 of price).
     - Errors always use the `Error` schema.
+    - Any signed-in route can answer 403 `account_suspended` while an admin has suspended the
+      account (see `POST /v1/admin/users/{userId}/suspend`), and 429 `rate_limited` from the
+      per-address limit. Neither is repeated under each route.
 servers:
   - url: https://api.example.com
     description: Production (replace with the real domain)
@@ -2904,6 +2907,282 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  # ---------------------------------------------------------------- admin: accounts (role, suspend, delete, sign out)
+  # Every call here needs a `reason` and writes one activity-log row for the user with the admin's
+  # id and that reason (the reason stays in the row's details; the user's own activity list shows
+  # only a neutral summary). An admin can't act on their own account this way, and an admin must
+  # lose the admin role before they can be suspended or deleted.
+  /v1/admin/users/{userId}/role:
+    put:
+      operationId: adminSetUserRole
+      tags: [admin]
+      summary: Make a user an admin, or take the admin role away (admin)
+      description: |
+        The role lives in Clerk, in the user's public metadata (`role`). It is set there through
+        Clerk's Backend API first, then on our own row at once, so it applies from the user's next
+        request. Clerk's `user.updated` webhook that follows carries the same role. Setting the role
+        a user already has changes nothing and writes nothing. An admin can't remove their own admin
+        role (409). If Clerk can't be reached or isn't set up, nothing changes (503).
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role, reason]
+              additionalProperties: false
+              properties:
+                role: { type: string, enum: [user, admin] }
+                reason: { type: string, minLength: 1, maxLength: 500, pattern: "\\S" }
+      responses:
+        "200":
+          description: The account as it is now
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account, changed]
+                properties:
+                  account:
+                    type: object
+                    required: [userId, role, status, suspendedAt]
+                    properties:
+                      userId: { type: string }
+                      role: { type: string, enum: [user, admin] }
+                      status: { type: string, enum: [active, suspended] }
+                      suspendedAt: { type: [string, "null"], format: date-time }
+                  changed: { type: boolean, description: False when the user already had this role. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503":
+          description: Clerk could not be reached or is not set up (`CLERK_SECRET_KEY`). Nothing changed. Retry
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/admin/users/{userId}/suspend:
+    post:
+      operationId: adminSuspendUser
+      tags: [admin]
+      summary: Suspend an account (admin)
+      description: |
+        Puts the account on hold until it is unsuspended:
+        - every signed-in call of the user answers 403 `account_suspended`, the live stream too;
+        - the user's container may no longer call the platform's tools or the git gateway;
+        - messages from the user's linked chats are saved but not answered; each chat gets at most
+          one short notice a day saying the account is suspended;
+        - the user's automations that are on, or paused for lack of credits, are paused with the
+          reason `admin`;
+        - the container is stopped politely through the vm-manager and is not woken again. A
+          container in the middle of a turn is not stopped: the vm-manager refuses, the turn
+          finishes, and the idle stop puts it to sleep 3 minutes later (`containerStopped: false`).
+        Suspending a suspended account again changes nothing and writes no second log row, but it
+        does try the pause and the stop again. Refused for your own account and for an admin (409).
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              additionalProperties: false
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500, pattern: "\\S" }
+      responses:
+        "200":
+          description: Suspended
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account, changed, automationsPaused, containerStopped]
+                properties:
+                  account:
+                    type: object
+                    required: [userId, role, status, suspendedAt]
+                    properties:
+                      userId: { type: string }
+                      role: { type: string, enum: [user, admin] }
+                      status: { type: string, enum: [active, suspended] }
+                      suspendedAt: { type: [string, "null"], format: date-time }
+                  changed: { type: boolean, description: False when the account was suspended already. }
+                  automationsPaused: { type: integer, description: Automations paused by this call. }
+                  containerStopped:
+                    type: boolean
+                    description: |
+                      True when the vm-manager stopped the container now (or there was none to stop).
+                      False when it refused (a turn is running): the idle stop does it later.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/admin/users/{userId}/unsuspend:
+    post:
+      operationId: adminUnsuspendUser
+      tags: [admin]
+      summary: Lift a suspension (admin)
+      description: |
+        The account works again at once. The automations paused by the suspension come back: on,
+        if the user has credits; otherwise paused for lack of credits, so they come back with the
+        next credits like any other. The container wakes with the user's next message. Unsuspending
+        an active account changes nothing and writes no log row.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              additionalProperties: false
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500, pattern: "\\S" }
+      responses:
+        "200":
+          description: Active again
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account, changed, automationsResumed, automationsWaitingForCredits]
+                properties:
+                  account:
+                    type: object
+                    required: [userId, role, status, suspendedAt]
+                    properties:
+                      userId: { type: string }
+                      role: { type: string, enum: [user, admin] }
+                      status: { type: string, enum: [active, suspended] }
+                      suspendedAt: { type: [string, "null"], format: date-time }
+                  changed: { type: boolean, description: False when the account was active already. }
+                  automationsResumed: { type: integer }
+                  automationsWaitingForCredits:
+                    type: integer
+                    description: Paused for lack of credits instead, because the balance is zero.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/users/{userId}/sessions/revoke:
+    post:
+      operationId: adminRevokeUserSessions
+      tags: [admin]
+      summary: Sign a user out everywhere (admin)
+      description: |
+        Ends every active Clerk session of the user, through Clerk's Backend API. A session token
+        the browser already holds is checked without asking Clerk, so it keeps working until it
+        expires (Clerk's tokens last about a minute); after that the user must sign in again.
+        Signing out does not suspend the account.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              additionalProperties: false
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500, pattern: "\\S" }
+      responses:
+        "200":
+          description: Signed out
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [revoked]
+                properties:
+                  revoked: { type: integer, description: Sessions ended by this call. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503":
+          description: Clerk could not be reached or is not set up (`CLERK_SECRET_KEY`). Retry
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/admin/users/{userId}:
+    delete:
+      operationId: adminDeleteUser
+      tags: [admin]
+      summary: Delete an account (admin)
+      description: |
+        The same deletion a user's own goes through. The user is deleted in Clerk first (through
+        Clerk's Backend API); then the account is marked deleted at once and the deletion job runs:
+        the container and the user's folder (the vm-manager's `DeleteSandbox`), the LiteLLM key,
+        app connections, automations, linked chats, conversations, messages, files and memories,
+        and a renewing subscription is set to not renew. Clerk's `user.deleted` webhook that
+        follows finds the account already deleted and adds nothing.
+
+        `confirmEmail` must be the user's email (letter case and spaces around it don't matter),
+        else 400 and nothing happens. Refused for your own account and for an admin (409). The log
+        row keeps the admin's id, the deleted user's id and the reason; never the email or name.
+        An account already deleted answers 404.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason, confirmEmail]
+              additionalProperties: false
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500, pattern: "\\S" }
+                confirmEmail: { type: string, maxLength: 320 }
+      responses:
+        "202":
+          description: Deleted in Clerk and on our side; the deletion job removes the rest
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [userId, status]
+                properties:
+                  userId: { type: string }
+                  status: { type: string, const: deleting }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503":
+          description: Clerk could not be reached or is not set up (`CLERK_SECRET_KEY`). Nothing changed. Retry
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   # ---------------------------------------------------------------- webhooks (called by external services)
   /webhooks/clerk:
     post:
@@ -3092,7 +3371,9 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
     Forbidden:
-      description: Not allowed (e.g. not an admin)
+      description: |
+        Not allowed: `forbidden` (e.g. not an admin), or `account_suspended` (an admin suspended
+        the account; every signed-in call answers this until it is unsuspended)
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -3150,9 +3431,9 @@ components:
           properties:
             code:
               type: string
-              examples: [invalid_request, unauthorized, forbidden, not_found, rate_limited,
-                         out_of_credits, plan_limit, channel_disabled, invalid_or_expired_code,
-                         conflict, unavailable, internal]
+              examples: [invalid_request, unauthorized, forbidden, account_suspended, not_found,
+                         rate_limited, out_of_credits, plan_limit, channel_disabled,
+                         invalid_or_expired_code, conflict, unavailable, internal]
             message: { type: string }
             details: { type: object, additionalProperties: true }
 
@@ -3478,8 +3759,8 @@ components:
         enabled: { type: boolean }
         pausedReason:
           type: [string, "null"]
-          enum: [out_of_credits, failures, user, admin, null]
-          description: "`admin`: paused by Textcrew support. Adding credits does not resume it; the user can."
+          enum: [out_of_credits, failures, user, admin, suspended, null]
+          description: "`admin`: paused by Textcrew support. Adding credits does not resume it; the user can. `suspended`: paused while an admin suspended the account; it comes back when the account is unsuspended."
         nextRunAt: { type: [string, "null"], format: date-time }
         lastRunAt: { type: [string, "null"], format: date-time }
         createdAt: { type: string, format: date-time }
@@ -3524,8 +3805,8 @@ components:
           description: False while paused. A paused repo gets no reviews and gives no standing approval.
         pausedReason:
           type: [string, "null"]
-          enum: [out_of_credits, failures, user, admin, null]
-          description: "`admin`: paused by Textcrew support. Adding credits does not resume it; the user can."
+          enum: [out_of_credits, failures, user, admin, suspended, null]
+          description: "`admin`: paused by Textcrew support. Adding credits does not resume it; the user can. `suspended`: paused while an admin suspended the account; it comes back when the account is unsuspended."
         channel:
           $ref: "#/components/schemas/ChannelType"
           description: |
@@ -4075,7 +4356,7 @@ components:
           examples: [acme/website]
         timezone: { type: [string, "null"] }
         enabled: { type: boolean }
-        pausedReason: { type: [string, "null"], enum: [out_of_credits, failures, user, admin, null] }
+        pausedReason: { type: [string, "null"], enum: [out_of_credits, failures, user, admin, suspended, null] }
         failCount: { type: integer, description: Failed runs in a row. Three pause it. }
         lastRunAt: { type: [string, "null"], format: date-time }
         nextRunAt: { type: [string, "null"], format: date-time }

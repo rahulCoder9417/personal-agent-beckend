@@ -350,7 +350,8 @@ export async function deleteUserChannelData(userId: string): Promise<void> {
 
 /**
  * Chat history retention: messages older than a year go, and with them the conversations that
- * are not active and have nothing left. Returns the number of messages removed.
+ * are not active and have nothing left (never the Automations chat). Returns the number of
+ * messages removed.
  */
 export async function cleanupMessages(olderThanDays = 365): Promise<number> {
   const before = new Date(Date.now() - olderThanDays * 86400_000);

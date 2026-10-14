@@ -7,6 +7,7 @@ import type { Job, Worker } from 'bullmq';
 import { and, eq, isNotNull } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DeliverKind } from '../proto-gen/vm/v1/vm_pb.ts';
+import { auditLog } from '../src/modules/admin/schema.ts';
 import { channelLinks } from '../src/modules/auth/schema.ts';
 import {
   createAutomation,
@@ -34,6 +35,7 @@ import { conversations, messages } from '../src/modules/channels/schema.ts';
 import { requeuePendingEvents } from '../src/modules/events/intake.ts';
 import { closeQueues, queue } from '../src/modules/events/queues.ts';
 import { startNewWebChat } from '../src/modules/orchestrator/chats.ts';
+import { handleDeleteUser } from '../src/modules/orchestrator/lifecycle.ts';
 import { chatRecap } from '../src/modules/orchestrator/turn-context.ts';
 import { config } from '../src/shared/config.ts';
 import { db } from '../src/shared/db/client.ts';
@@ -243,7 +245,45 @@ describe('the Automations chat: where every run answers', () => {
     );
   });
 
-  it('deleted by the user: the next run starts a new one, with a number never used before', async () => {
+  it('cannot be deleted (409): it stays with its runs, and the next run answers there', async () => {
+    const user = await chatUser({ plan: 'pro' });
+    const a = await createAutomation({
+      userId: user.id,
+      title: 'Kept',
+      instruction: 'x',
+      sessionKey: 'web',
+      cron: '0 9 * * *',
+    });
+    await fire(a);
+    const chat = (await findAutomationsChat(user.id))!;
+    const refused = await expectContract<{ error: { code: string; message: string } }>(
+      'deleteConversation',
+      await call(`/v1/conversations/${chat.id}`, { method: 'DELETE', token: user.token }),
+      409,
+    );
+    expect(refused.error).toEqual({
+      code: 'conflict',
+      message: "The Automations chat can't be deleted",
+    });
+    expect(await findAutomationsChat(user.id)).toEqual(chat);
+    expect(await textsIn(user.id, chat.id)).toEqual(['ran: Kept']);
+    const logged = await db()
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.userId, user.id), eq(auditLog.action, 'conversation_deleted')));
+    expect(logged).toEqual([]);
+    // Not this user's: 404, as for any conversation.
+    const other = await chatUser();
+    await expectContract(
+      'deleteConversation',
+      await call(`/v1/conversations/${chat.id}`, { method: 'DELETE', token: other.token }),
+      404,
+    );
+    expect((await fire(a, 1)).conversationId).toBe(chat.id);
+    expect(await textsIn(user.id, chat.id)).toEqual(['ran: Kept', 'ran: Kept']);
+  });
+
+  it('missing all the same: the next run starts a new one, with a number never used before', async () => {
     const user = await chatUser({ plan: 'pro' });
     const a = await createAutomation({
       userId: user.id,
@@ -254,12 +294,9 @@ describe('the Automations chat: where every run answers', () => {
     });
     await fire(a);
     const first = (await findAutomationsChat(user.id))!;
-    await expectContract(
-      'deleteConversation',
-      await call(`/v1/conversations/${first.id}`, { method: 'DELETE', token: user.token }),
-      204,
-    );
-    expect(await findAutomationsChat(user.id)).toBeUndefined();
+    // The api never deletes it; the safety net is for a row gone some other way.
+    await db().delete(messages).where(eq(messages.conversationId, first.id));
+    await db().delete(conversations).where(eq(conversations.id, first.id));
     // Its messages went with it, so the next reply is the first one found again.
     const reply = await fire(a);
     const again = (await findAutomationsChat(user.id))!;
@@ -269,6 +306,24 @@ describe('the Automations chat: where every run answers', () => {
     expect(reply.conversationId).toBe(again.id);
     const turns = automationTurns().filter((d) => d.userId === user.id);
     expect(turns.map(epochOf)).toEqual([first.epoch, again.epoch]);
+  });
+
+  it('deleting the account removes it with everything else', async () => {
+    const user = await chatUser({ plan: 'pro' });
+    await say(user, 'hlo');
+    const a = await createAutomation({
+      userId: user.id,
+      title: 'Bye',
+      instruction: 'x',
+      sessionKey: 'web',
+      cron: '0 9 * * *',
+    });
+    await fire(a);
+    expect(await findAutomationsChat(user.id)).toBeDefined();
+    await handleDeleteUser({ data: { userId: user.id } } as Job);
+    expect(await findAutomationsChat(user.id)).toBeUndefined();
+    expect(await conversationsOf(user.id)).toEqual([]);
+    expect(await db().select().from(messages).where(eq(messages.userId, user.id))).toEqual([]);
   });
 
   it('two runs at once start one Automations chat between them', async () => {

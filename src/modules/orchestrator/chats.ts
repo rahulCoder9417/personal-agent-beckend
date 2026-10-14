@@ -1,5 +1,5 @@
 // What a user can do with their conversations: start a new one ("New chat"), open an earlier web
-// conversation, rename one, delete one. A chat is a session key (`web`, `telegram:<chat id>`); a
+// conversation, rename one, delete one (never the Automations chat). A chat is a session key (`web`, `telegram:<chat id>`); a
 // conversation is one stretch of it, and the channels module keeps them (channels/conversations.ts).
 // Each conversation has a number in its chat (its epoch). Every delivery carries the number of the
 // conversation it belongs to, and the Bridge keeps one engine conversation per number, so each has
@@ -144,11 +144,16 @@ export async function renameUserConversation(
 
 /**
  * The user deletes a conversation: its messages and their files go with it, and the activity log
- * gets `conversation_deleted` with the channel (no title, no text). 404 if not this user's.
- * The Bridge is not told: the engine's own record of that conversation stays in the container,
- * unused, because the conversation's number is never given out again.
+ * gets `conversation_deleted` with the channel (no title, no text). 404 if not this user's; 409
+ * for the Automations chat, which stays for as long as the account does (every run answers
+ * there). The Bridge is not told: the engine's own record of that conversation stays in the
+ * container, unused, because the conversation's number is never given out again.
  */
 export async function deleteUserConversation(userId: string, id: string): Promise<void> {
+  // A conversation's kind never changes, so this holds until the delete below.
+  const found = await getConversation(userId, id);
+  if (!found) throw notFound(NOT_FOUND);
+  if (isAutomationsChat(found)) throw conflict("The Automations chat can't be deleted");
   const result = await deleteConversation(userId, id, {
     onDeleted: (tx, c) =>
       audit(

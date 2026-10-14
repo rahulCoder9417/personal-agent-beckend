@@ -12,6 +12,7 @@ import { channelLinks } from '../src/modules/auth/schema.ts';
 import {
   activateConversation,
   activeConversation,
+  automationsChat,
   NEW_CHAT_TITLE,
   titleFromText,
   toApiConversation,
@@ -554,11 +555,12 @@ describe('the live stream', () => {
 });
 
 describe('chat history retention', () => {
-  it('a conversation left with no messages goes with them; the active one and newer ones stay', async () => {
+  it('a conversation left with no messages goes with them; the active one, newer ones and the Automations chat stay', async () => {
     const user = await chatUser();
     const old = await say(user, 'long ago');
     const second = await startNewWebChat(user.id);
     const third = await startNewWebChat(user.id);
+    const automations = await automationsChat(user.id);
     const twoYears = new Date(Date.now() - 2 * 365 * 86400_000);
     const age = (id: string) =>
       db().update(conversations).set({ lastMessageAt: twoYears }).where(eq(conversations.id, id));
@@ -568,10 +570,16 @@ describe('chat history retention', () => {
       .where(eq(messages.conversationId, old.sent.conversationId));
     await age(old.sent.conversationId);
     await age(third.id);
+    await age(automations.id);
     expect(await cleanupMessages()).toBe(2);
     // The first one's messages are gone and it is old: removed. The second is empty but recent;
-    // the third is old and empty but it is the active one.
-    expect((await conversationsOf(user.id)).map((c) => c.id)).toEqual([second.id, third.id]);
+    // the third is old and empty but it is the active one. The Automations chat is old, empty and
+    // never active, but it stays for as long as the account does.
+    expect((await conversationsOf(user.id)).map((c) => c.id)).toEqual([
+      second.id,
+      third.id,
+      automations.id,
+    ]);
     expect((await activeConversation(user.id, 'web')).id).toBe(third.id);
   });
 });

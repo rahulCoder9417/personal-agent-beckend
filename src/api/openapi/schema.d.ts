@@ -1222,6 +1222,137 @@ export interface paths {
         patch: operations["adminUpdateWaitlistEntry"];
         trace?: never;
     };
+    "/v1/admin/users/{userId}/role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Make a user an admin, or take the admin role away (admin)
+         * @description The role lives in Clerk, in the user's public metadata (`role`). It is set there through
+         *     Clerk's Backend API first, then on our own row at once, so it applies from the user's next
+         *     request. Clerk's `user.updated` webhook that follows carries the same role. Setting the role
+         *     a user already has changes nothing and writes nothing. An admin can't remove their own admin
+         *     role (409). If Clerk can't be reached or isn't set up, nothing changes (503).
+         */
+        put: operations["adminSetUserRole"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/users/{userId}/suspend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Suspend an account (admin)
+         * @description Puts the account on hold until it is unsuspended:
+         *     - every signed-in call of the user answers 403 `account_suspended`, the live stream too;
+         *     - the user's container may no longer call the platform's tools or the git gateway;
+         *     - messages from the user's linked chats are saved but not answered; each chat gets at most
+         *       one short notice a day saying the account is suspended;
+         *     - the user's automations that are on, or paused for lack of credits, are paused with the
+         *       reason `admin`;
+         *     - the container is stopped politely through the vm-manager and is not woken again. A
+         *       container in the middle of a turn is not stopped: the vm-manager refuses, the turn
+         *       finishes, and the idle stop puts it to sleep 3 minutes later (`containerStopped: false`).
+         *     Suspending a suspended account again changes nothing and writes no second log row, but it
+         *     does try the pause and the stop again. Refused for your own account and for an admin (409).
+         */
+        post: operations["adminSuspendUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/users/{userId}/unsuspend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Lift a suspension (admin)
+         * @description The account works again at once. The automations paused by the suspension come back: on,
+         *     if the user has credits; otherwise paused for lack of credits, so they come back with the
+         *     next credits like any other. The container wakes with the user's next message. Unsuspending
+         *     an active account changes nothing and writes no log row.
+         */
+        post: operations["adminUnsuspendUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/users/{userId}/sessions/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign a user out everywhere (admin)
+         * @description Ends every active Clerk session of the user, through Clerk's Backend API. A session token
+         *     the browser already holds is checked without asking Clerk, so it keeps working until it
+         *     expires (Clerk's tokens last about a minute); after that the user must sign in again.
+         *     Signing out does not suspend the account.
+         */
+        post: operations["adminRevokeUserSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/users/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete an account (admin)
+         * @description The same deletion a user's own goes through. The user is deleted in Clerk first (through
+         *     Clerk's Backend API); then the account is marked deleted at once and the deletion job runs:
+         *     the container and the user's folder (the vm-manager's `DeleteSandbox`), the LiteLLM key,
+         *     app connections, automations, linked chats, conversations, messages, files and memories,
+         *     and a renewing subscription is set to not renew. Clerk's `user.deleted` webhook that
+         *     follows finds the account already deleted and adds nothing.
+         *
+         *     `confirmEmail` must be the user's email (letter case and spaces around it don't matter),
+         *     else 400 and nothing happens. Refused for your own account and for an admin (409). The log
+         *     row keeps the admin's id, the deleted user's id and the reason; never the email or name.
+         *     An account already deleted answers 404.
+         */
+        delete: operations["adminDeleteUser"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/webhooks/clerk": {
         parameters: {
             query?: never;
@@ -1351,6 +1482,7 @@ export interface components {
                  * @example invalid_request
                  * @example unauthorized
                  * @example forbidden
+                 * @example account_suspended
                  * @example not_found
                  * @example rate_limited
                  * @example out_of_credits
@@ -1677,8 +1809,11 @@ export interface components {
              */
             preset?: "pr_review" | null;
             enabled: boolean;
-            /** @enum {string|null} */
-            pausedReason?: "out_of_credits" | "failures" | "user" | null;
+            /**
+             * @description `admin`: paused while an admin suspended the account; it comes back when the account is unsuspended.
+             * @enum {string|null}
+             */
+            pausedReason?: "out_of_credits" | "failures" | "user" | "admin" | null;
             /** Format: date-time */
             nextRunAt?: string | null;
             /** Format: date-time */
@@ -1724,8 +1859,11 @@ export interface components {
             repo: string;
             /** @description False while paused. A paused repo gets no reviews and gives no standing approval. */
             enabled: boolean;
-            /** @enum {string|null} */
-            pausedReason: "out_of_credits" | "failures" | "user" | null;
+            /**
+             * @description `admin`: paused while an admin suspended the account; it comes back when the account is unsuspended.
+             * @enum {string|null}
+             */
+            pausedReason: "out_of_credits" | "failures" | "user" | "admin" | null;
             /**
              * @description `telegram`: a copy of each verdict is also sent to the user's Telegram chat. The
              *     verdict itself is always in the Automations chat.
@@ -2343,7 +2481,10 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description Not allowed (e.g. not an admin) */
+        /**
+         * @description Not allowed: `forbidden` (e.g. not an admin), or `account_suspended` (an admin suspended
+         *     the account; every signed-in call answers this until it is unsuspended)
+         */
         Forbidden: {
             headers: {
                 [name: string]: unknown;
@@ -4415,6 +4556,252 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    adminSetUserRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    role: "user" | "admin";
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The account as it is now */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        account: {
+                            userId: string;
+                            /** @enum {string} */
+                            role: "user" | "admin";
+                            /** @enum {string} */
+                            status: "active" | "suspended";
+                            /** Format: date-time */
+                            suspendedAt: string | null;
+                        };
+                        /** @description False when the user already had this role. */
+                        changed: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            /** @description Clerk could not be reached or is not set up (`CLERK_SECRET_KEY`). Nothing changed. Retry */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    adminSuspendUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Suspended */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        account: {
+                            userId: string;
+                            /** @enum {string} */
+                            role: "user" | "admin";
+                            /** @enum {string} */
+                            status: "active" | "suspended";
+                            /** Format: date-time */
+                            suspendedAt: string | null;
+                        };
+                        /** @description False when the account was suspended already. */
+                        changed: boolean;
+                        /** @description Automations paused by this call. */
+                        automationsPaused: number;
+                        /**
+                         * @description True when the vm-manager stopped the container now (or there was none to stop).
+                         *     False when it refused (a turn is running): the idle stop does it later.
+                         */
+                        containerStopped: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    adminUnsuspendUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Active again */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        account: {
+                            userId: string;
+                            /** @enum {string} */
+                            role: "user" | "admin";
+                            /** @enum {string} */
+                            status: "active" | "suspended";
+                            /** Format: date-time */
+                            suspendedAt: string | null;
+                        };
+                        /** @description False when the account was active already. */
+                        changed: boolean;
+                        automationsResumed: number;
+                        /** @description Paused for lack of credits instead, because the balance is zero. */
+                        automationsWaitingForCredits: number;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    adminRevokeUserSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Signed out */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Sessions ended by this call. */
+                        revoked: number;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description Clerk could not be reached or is not set up (`CLERK_SECRET_KEY`). Retry */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    adminDeleteUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                    confirmEmail: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Deleted in Clerk and on our side; the deletion job removes the rest */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        userId: string;
+                        /** @constant */
+                        status: "deleting";
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            /** @description Clerk could not be reached or is not set up (`CLERK_SECRET_KEY`). Nothing changed. Retry */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     webhookClerk: {

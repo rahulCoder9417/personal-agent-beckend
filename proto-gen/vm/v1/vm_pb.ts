@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file vm/v1/vm.proto.
  */
 export const file_vm_v1_vm: GenFile = /*@__PURE__*/
-  fileDesc("Cg52bS92MS92bS5wcm90bxIFdm0udjEiZQoNVXNlck1jcFNlcnZlchIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEgsKA3VybBgDIAEoCRIYChBhdXRoX2hlYWRlcl9uYW1lGAQgASgJEhMKC2F1dGhfc2VjcmV0GAUgASgJIo0CCgdTYW5kYm94Eg8KB3VzZXJfaWQYASABKAkSFAoMY29udGFpbmVyX2lkGAIgASgJEhUKDWltYWdlX3ZlcnNpb24YAyABKAkSIgoFc3RhdGUYBCABKA4yEy52bS52MS5TYW5kYm94U3RhdGUSHgoWbGFzdF9hY3RpdmVfYXRfdW5peF9tcxgFIAEoAxIUCgxtZW1vcnlfYnl0ZXMYBiABKAMSEQoJYWxsb3dsaXN0GAcgAygJEiQKB3J1bnRpbWUYCCABKA4yEy52bS52MS5BZ2VudFJ1bnRpbWUSGAoQY2xhdWRlX2Nvbm5lY3RlZBgJIAEoCBIXCg9icm93c2VyX2VuYWJsZWQYCiABKAgi7gEKFENyZWF0ZVNhbmRib3hSZXF1ZXN0Eg8KB3VzZXJfaWQYASABKAkSEwoLbGl0ZWxsbV9rZXkYAiABKAkSIQoIcHJpb3JpdHkYAyABKA4yDy52bS52MS5Qcmlvcml0eRIRCglhbGxvd2xpc3QYBCADKAkSKQoLbWNwX3NlcnZlcnMYBSADKAsyFC52bS52MS5Vc2VyTWNwU2VydmVyEhAKCHRpbWV6b25lGAYgASgJEiQKB3J1bnRpbWUYByABKA4yEy52bS52MS5BZ2VudFJ1bnRpbWUSFwoPYnJvd3Nlcl9lbmFibGVkGAggASgIIlAKFUNyZWF0ZVNhbmRib3hSZXNwb25zZRIfCgdzYW5kYm94GAEgASgLMg4udm0udjEuU2FuZGJveBIWCg5tY3BfdG9rZW5faGFzaBgCIAEoCSJIChJXYWtlU2FuZGJveFJlcXVlc3QSDwoHdXNlcl9pZBgBIAEoCRIhCghwcmlvcml0eRgCIAEoDjIPLnZtLnYxLlByaW9yaXR5IksKE1dha2VTYW5kYm94UmVzcG9uc2USHwoHc2FuZGJveBgBIAEoCzIOLnZtLnYxLlNhbmRib3gSEwoLd2FzX3N0b3BwZWQYAiABKAgiRgoKQXR0YWNobWVudBIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEhEKCW1pbWVfdHlwZRgDIAEoCRILCgN1cmwYBCABKAkiiwIKDkRlbGl2ZXJSZXF1ZXN0Eg8KB3VzZXJfaWQYASABKAkSEwoLZGVsaXZlcnlfaWQYAiABKAkSIAoEa2luZBgDIAEoDjISLnZtLnYxLkRlbGl2ZXJLaW5kEhMKC3Nlc3Npb25fa2V5GAQgASgJEg8KB2NoYW5uZWwYBSABKAkSDAoEdGV4dBgGIAEoCRImCgthdHRhY2htZW50cxgHIAMoCzIRLnZtLnYxLkF0dGFjaG1lbnQSEwoLYXBwcm92YWxfaWQYCCABKAkSEAoIYXBwcm92ZWQYCSABKAgSFQoNbWV0YWRhdGFfanNvbhgKIAEoCRIXCg90aW1lb3V0X3NlY29uZHMYCyABKAUicgoMRGVsaXZlckV2ZW50EiUKBHR5cGUYASABKA4yFy52bS52MS5EZWxpdmVyRXZlbnRUeXBlEg8KB21lc3NhZ2UYAiABKAkSFgoOcGxhdGZvcm1fZmF1bHQYAyABKAgSEgoKYXRfdW5peF9tcxgEIAEoAyIfCgxUb3VjaFJlcXVlc3QSDwoHdXNlcl9pZBgBIAEoCSIPCg1Ub3VjaFJlc3BvbnNlIkQKElN0b3BTYW5kYm94UmVxdWVzdBIPCgd1c2VyX2lkGAEgASgJEg0KBWZvcmNlGAIgASgIEg4KBnJlYXNvbhgDIAEoCSI2ChNTdG9wU2FuZGJveFJlc3BvbnNlEh8KB3NhbmRib3gYASABKAsyDi52bS52MS5TYW5kYm94IicKFERlbGV0ZVNhbmRib3hSZXF1ZXN0Eg8KB3VzZXJfaWQYASABKAkiFwoVRGVsZXRlU2FuZGJveFJlc3BvbnNlIiQKEUdldFNhbmRib3hSZXF1ZXN0Eg8KB3VzZXJfaWQYASABKAkiOwoUTGlzdFNhbmRib3hlc1JlcXVlc3QSIwoGc3RhdGVzGAEgAygOMhMudm0udjEuU2FuZGJveFN0YXRlIjoKFUxpc3RTYW5kYm94ZXNSZXNwb25zZRIhCglzYW5kYm94ZXMYASADKAsyDi52bS52MS5TYW5kYm94IlAKD0dldFVzYWdlUmVxdWVzdBIVCg1zaW5jZV91bml4X21zGAEgASgDEhUKDXVudGlsX3VuaXhfbXMYAiABKAMSDwoHdXNlcl9pZBgDIAEoCSJMCglVc2VyVXNhZ2USDwoHdXNlcl9pZBgBIAEoCRIVCg1hd2FrZV9zZWNvbmRzGAIgASgDEhcKD2Jyb3dzZXJfc2Vjb25kcxgDIAEoAyIzChBHZXRVc2FnZVJlc3BvbnNlEh8KBXVzYWdlGAEgAygLMhAudm0udjEuVXNlclVzYWdlImgKGVNldEVncmVzc0FsbG93bGlzdFJlcXVlc3QSDwoHdXNlcl9pZBgBIAEoCRIPCgdkb21haW5zGAIgAygJEikKC21jcF9zZXJ2ZXJzGAMgAygLMhQudm0udjEuVXNlck1jcFNlcnZlciIcChpTZXRFZ3Jlc3NBbGxvd2xpc3RSZXNwb25zZSI9ChVTbmFwc2hvdFZvbHVtZVJlcXVlc3QSDwoHdXNlcl9pZBgBIAEoCRITCgtkZXN0aW5hdGlvbhgCIAEoCSI+ChZTbmFwc2hvdFZvbHVtZVJlc3BvbnNlEhAKCGxvY2F0aW9uGAEgASgJEhIKCnNpemVfYnl0ZXMYAiABKAMiTwoWU2V0QWdlbnRSdW50aW1lUmVxdWVzdBIPCgd1c2VyX2lkGAEgASgJEiQKB3J1bnRpbWUYAiABKA4yEy52bS52MS5BZ2VudFJ1bnRpbWUiOgoXU2V0QWdlbnRSdW50aW1lUmVzcG9uc2USHwoHc2FuZGJveBgBIAEoCzIOLnZtLnYxLlNhbmRib3giKgoXU3RhcnRDbGF1ZGVMb2dpblJlcXVlc3QSDwoHdXNlcl9pZBgBIAEoCSJfChhTdGFydENsYXVkZUxvZ2luUmVzcG9uc2USEAoIbG9naW5faWQYASABKAkSFQoNYXV0aG9yaXplX3VybBgCIAEoCRIaChJleHBpcmVzX2F0X3VuaXhfbXMYAyABKAMiTQoaQ29tcGxldGVDbGF1ZGVMb2dpblJlcXVlc3QSDwoHdXNlcl9pZBgBIAEoCRIQCghsb2dpbl9pZBgCIAEoCRIMCgRjb2RlGAMgASgJIkEKG0NvbXBsZXRlQ2xhdWRlTG9naW5SZXNwb25zZRIRCgljb25uZWN0ZWQYASABKAgSDwoHbWVzc2FnZRgCIAEoCSImChNDbGF1ZGVMb2dvdXRSZXF1ZXN0Eg8KB3VzZXJfaWQYASABKAkiFgoUQ2xhdWRlTG9nb3V0UmVzcG9uc2UiNQoRU2V0QnJvd3NlclJlcXVlc3QSDwoHdXNlcl9pZBgBIAEoCRIPCgdlbmFibGVkGAIgASgIIjUKElNldEJyb3dzZXJSZXNwb25zZRIfCgdzYW5kYm94GAEgASgLMg4udm0udjEuU2FuZGJveCpmCgxBZ2VudFJ1bnRpbWUSHQoZQUdFTlRfUlVOVElNRV9VTlNQRUNJRklFRBAAEhgKFEFHRU5UX1JVTlRJTUVfSEVSTUVTEAESHQoZQUdFTlRfUlVOVElNRV9DTEFVREVfQ09ERRACKq0BCgxTYW5kYm94U3RhdGUSHQoZU0FOREJPWF9TVEFURV9VTlNQRUNJRklFRBAAEhkKFVNBTkRCT1hfU1RBVEVfU1RPUFBFRBABEhgKFFNBTkRCT1hfU1RBVEVfV0FLSU5HEAISFwoTU0FOREJPWF9TVEFURV9BV0FLRRADEhYKElNBTkRCT1hfU1RBVEVfQlVTWRAEEhgKFFNBTkRCT1hfU1RBVEVfQlJPS0VOEAUqXgoIUHJpb3JpdHkSGAoUUFJJT1JJVFlfVU5TUEVDSUZJRUQQABIQCgxQUklPUklUWV9MT1cQARITCg9QUklPUklUWV9OT1JNQUwQAhIRCg1QUklPUklUWV9ISUdIEAMqoAEKC0RlbGl2ZXJLaW5kEhwKGERFTElWRVJfS0lORF9VTlNQRUNJRklFRBAAEhgKFERFTElWRVJfS0lORF9NRVNTQUdFEAESIAocREVMSVZFUl9LSU5EX0FQUFJPVkFMX0FOU1dFUhACEhsKF0RFTElWRVJfS0lORF9BVVRPTUFUSU9OEAMSGgoWREVMSVZFUl9LSU5EX0FQUF9FVkVOVBAEKtoBChBEZWxpdmVyRXZlbnRUeXBlEiIKHkRFTElWRVJfRVZFTlRfVFlQRV9VTlNQRUNJRklFRBAAEh8KG0RFTElWRVJfRVZFTlRfVFlQRV9BQ0NFUFRFRBABEh4KGkRFTElWRVJfRVZFTlRfVFlQRV9XT1JLSU5HEAISIAocREVMSVZFUl9FVkVOVF9UWVBFX1RVUk5fRE9ORRADEhwKGERFTElWRVJfRVZFTlRfVFlQRV9FUlJPUhAEEiEKHURFTElWRVJfRVZFTlRfVFlQRV9URVhUX0RFTFRBEAUymAkKCVZtTWFuYWdlchJKCg1DcmVhdGVTYW5kYm94Ehsudm0udjEuQ3JlYXRlU2FuZGJveFJlcXVlc3QaHC52bS52MS5DcmVhdGVTYW5kYm94UmVzcG9uc2USRAoLV2FrZVNhbmRib3gSGS52bS52MS5XYWtlU2FuZGJveFJlcXVlc3QaGi52bS52MS5XYWtlU2FuZGJveFJlc3BvbnNlEjcKB0RlbGl2ZXISFS52bS52MS5EZWxpdmVyUmVxdWVzdBoTLnZtLnYxLkRlbGl2ZXJFdmVudDABEjIKBVRvdWNoEhMudm0udjEuVG91Y2hSZXF1ZXN0GhQudm0udjEuVG91Y2hSZXNwb25zZRJECgtTdG9wU2FuZGJveBIZLnZtLnYxLlN0b3BTYW5kYm94UmVxdWVzdBoaLnZtLnYxLlN0b3BTYW5kYm94UmVzcG9uc2USSgoNRGVsZXRlU2FuZGJveBIbLnZtLnYxLkRlbGV0ZVNhbmRib3hSZXF1ZXN0Ghwudm0udjEuRGVsZXRlU2FuZGJveFJlc3BvbnNlEjYKCkdldFNhbmRib3gSGC52bS52MS5HZXRTYW5kYm94UmVxdWVzdBoOLnZtLnYxLlNhbmRib3gSSgoNTGlzdFNhbmRib3hlcxIbLnZtLnYxLkxpc3RTYW5kYm94ZXNSZXF1ZXN0Ghwudm0udjEuTGlzdFNhbmRib3hlc1Jlc3BvbnNlEjsKCEdldFVzYWdlEhYudm0udjEuR2V0VXNhZ2VSZXF1ZXN0Ghcudm0udjEuR2V0VXNhZ2VSZXNwb25zZRJZChJTZXRFZ3Jlc3NBbGxvd2xpc3QSIC52bS52MS5TZXRFZ3Jlc3NBbGxvd2xpc3RSZXF1ZXN0GiEudm0udjEuU2V0RWdyZXNzQWxsb3dsaXN0UmVzcG9uc2USTQoOU25hcHNob3RWb2x1bWUSHC52bS52MS5TbmFwc2hvdFZvbHVtZVJlcXVlc3QaHS52bS52MS5TbmFwc2hvdFZvbHVtZVJlc3BvbnNlElAKD1NldEFnZW50UnVudGltZRIdLnZtLnYxLlNldEFnZW50UnVudGltZVJlcXVlc3QaHi52bS52MS5TZXRBZ2VudFJ1bnRpbWVSZXNwb25zZRJTChBTdGFydENsYXVkZUxvZ2luEh4udm0udjEuU3RhcnRDbGF1ZGVMb2dpblJlcXVlc3QaHy52bS52MS5TdGFydENsYXVkZUxvZ2luUmVzcG9uc2USXAoTQ29tcGxldGVDbGF1ZGVMb2dpbhIhLnZtLnYxLkNvbXBsZXRlQ2xhdWRlTG9naW5SZXF1ZXN0GiIudm0udjEuQ29tcGxldGVDbGF1ZGVMb2dpblJlc3BvbnNlEkcKDENsYXVkZUxvZ291dBIaLnZtLnYxLkNsYXVkZUxvZ291dFJlcXVlc3QaGy52bS52MS5DbGF1ZGVMb2dvdXRSZXNwb25zZRJBCgpTZXRCcm93c2VyEhgudm0udjEuU2V0QnJvd3NlclJlcXVlc3QaGS52bS52MS5TZXRCcm93c2VyUmVzcG9uc2VCNVozZ2l0aHViLmNvbS9wZXJzb25hbC1hZ2VudC92bS1tYW5hZ2VyL2dlbi92bS92MTt2bXYxYgZwcm90bzM");
+  fileDesc("Cg52bS92MS92bS5wcm90bxIFdm0udjEiZQoNVXNlck1jcFNlcnZlchIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEgsKA3VybBgDIAEoCRIYChBhdXRoX2hlYWRlcl9uYW1lGAQgASgJEhMKC2F1dGhfc2VjcmV0GAUgASgJIo0CCgdTYW5kYm94Eg8KB3VzZXJfaWQYASABKAkSFAoMY29udGFpbmVyX2lkGAIgASgJEhUKDWltYWdlX3ZlcnNpb24YAyABKAkSIgoFc3RhdGUYBCABKA4yEy52bS52MS5TYW5kYm94U3RhdGUSHgoWbGFzdF9hY3RpdmVfYXRfdW5peF9tcxgFIAEoAxIUCgxtZW1vcnlfYnl0ZXMYBiABKAMSEQoJYWxsb3dsaXN0GAcgAygJEiQKB3J1bnRpbWUYCCABKA4yEy52bS52MS5BZ2VudFJ1bnRpbWUSGAoQY2xhdWRlX2Nvbm5lY3RlZBgJIAEoCBIXCg9icm93c2VyX2VuYWJsZWQYCiABKAgi7gEKFENyZWF0ZVNhbmRib3hSZXF1ZXN0Eg8KB3VzZXJfaWQYASABKAkSEwoLbGl0ZWxsbV9rZXkYAiABKAkSIQoIcHJpb3JpdHkYAyABKA4yDy52bS52MS5Qcmlvcml0eRIRCglhbGxvd2xpc3QYBCADKAkSKQoLbWNwX3NlcnZlcnMYBSADKAsyFC52bS52MS5Vc2VyTWNwU2VydmVyEhAKCHRpbWV6b25lGAYgASgJEiQKB3J1bnRpbWUYByABKA4yEy52bS52MS5BZ2VudFJ1bnRpbWUSFwoPYnJvd3Nlcl9lbmFibGVkGAggASgIIlAKFUNyZWF0ZVNhbmRib3hSZXNwb25zZRIfCgdzYW5kYm94GAEgASgLMg4udm0udjEuU2FuZGJveBIWCg5tY3BfdG9rZW5faGFzaBgCIAEoCSJIChJXYWtlU2FuZGJveFJlcXVlc3QSDwoHdXNlcl9pZBgBIAEoCRIhCghwcmlvcml0eRgCIAEoDjIPLnZtLnYxLlByaW9yaXR5InAKE1dha2VTYW5kYm94UmVzcG9uc2USHwoHc2FuZGJveBgBIAEoCzIOLnZtLnYxLlNhbmRib3gSEwoLd2FzX3N0b3BwZWQYAiABKAgSIwoHdGltaW5ncxgDIAEoCzISLnZtLnYxLldha2VUaW1pbmdzIpYBCgtXYWtlVGltaW5ncxIUCgxsb2NrX3dhaXRfbXMYASABKAMSGAoQY2FwYWNpdHlfd2FpdF9tcxgCIAEoAxIPCgdldmljdGVkGAMgASgIEhEKCXJlY3JlYXRlZBgEIAEoCBIaChJjb250YWluZXJfc3RhcnRfbXMYBSABKAMSFwoPYnJpZGdlX3JlYWR5X21zGAYgASgDIkYKCkF0dGFjaG1lbnQSCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIRCgltaW1lX3R5cGUYAyABKAkSCwoDdXJsGAQgASgJIosCCg5EZWxpdmVyUmVxdWVzdBIPCgd1c2VyX2lkGAEgASgJEhMKC2RlbGl2ZXJ5X2lkGAIgASgJEiAKBGtpbmQYAyABKA4yEi52bS52MS5EZWxpdmVyS2luZBITCgtzZXNzaW9uX2tleRgEIAEoCRIPCgdjaGFubmVsGAUgASgJEgwKBHRleHQYBiABKAkSJgoLYXR0YWNobWVudHMYByADKAsyES52bS52MS5BdHRhY2htZW50EhMKC2FwcHJvdmFsX2lkGAggASgJEhAKCGFwcHJvdmVkGAkgASgIEhUKDW1ldGFkYXRhX2pzb24YCiABKAkSFwoPdGltZW91dF9zZWNvbmRzGAsgASgFIogBCgxEZWxpdmVyRXZlbnQSJQoEdHlwZRgBIAEoDjIXLnZtLnYxLkRlbGl2ZXJFdmVudFR5cGUSDwoHbWVzc2FnZRgCIAEoCRIWCg5wbGF0Zm9ybV9mYXVsdBgDIAEoCBISCgphdF91bml4X21zGAQgASgDEhQKDHRpbWluZ3NfanNvbhgFIAEoCSIfCgxUb3VjaFJlcXVlc3QSDwoHdXNlcl9pZBgBIAEoCSIPCg1Ub3VjaFJlc3BvbnNlIkQKElN0b3BTYW5kYm94UmVxdWVzdBIPCgd1c2VyX2lkGAEgASgJEg0KBWZvcmNlGAIgASgIEg4KBnJlYXNvbhgDIAEoCSI2ChNTdG9wU2FuZGJveFJlc3BvbnNlEh8KB3NhbmRib3gYASABKAsyDi52bS52MS5TYW5kYm94IicKFERlbGV0ZVNhbmRib3hSZXF1ZXN0Eg8KB3VzZXJfaWQYASABKAkiFwoVRGVsZXRlU2FuZGJveFJlc3BvbnNlIiQKEUdldFNhbmRib3hSZXF1ZXN0Eg8KB3VzZXJfaWQYASABKAkiOwoUTGlzdFNhbmRib3hlc1JlcXVlc3QSIwoGc3RhdGVzGAEgAygOMhMudm0udjEuU2FuZGJveFN0YXRlIjoKFUxpc3RTYW5kYm94ZXNSZXNwb25zZRIhCglzYW5kYm94ZXMYASADKAsyDi52bS52MS5TYW5kYm94IlAKD0dldFVzYWdlUmVxdWVzdBIVCg1zaW5jZV91bml4X21zGAEgASgDEhUKDXVudGlsX3VuaXhfbXMYAiABKAMSDwoHdXNlcl9pZBgDIAEoCSJMCglVc2VyVXNhZ2USDwoHdXNlcl9pZBgBIAEoCRIVCg1hd2FrZV9zZWNvbmRzGAIgASgDEhcKD2Jyb3dzZXJfc2Vjb25kcxgDIAEoAyIzChBHZXRVc2FnZVJlc3BvbnNlEh8KBXVzYWdlGAEgAygLMhAudm0udjEuVXNlclVzYWdlImgKGVNldEVncmVzc0FsbG93bGlzdFJlcXVlc3QSDwoHdXNlcl9pZBgBIAEoCRIPCgdkb21haW5zGAIgAygJEikKC21jcF9zZXJ2ZXJzGAMgAygLMhQudm0udjEuVXNlck1jcFNlcnZlciIcChpTZXRFZ3Jlc3NBbGxvd2xpc3RSZXNwb25zZSI9ChVTbmFwc2hvdFZvbHVtZVJlcXVlc3QSDwoHdXNlcl9pZBgBIAEoCRITCgtkZXN0aW5hdGlvbhgCIAEoCSI+ChZTbmFwc2hvdFZvbHVtZVJlc3BvbnNlEhAKCGxvY2F0aW9uGAEgASgJEhIKCnNpemVfYnl0ZXMYAiABKAMiTwoWU2V0QWdlbnRSdW50aW1lUmVxdWVzdBIPCgd1c2VyX2lkGAEgASgJEiQKB3J1bnRpbWUYAiABKA4yEy52bS52MS5BZ2VudFJ1bnRpbWUiOgoXU2V0QWdlbnRSdW50aW1lUmVzcG9uc2USHwoHc2FuZGJveBgBIAEoCzIOLnZtLnYxLlNhbmRib3giKgoXU3RhcnRDbGF1ZGVMb2dpblJlcXVlc3QSDwoHdXNlcl9pZBgBIAEoCSJfChhTdGFydENsYXVkZUxvZ2luUmVzcG9uc2USEAoIbG9naW5faWQYASABKAkSFQoNYXV0aG9yaXplX3VybBgCIAEoCRIaChJleHBpcmVzX2F0X3VuaXhfbXMYAyABKAMiTQoaQ29tcGxldGVDbGF1ZGVMb2dpblJlcXVlc3QSDwoHdXNlcl9pZBgBIAEoCRIQCghsb2dpbl9pZBgCIAEoCRIMCgRjb2RlGAMgASgJIkEKG0NvbXBsZXRlQ2xhdWRlTG9naW5SZXNwb25zZRIRCgljb25uZWN0ZWQYASABKAgSDwoHbWVzc2FnZRgCIAEoCSImChNDbGF1ZGVMb2dvdXRSZXF1ZXN0Eg8KB3VzZXJfaWQYASABKAkiFgoUQ2xhdWRlTG9nb3V0UmVzcG9uc2UiNQoRU2V0QnJvd3NlclJlcXVlc3QSDwoHdXNlcl9pZBgBIAEoCRIPCgdlbmFibGVkGAIgASgIIjUKElNldEJyb3dzZXJSZXNwb25zZRIfCgdzYW5kYm94GAEgASgLMg4udm0udjEuU2FuZGJveCpmCgxBZ2VudFJ1bnRpbWUSHQoZQUdFTlRfUlVOVElNRV9VTlNQRUNJRklFRBAAEhgKFEFHRU5UX1JVTlRJTUVfSEVSTUVTEAESHQoZQUdFTlRfUlVOVElNRV9DTEFVREVfQ09ERRACKq0BCgxTYW5kYm94U3RhdGUSHQoZU0FOREJPWF9TVEFURV9VTlNQRUNJRklFRBAAEhkKFVNBTkRCT1hfU1RBVEVfU1RPUFBFRBABEhgKFFNBTkRCT1hfU1RBVEVfV0FLSU5HEAISFwoTU0FOREJPWF9TVEFURV9BV0FLRRADEhYKElNBTkRCT1hfU1RBVEVfQlVTWRAEEhgKFFNBTkRCT1hfU1RBVEVfQlJPS0VOEAUqXgoIUHJpb3JpdHkSGAoUUFJJT1JJVFlfVU5TUEVDSUZJRUQQABIQCgxQUklPUklUWV9MT1cQARITCg9QUklPUklUWV9OT1JNQUwQAhIRCg1QUklPUklUWV9ISUdIEAMqoAEKC0RlbGl2ZXJLaW5kEhwKGERFTElWRVJfS0lORF9VTlNQRUNJRklFRBAAEhgKFERFTElWRVJfS0lORF9NRVNTQUdFEAESIAocREVMSVZFUl9LSU5EX0FQUFJPVkFMX0FOU1dFUhACEhsKF0RFTElWRVJfS0lORF9BVVRPTUFUSU9OEAMSGgoWREVMSVZFUl9LSU5EX0FQUF9FVkVOVBAEKtoBChBEZWxpdmVyRXZlbnRUeXBlEiIKHkRFTElWRVJfRVZFTlRfVFlQRV9VTlNQRUNJRklFRBAAEh8KG0RFTElWRVJfRVZFTlRfVFlQRV9BQ0NFUFRFRBABEh4KGkRFTElWRVJfRVZFTlRfVFlQRV9XT1JLSU5HEAISIAocREVMSVZFUl9FVkVOVF9UWVBFX1RVUk5fRE9ORRADEhwKGERFTElWRVJfRVZFTlRfVFlQRV9FUlJPUhAEEiEKHURFTElWRVJfRVZFTlRfVFlQRV9URVhUX0RFTFRBEAUymAkKCVZtTWFuYWdlchJKCg1DcmVhdGVTYW5kYm94Ehsudm0udjEuQ3JlYXRlU2FuZGJveFJlcXVlc3QaHC52bS52MS5DcmVhdGVTYW5kYm94UmVzcG9uc2USRAoLV2FrZVNhbmRib3gSGS52bS52MS5XYWtlU2FuZGJveFJlcXVlc3QaGi52bS52MS5XYWtlU2FuZGJveFJlc3BvbnNlEjcKB0RlbGl2ZXISFS52bS52MS5EZWxpdmVyUmVxdWVzdBoTLnZtLnYxLkRlbGl2ZXJFdmVudDABEjIKBVRvdWNoEhMudm0udjEuVG91Y2hSZXF1ZXN0GhQudm0udjEuVG91Y2hSZXNwb25zZRJECgtTdG9wU2FuZGJveBIZLnZtLnYxLlN0b3BTYW5kYm94UmVxdWVzdBoaLnZtLnYxLlN0b3BTYW5kYm94UmVzcG9uc2USSgoNRGVsZXRlU2FuZGJveBIbLnZtLnYxLkRlbGV0ZVNhbmRib3hSZXF1ZXN0Ghwudm0udjEuRGVsZXRlU2FuZGJveFJlc3BvbnNlEjYKCkdldFNhbmRib3gSGC52bS52MS5HZXRTYW5kYm94UmVxdWVzdBoOLnZtLnYxLlNhbmRib3gSSgoNTGlzdFNhbmRib3hlcxIbLnZtLnYxLkxpc3RTYW5kYm94ZXNSZXF1ZXN0Ghwudm0udjEuTGlzdFNhbmRib3hlc1Jlc3BvbnNlEjsKCEdldFVzYWdlEhYudm0udjEuR2V0VXNhZ2VSZXF1ZXN0Ghcudm0udjEuR2V0VXNhZ2VSZXNwb25zZRJZChJTZXRFZ3Jlc3NBbGxvd2xpc3QSIC52bS52MS5TZXRFZ3Jlc3NBbGxvd2xpc3RSZXF1ZXN0GiEudm0udjEuU2V0RWdyZXNzQWxsb3dsaXN0UmVzcG9uc2USTQoOU25hcHNob3RWb2x1bWUSHC52bS52MS5TbmFwc2hvdFZvbHVtZVJlcXVlc3QaHS52bS52MS5TbmFwc2hvdFZvbHVtZVJlc3BvbnNlElAKD1NldEFnZW50UnVudGltZRIdLnZtLnYxLlNldEFnZW50UnVudGltZVJlcXVlc3QaHi52bS52MS5TZXRBZ2VudFJ1bnRpbWVSZXNwb25zZRJTChBTdGFydENsYXVkZUxvZ2luEh4udm0udjEuU3RhcnRDbGF1ZGVMb2dpblJlcXVlc3QaHy52bS52MS5TdGFydENsYXVkZUxvZ2luUmVzcG9uc2USXAoTQ29tcGxldGVDbGF1ZGVMb2dpbhIhLnZtLnYxLkNvbXBsZXRlQ2xhdWRlTG9naW5SZXF1ZXN0GiIudm0udjEuQ29tcGxldGVDbGF1ZGVMb2dpblJlc3BvbnNlEkcKDENsYXVkZUxvZ291dBIaLnZtLnYxLkNsYXVkZUxvZ291dFJlcXVlc3QaGy52bS52MS5DbGF1ZGVMb2dvdXRSZXNwb25zZRJBCgpTZXRCcm93c2VyEhgudm0udjEuU2V0QnJvd3NlclJlcXVlc3QaGS52bS52MS5TZXRCcm93c2VyUmVzcG9uc2VCNVozZ2l0aHViLmNvbS9wZXJzb25hbC1hZ2VudC92bS1tYW5hZ2VyL2dlbi92bS92MTt2bXYxYgZwcm90bzM");
 
 /**
  * @generated from message vm.v1.UserMcpServer
@@ -237,6 +237,14 @@ export type WakeSandboxResponse = Message<"vm.v1.WakeSandboxResponse"> & {
    * @generated from field: bool was_stopped = 2;
    */
   wasStopped: boolean;
+
+  /**
+   * Where the wake's time went, for the backend's per-turn timings. All zero when the sandbox
+   * was already awake (apart from lock_wait_ms).
+   *
+   * @generated from field: vm.v1.WakeTimings timings = 3;
+   */
+  timings?: WakeTimings | undefined;
 };
 
 /**
@@ -245,6 +253,62 @@ export type WakeSandboxResponse = Message<"vm.v1.WakeSandboxResponse"> & {
  */
 export const WakeSandboxResponseSchema: GenMessage<WakeSandboxResponse> = /*@__PURE__*/
   messageDesc(file_vm_v1_vm, 5);
+
+/**
+ * The parts of one WakeSandbox call, in milliseconds.
+ *
+ * @generated from message vm.v1.WakeTimings
+ */
+export type WakeTimings = Message<"vm.v1.WakeTimings"> & {
+  /**
+   * Waiting for another operation on this user's sandbox to finish first (a health check, a stop).
+   *
+   * @generated from field: int64 lock_wait_ms = 1;
+   */
+  lockWaitMs: bigint;
+
+  /**
+   * Finding room under the awake cap, including stopping another user's container politely.
+   *
+   * @generated from field: int64 capacity_wait_ms = 2;
+   */
+  capacityWaitMs: bigint;
+
+  /**
+   * Another user's container was stopped to make room (capacity_wait_ms holds that stop).
+   *
+   * @generated from field: bool evicted = 3;
+   */
+  evicted: boolean;
+
+  /**
+   * The container was made again from the image first (new image, missing, browser switch changed).
+   *
+   * @generated from field: bool recreated = 4;
+   */
+  recreated: boolean;
+
+  /**
+   * Making sure the container is right (re-creating it if needed) and starting it.
+   *
+   * @generated from field: int64 container_start_ms = 5;
+   */
+  containerStartMs: bigint;
+
+  /**
+   * From the start until the Bridge answered its ready check.
+   *
+   * @generated from field: int64 bridge_ready_ms = 6;
+   */
+  bridgeReadyMs: bigint;
+};
+
+/**
+ * Describes the message vm.v1.WakeTimings.
+ * Use `create(WakeTimingsSchema)` to create a new message.
+ */
+export const WakeTimingsSchema: GenMessage<WakeTimings> = /*@__PURE__*/
+  messageDesc(file_vm_v1_vm, 6);
 
 /**
  * @generated from message vm.v1.Attachment
@@ -278,7 +342,7 @@ export type Attachment = Message<"vm.v1.Attachment"> & {
  * Use `create(AttachmentSchema)` to create a new message.
  */
 export const AttachmentSchema: GenMessage<Attachment> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 6);
+  messageDesc(file_vm_v1_vm, 7);
 
 /**
  * @generated from message vm.v1.DeliverRequest
@@ -355,7 +419,7 @@ export type DeliverRequest = Message<"vm.v1.DeliverRequest"> & {
  * Use `create(DeliverRequestSchema)` to create a new message.
  */
 export const DeliverRequestSchema: GenMessage<DeliverRequest> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 7);
+  messageDesc(file_vm_v1_vm, 8);
 
 /**
  * @generated from message vm.v1.DeliverEvent
@@ -384,6 +448,16 @@ export type DeliverEvent = Message<"vm.v1.DeliverEvent"> & {
    * @generated from field: int64 at_unix_ms = 4;
    */
   atUnixMs: bigint;
+
+  /**
+   * On the last event (TURN_DONE or ERROR) when the Bridge reports where the turn's time went:
+   * a JSON object of stage times in milliseconds since the Bridge took the delivery (no message
+   * text). Empty from an older Bridge, and on a repeated delivery. Shape: README "Bridge contract",
+   * "Stage times".
+   *
+   * @generated from field: string timings_json = 5;
+   */
+  timingsJson: string;
 };
 
 /**
@@ -391,7 +465,7 @@ export type DeliverEvent = Message<"vm.v1.DeliverEvent"> & {
  * Use `create(DeliverEventSchema)` to create a new message.
  */
 export const DeliverEventSchema: GenMessage<DeliverEvent> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 8);
+  messageDesc(file_vm_v1_vm, 9);
 
 /**
  * @generated from message vm.v1.TouchRequest
@@ -408,7 +482,7 @@ export type TouchRequest = Message<"vm.v1.TouchRequest"> & {
  * Use `create(TouchRequestSchema)` to create a new message.
  */
 export const TouchRequestSchema: GenMessage<TouchRequest> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 9);
+  messageDesc(file_vm_v1_vm, 10);
 
 /**
  * @generated from message vm.v1.TouchResponse
@@ -421,7 +495,7 @@ export type TouchResponse = Message<"vm.v1.TouchResponse"> & {
  * Use `create(TouchResponseSchema)` to create a new message.
  */
 export const TouchResponseSchema: GenMessage<TouchResponse> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 10);
+  messageDesc(file_vm_v1_vm, 11);
 
 /**
  * @generated from message vm.v1.StopSandboxRequest
@@ -448,7 +522,7 @@ export type StopSandboxRequest = Message<"vm.v1.StopSandboxRequest"> & {
  * Use `create(StopSandboxRequestSchema)` to create a new message.
  */
 export const StopSandboxRequestSchema: GenMessage<StopSandboxRequest> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 11);
+  messageDesc(file_vm_v1_vm, 12);
 
 /**
  * @generated from message vm.v1.StopSandboxResponse
@@ -465,7 +539,7 @@ export type StopSandboxResponse = Message<"vm.v1.StopSandboxResponse"> & {
  * Use `create(StopSandboxResponseSchema)` to create a new message.
  */
 export const StopSandboxResponseSchema: GenMessage<StopSandboxResponse> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 12);
+  messageDesc(file_vm_v1_vm, 13);
 
 /**
  * @generated from message vm.v1.DeleteSandboxRequest
@@ -482,7 +556,7 @@ export type DeleteSandboxRequest = Message<"vm.v1.DeleteSandboxRequest"> & {
  * Use `create(DeleteSandboxRequestSchema)` to create a new message.
  */
 export const DeleteSandboxRequestSchema: GenMessage<DeleteSandboxRequest> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 13);
+  messageDesc(file_vm_v1_vm, 14);
 
 /**
  * @generated from message vm.v1.DeleteSandboxResponse
@@ -495,7 +569,7 @@ export type DeleteSandboxResponse = Message<"vm.v1.DeleteSandboxResponse"> & {
  * Use `create(DeleteSandboxResponseSchema)` to create a new message.
  */
 export const DeleteSandboxResponseSchema: GenMessage<DeleteSandboxResponse> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 14);
+  messageDesc(file_vm_v1_vm, 15);
 
 /**
  * @generated from message vm.v1.GetSandboxRequest
@@ -512,7 +586,7 @@ export type GetSandboxRequest = Message<"vm.v1.GetSandboxRequest"> & {
  * Use `create(GetSandboxRequestSchema)` to create a new message.
  */
 export const GetSandboxRequestSchema: GenMessage<GetSandboxRequest> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 15);
+  messageDesc(file_vm_v1_vm, 16);
 
 /**
  * @generated from message vm.v1.ListSandboxesRequest
@@ -531,7 +605,7 @@ export type ListSandboxesRequest = Message<"vm.v1.ListSandboxesRequest"> & {
  * Use `create(ListSandboxesRequestSchema)` to create a new message.
  */
 export const ListSandboxesRequestSchema: GenMessage<ListSandboxesRequest> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 16);
+  messageDesc(file_vm_v1_vm, 17);
 
 /**
  * @generated from message vm.v1.ListSandboxesResponse
@@ -548,7 +622,7 @@ export type ListSandboxesResponse = Message<"vm.v1.ListSandboxesResponse"> & {
  * Use `create(ListSandboxesResponseSchema)` to create a new message.
  */
 export const ListSandboxesResponseSchema: GenMessage<ListSandboxesResponse> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 17);
+  messageDesc(file_vm_v1_vm, 18);
 
 /**
  * @generated from message vm.v1.GetUsageRequest
@@ -577,7 +651,7 @@ export type GetUsageRequest = Message<"vm.v1.GetUsageRequest"> & {
  * Use `create(GetUsageRequestSchema)` to create a new message.
  */
 export const GetUsageRequestSchema: GenMessage<GetUsageRequest> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 18);
+  messageDesc(file_vm_v1_vm, 19);
 
 /**
  * @generated from message vm.v1.UserUsage
@@ -608,7 +682,7 @@ export type UserUsage = Message<"vm.v1.UserUsage"> & {
  * Use `create(UserUsageSchema)` to create a new message.
  */
 export const UserUsageSchema: GenMessage<UserUsage> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 19);
+  messageDesc(file_vm_v1_vm, 20);
 
 /**
  * @generated from message vm.v1.GetUsageResponse
@@ -625,7 +699,7 @@ export type GetUsageResponse = Message<"vm.v1.GetUsageResponse"> & {
  * Use `create(GetUsageResponseSchema)` to create a new message.
  */
 export const GetUsageResponseSchema: GenMessage<GetUsageResponse> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 20);
+  messageDesc(file_vm_v1_vm, 21);
 
 /**
  * @generated from message vm.v1.SetEgressAllowlistRequest
@@ -654,7 +728,7 @@ export type SetEgressAllowlistRequest = Message<"vm.v1.SetEgressAllowlistRequest
  * Use `create(SetEgressAllowlistRequestSchema)` to create a new message.
  */
 export const SetEgressAllowlistRequestSchema: GenMessage<SetEgressAllowlistRequest> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 21);
+  messageDesc(file_vm_v1_vm, 22);
 
 /**
  * @generated from message vm.v1.SetEgressAllowlistResponse
@@ -667,7 +741,7 @@ export type SetEgressAllowlistResponse = Message<"vm.v1.SetEgressAllowlistRespon
  * Use `create(SetEgressAllowlistResponseSchema)` to create a new message.
  */
 export const SetEgressAllowlistResponseSchema: GenMessage<SetEgressAllowlistResponse> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 22);
+  messageDesc(file_vm_v1_vm, 23);
 
 /**
  * @generated from message vm.v1.SnapshotVolumeRequest
@@ -691,7 +765,7 @@ export type SnapshotVolumeRequest = Message<"vm.v1.SnapshotVolumeRequest"> & {
  * Use `create(SnapshotVolumeRequestSchema)` to create a new message.
  */
 export const SnapshotVolumeRequestSchema: GenMessage<SnapshotVolumeRequest> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 23);
+  messageDesc(file_vm_v1_vm, 24);
 
 /**
  * @generated from message vm.v1.SnapshotVolumeResponse
@@ -713,7 +787,7 @@ export type SnapshotVolumeResponse = Message<"vm.v1.SnapshotVolumeResponse"> & {
  * Use `create(SnapshotVolumeResponseSchema)` to create a new message.
  */
 export const SnapshotVolumeResponseSchema: GenMessage<SnapshotVolumeResponse> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 24);
+  messageDesc(file_vm_v1_vm, 25);
 
 /**
  * @generated from message vm.v1.SetAgentRuntimeRequest
@@ -735,7 +809,7 @@ export type SetAgentRuntimeRequest = Message<"vm.v1.SetAgentRuntimeRequest"> & {
  * Use `create(SetAgentRuntimeRequestSchema)` to create a new message.
  */
 export const SetAgentRuntimeRequestSchema: GenMessage<SetAgentRuntimeRequest> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 25);
+  messageDesc(file_vm_v1_vm, 26);
 
 /**
  * @generated from message vm.v1.SetAgentRuntimeResponse
@@ -752,7 +826,7 @@ export type SetAgentRuntimeResponse = Message<"vm.v1.SetAgentRuntimeResponse"> &
  * Use `create(SetAgentRuntimeResponseSchema)` to create a new message.
  */
 export const SetAgentRuntimeResponseSchema: GenMessage<SetAgentRuntimeResponse> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 26);
+  messageDesc(file_vm_v1_vm, 27);
 
 /**
  * @generated from message vm.v1.StartClaudeLoginRequest
@@ -769,7 +843,7 @@ export type StartClaudeLoginRequest = Message<"vm.v1.StartClaudeLoginRequest"> &
  * Use `create(StartClaudeLoginRequestSchema)` to create a new message.
  */
 export const StartClaudeLoginRequestSchema: GenMessage<StartClaudeLoginRequest> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 27);
+  messageDesc(file_vm_v1_vm, 28);
 
 /**
  * @generated from message vm.v1.StartClaudeLoginResponse
@@ -796,7 +870,7 @@ export type StartClaudeLoginResponse = Message<"vm.v1.StartClaudeLoginResponse">
  * Use `create(StartClaudeLoginResponseSchema)` to create a new message.
  */
 export const StartClaudeLoginResponseSchema: GenMessage<StartClaudeLoginResponse> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 28);
+  messageDesc(file_vm_v1_vm, 29);
 
 /**
  * @generated from message vm.v1.CompleteClaudeLoginRequest
@@ -825,7 +899,7 @@ export type CompleteClaudeLoginRequest = Message<"vm.v1.CompleteClaudeLoginReque
  * Use `create(CompleteClaudeLoginRequestSchema)` to create a new message.
  */
 export const CompleteClaudeLoginRequestSchema: GenMessage<CompleteClaudeLoginRequest> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 29);
+  messageDesc(file_vm_v1_vm, 30);
 
 /**
  * @generated from message vm.v1.CompleteClaudeLoginResponse
@@ -849,7 +923,7 @@ export type CompleteClaudeLoginResponse = Message<"vm.v1.CompleteClaudeLoginResp
  * Use `create(CompleteClaudeLoginResponseSchema)` to create a new message.
  */
 export const CompleteClaudeLoginResponseSchema: GenMessage<CompleteClaudeLoginResponse> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 30);
+  messageDesc(file_vm_v1_vm, 31);
 
 /**
  * @generated from message vm.v1.ClaudeLogoutRequest
@@ -866,7 +940,7 @@ export type ClaudeLogoutRequest = Message<"vm.v1.ClaudeLogoutRequest"> & {
  * Use `create(ClaudeLogoutRequestSchema)` to create a new message.
  */
 export const ClaudeLogoutRequestSchema: GenMessage<ClaudeLogoutRequest> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 31);
+  messageDesc(file_vm_v1_vm, 32);
 
 /**
  * @generated from message vm.v1.ClaudeLogoutResponse
@@ -879,7 +953,7 @@ export type ClaudeLogoutResponse = Message<"vm.v1.ClaudeLogoutResponse"> & {
  * Use `create(ClaudeLogoutResponseSchema)` to create a new message.
  */
 export const ClaudeLogoutResponseSchema: GenMessage<ClaudeLogoutResponse> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 32);
+  messageDesc(file_vm_v1_vm, 33);
 
 /**
  * @generated from message vm.v1.SetBrowserRequest
@@ -901,7 +975,7 @@ export type SetBrowserRequest = Message<"vm.v1.SetBrowserRequest"> & {
  * Use `create(SetBrowserRequestSchema)` to create a new message.
  */
 export const SetBrowserRequestSchema: GenMessage<SetBrowserRequest> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 33);
+  messageDesc(file_vm_v1_vm, 34);
 
 /**
  * @generated from message vm.v1.SetBrowserResponse
@@ -918,7 +992,7 @@ export type SetBrowserResponse = Message<"vm.v1.SetBrowserResponse"> & {
  * Use `create(SetBrowserResponseSchema)` to create a new message.
  */
 export const SetBrowserResponseSchema: GenMessage<SetBrowserResponse> = /*@__PURE__*/
-  messageDesc(file_vm_v1_vm, 34);
+  messageDesc(file_vm_v1_vm, 35);
 
 /**
  * @generated from enum vm.v1.AgentRuntime

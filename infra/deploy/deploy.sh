@@ -31,7 +31,8 @@ main() {
   docker info >/dev/null 2>&1 || sudo=(sudo)
   local docker=("${sudo[@]}" docker)
   compose() {
-    "${sudo[@]}" env AGENT_IMAGE_VERSION="${AGENT_IMAGE_VERSION:-dev}" docker compose \
+    "${sudo[@]}" env AGENT_IMAGE_VERSION="${AGENT_IMAGE_VERSION:-dev}" \
+      GIT_COMMIT="$(git -C "$be" rev-parse --short HEAD 2>/dev/null)" docker compose \
       --env-file "$root/compose.env" -f "$be/infra/docker-compose.yml" "${profiles[@]}" "$@"
   }
 

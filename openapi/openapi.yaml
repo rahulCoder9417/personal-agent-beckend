@@ -2058,6 +2058,439 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  # ---------------------------------------------------------------- admin: operations (jobs, audit, timings, config, health)
+  /v1/admin/jobs:
+    get:
+      operationId: adminListJobs
+      tags: [admin]
+      summary: Jobs in the queues, by queue and state (admin)
+      description: |
+        Newest first within a queue. Without `queue`, the four queues are paged one after the
+        other (inbound, outbound, scheduled, system). `waiting` includes the jobs waiting with a
+        priority (paid users' inbound turns). `data` holds ids only: every other field of the job's
+        data is left out and only its name is listed in `omittedKeys`, so no message text, token
+        or key is ever shown. `failedReason` is the error's first line, with anything that looks
+        like a secret removed.
+      parameters:
+        - name: queue
+          in: query
+          required: false
+          schema: { type: string, enum: [inbound, outbound, scheduled, system] }
+        - name: state
+          in: query
+          required: false
+          schema:
+            { type: string, enum: [failed, waiting, active, delayed, completed], default: failed }
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        [id, queue, name, state, attempts, maxAttempts, createdAt, processedAt,
+                         finishedAt, dueAt, failedReason, userId, data, omittedKeys]
+                      properties:
+                        id: { type: string }
+                        queue: { type: string, enum: [inbound, outbound, scheduled, system] }
+                        name: { type: string, examples: [process-message] }
+                        state:
+                          { type: string, enum: [failed, waiting, active, delayed, completed] }
+                        attempts: { type: integer, description: Tries made so far }
+                        maxAttempts: { type: integer }
+                        createdAt: { type: string, format: date-time }
+                        processedAt: { type: [string, "null"], format: date-time }
+                        finishedAt: { type: [string, "null"], format: date-time }
+                        dueAt:
+                          type: [string, "null"]
+                          format: date-time
+                          description: When a delayed job becomes due. Null for any other job.
+                        failedReason:
+                          type: [string, "null"]
+                          description: First line of the last error, at most 300 characters, secrets removed.
+                        userId: { type: [string, "null"] }
+                        data:
+                          type: object
+                          description: The ids in the job's data (fields named `id` or ending in `Id`/`Ids`). Nothing else.
+                          additionalProperties:
+                            anyOf:
+                              - { type: string }
+                              - { type: number }
+                              - { type: array, items: { type: string } }
+                        omittedKeys:
+                          type: array
+                          items: { type: string }
+                          description: Names of the data fields left out. Their values are never shown.
+                  nextCursor: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/admin/jobs/counts:
+    get:
+      operationId: adminJobCounts
+      tags: [admin]
+      summary: How many jobs each queue holds, by state (admin)
+      description: "`waiting` includes the jobs waiting with a priority."
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [queues]
+                properties:
+                  queues:
+                    type: array
+                    items:
+                      type: object
+                      required: [queue, failed, waiting, active, delayed, completed]
+                      properties:
+                        queue: { type: string, enum: [inbound, outbound, scheduled, system] }
+                        failed: { type: integer }
+                        waiting: { type: integer }
+                        active: { type: integer }
+                        delayed: { type: integer }
+                        completed: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/admin/jobs/{queue}/{jobId}/retry:
+    post:
+      operationId: adminRetryJob
+      tags: [admin]
+      summary: Run a failed job once more (admin)
+      description: |
+        Only a failed job. It goes back in line and runs once more, as the "retry" button of the
+        queue board does: its own "already done?" checks decide what is left to do, so nothing is
+        done twice. Written to the audit log with the admin's id and the reason.
+      parameters:
+        - name: queue
+          in: path
+          required: true
+          schema: { type: string, enum: [inbound, outbound, scheduled, system] }
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string, maxLength: 200 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        "204": { description: Back in line }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/admin/jobs/{queue}/{jobId}:
+    delete:
+      operationId: adminRemoveJob
+      tags: [admin]
+      summary: Remove a failed or finished job (admin)
+      description: |
+        Only a failed or a completed job; never one that is waiting, delayed or running (409).
+        Written to the audit log with the admin's id and the reason. The job's event, if it has
+        one, keeps its status in the database.
+      parameters:
+        - name: queue
+          in: path
+          required: true
+          schema: { type: string, enum: [inbound, outbound, scheduled, system] }
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string, maxLength: 200 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        "204": { description: Removed }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/admin/audit:
+    get:
+      operationId: adminListAudit
+      tags: [admin]
+      summary: The audit log of every user, newest first (admin)
+      description: |
+        Every entry of the activity log: what users, agents, admins and the system did. Filters
+        combine. `from` and `to` bound the entry's time (`to` excluded). `details` comes with
+        every field that looks like a secret replaced by "[redacted]".
+      parameters:
+        - name: userId
+          in: query
+          required: false
+          schema: { type: string, maxLength: 64 }
+        - name: actor
+          in: query
+          required: false
+          schema: { type: string, enum: [user, agent, admin, system] }
+        - name: action
+          in: query
+          required: false
+          schema: { type: string, maxLength: 64, examples: [credits_adjusted] }
+        - name: from
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, userId, actor, action, summary, details, creditsCharged, createdAt]
+                      properties:
+                        id: { type: string }
+                        userId: { type: [string, "null"] }
+                        actor: { type: string, enum: [user, agent, admin, system] }
+                        action: { type: string, examples: [job_retried, credits_adjusted] }
+                        summary: { type: string }
+                        details:
+                          type: [object, "null"]
+                          additionalProperties: true
+                          description: The entry's details, secrets replaced by "[redacted]".
+                        creditsCharged: { type: [integer, "null"] }
+                        createdAt: { type: string, format: date-time }
+                  nextCursor: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/admin/timings/summary:
+    get:
+      operationId: adminTimingsSummary
+      tags: [admin]
+      summary: Where turns spent their time over the last days (admin)
+      description: |
+        From the turn timings only (kept 30 days). Per stage, as long as it kept the user waiting:
+        how many turns had it, the median and the 90th percentile in milliseconds. The wake is
+        split by kind (warm, cold, capacity, recreated). `total` is the time from the message
+        being queued to the answer. Then the turns per route, engine and outcome, and the 20
+        slowest turns with their biggest stage. Never any text.
+      parameters:
+        - name: days
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 30, default: 7 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [days, since, turns, stages, routes, engines, outcomes, slowest]
+                properties:
+                  days: { type: integer }
+                  since: { type: string, format: date-time }
+                  turns: { type: integer, description: Turns in the window }
+                  stages:
+                    type: array
+                    items:
+                      type: object
+                      required: [stage, count, p50Ms, p90Ms]
+                      properties:
+                        stage:
+                          type: string
+                          examples: [queue, route, wake cold, wake warm, engine start, first output, work, send answer, total]
+                        count: { type: integer }
+                        p50Ms: { type: integer }
+                        p90Ms: { type: integer }
+                  routes:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, count]
+                      properties:
+                        name: { type: string, description: "The route, or `none` for a turn that ended before routing" }
+                        count: { type: integer }
+                  engines:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, count]
+                      properties:
+                        name: { type: string, description: "hermes, claude_code, or `none`" }
+                        count: { type: integer }
+                  outcomes:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, count]
+                      properties:
+                        name: { type: string }
+                        count: { type: integer }
+                  slowest:
+                    type: array
+                    maxItems: 20
+                    items:
+                      type: object
+                      required:
+                        [deliveryId, userId, startedAt, totalMs, biggestStage, biggestStageMs, route,
+                         engine, wake, outcome]
+                      properties:
+                        deliveryId: { type: string }
+                        userId: { type: string }
+                        startedAt: { type: string, format: date-time }
+                        totalMs: { type: integer }
+                        biggestStage: { type: [string, "null"] }
+                        biggestStageMs: { type: [integer, "null"] }
+                        route: { type: [string, "null"] }
+                        engine: { type: [string, "null"] }
+                        wake: { type: [string, "null"] }
+                        outcome: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/admin/config:
+    get:
+      operationId: adminGetConfig
+      tags: [admin]
+      summary: The settings that shape behaviour, read-only (admin)
+      description: |
+        Built from a fixed list, never by reading the whole environment. `settings` are the
+        settings that are not secret: switches, limits, lists and addresses (without any user
+        name or password in them). For each secret, `secrets` says only whether it is set. `apps`
+        is the app catalog with whether each app can be connected on this server, and how.
+        `AWAKE_CAP` is the vm-manager's own setting: the backend can't read it, so its value is
+        null.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [environment, settings, secrets, apps]
+                properties:
+                  environment: { type: string, enum: [development, test, production] }
+                  settings:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, group, value]
+                      properties:
+                        name: { type: string, examples: [CREW_AVAILABLE] }
+                        group: { type: string, examples: [crew] }
+                        value:
+                          anyOf:
+                            - { type: string }
+                            - { type: number }
+                            - { type: boolean }
+                            - { type: array, items: { type: string } }
+                            - { type: "null" }
+                        note: { type: string }
+                  secrets:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, set]
+                      properties:
+                        name: { type: string, examples: [COMPOSIO_API_KEY] }
+                        set: { type: boolean }
+                  apps:
+                    type: array
+                    items:
+                      type: object
+                      required: [slug, name, connectable, setup]
+                      properties:
+                        slug: { type: string }
+                        name: { type: string }
+                        connectable: { type: boolean }
+                        setup:
+                          type: string
+                          enum: [settings, made_by_server, server_may_make, none]
+                          description: |
+                            `settings`: named in COMPOSIO_AUTH_CONFIGS. `made_by_server`: the server
+                            made it earlier. `server_may_make`: COMPOSIO_MANAGED_APPS lets the server
+                            make it on the first connect. `none`: can't be connected here.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/admin/health:
+    get:
+      operationId: adminGetHealth
+      tags: [admin]
+      summary: Can the backend reach what it depends on (admin)
+      description: |
+        Asks Postgres, Redis, the vm-manager, LiteLLM and Composio, each with a 3-second limit, and
+        says for each `ok`, `error` or `off` (not set up on this server), with a short message.
+        `ok` is true when none is `error`. `version` is the backend's version and the deployed
+        commit, when the deploy passed it on (`GIT_COMMIT`).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, checkedAt, version, services]
+                properties:
+                  ok: { type: boolean }
+                  checkedAt: { type: string, format: date-time }
+                  version:
+                    type: object
+                    required: [version, commit, node]
+                    properties:
+                      version: { type: string, examples: [0.1.0] }
+                      commit: { type: [string, "null"], examples: [accd3c4] }
+                      node: { type: string, examples: [v22.11.0] }
+                  services:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, status, message, ms]
+                      properties:
+                        name: { type: string, enum: [postgres, redis, vm-manager, litellm, composio] }
+                        status: { type: string, enum: [ok, error, "off"] }
+                        message: { type: string }
+                        ms: { type: integer, description: How long the check took }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   # ---------------------------------------------------------------- waitlist
   /v1/waitlist:
     post:

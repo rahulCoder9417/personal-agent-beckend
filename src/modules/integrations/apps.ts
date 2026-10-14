@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, count, countDistinct, desc, eq } from 'drizzle-orm';
 import { config } from '../../shared/config.ts';
 import { db } from '../../shared/db/client.ts';
 import { notFound, planLimit, unavailable } from '../../shared/errors.ts';
@@ -22,6 +22,7 @@ import {
   rememberAuthConfig,
   toolTags,
   type AuthConfigInfo,
+  type ComposioAccount,
 } from './composio.ts';
 import { composioAuthConfigs, connections } from './tables.ts';
 
@@ -107,11 +108,16 @@ export async function refreshPendingConnections(userId: string): Promise<void> {
     pending.map(async (row) => {
       try {
         const acc = await composio().account(row.composioAccountId);
-        const status = acc ? statusFromComposio(acc.status) : null;
-        if (!acc || !status) return;
+        if (!acc) return;
+        const status = statusFromComposio(acc.status);
+        // Composio answered: that is a check, also while it is still being set up.
         await db()
           .update(connections)
-          .set({ status, accountLabel: acc.label ?? row.accountLabel })
+          .set(
+            status
+              ? { status, accountLabel: acc.label ?? row.accountLabel, checkedAt: new Date() }
+              : { checkedAt: new Date() },
+          )
           .where(
             and(
               eq(connections.userId, userId),
@@ -168,6 +174,35 @@ export async function currentSetupFor(
 async function storedAuthConfigs(): Promise<Map<string, string>> {
   const rows = await db().select().from(composioAuthConfigs);
   return new Map(rows.map((r) => [r.app, r.authConfigId]));
+}
+
+/**
+ * Where an app's setup comes from on this server: `settings` (COMPOSIO_AUTH_CONFIGS),
+ * `server_made` (the server made it and keeps it in `composio_auth_configs`) or `none`.
+ * `connectable`: there is a setup, or the server may make one on the first connect.
+ */
+export type SetupSource = 'settings' | 'server_made' | 'none';
+export interface AppSetup {
+  setupSource: SetupSource;
+  connectable: boolean;
+}
+
+/** Every catalog app's setup, by slug. Composio is not asked. */
+export async function appSetups(): Promise<Map<string, AppSetup>> {
+  const stored = await storedAuthConfigs();
+  return new Map(
+    CATALOG.map((app) => {
+      const setupSource: SetupSource = authConfigFor(app.slug)
+        ? 'settings'
+        : stored.has(app.slug)
+          ? 'server_made'
+          : 'none';
+      return [
+        app.slug,
+        { setupSource, connectable: setupSource !== 'none' || serverMaySetUp(app) },
+      ];
+    }),
+  );
 }
 
 /** The name of a setup the server makes. It shows only in Composio's dashboard. */
@@ -247,7 +282,7 @@ export function connectReturnUrl(appSlug: string, returnUrl?: string): string {
  */
 export async function appCatalogFor(userId: string, plan: PlanId) {
   await refreshPendingConnections(userId);
-  const [rows, stored] = await Promise.all([listConnections(userId), storedAuthConfigs()]);
+  const [rows, setups] = await Promise.all([listConnections(userId), appSetups()]);
   return CATALOG.map((app) => ({
     slug: app.slug,
     name: app.name,
@@ -256,7 +291,7 @@ export async function appCatalogFor(userId: string, plan: PlanId) {
     iconUrl: null,
     category: app.category,
     availableOnPlan: appAllowedOnPlan(app, plan),
-    connectable: Boolean(authConfigFor(app.slug) ?? stored.get(app.slug)) || serverMaySetUp(app),
+    connectable: setups.get(app.slug)?.connectable ?? false,
     connections: rows
       .filter((r) => r.app === app.slug && r.status !== 'pending')
       .map((r) => ({
@@ -362,7 +397,7 @@ export async function setConnectionStatus(
 ): Promise<void> {
   await db()
     .update(connections)
-    .set({ status })
+    .set({ status, checkedAt: new Date() })
     .where(eq(connections.composioAccountId, accountId));
 }
 
@@ -403,4 +438,124 @@ export async function deleteUserConnections(userId: string): Promise<void> {
       .deleteAccount(r.composioAccountId)
       .catch(() => {});
   await db().delete(connections).where(eq(connections.userId, userId));
+}
+
+// --- Admin: one user's connections, a recheck, and the numbers per app --------------------------
+
+/** One connection as an admin sees it: no Composio account id, token or secret. */
+export function toAdminConnection(row: Connection, setup: AppSetup | undefined) {
+  return {
+    id: row.id,
+    app: row.app,
+    appName: findApp(row.app)?.name ?? row.app,
+    status: row.status,
+    accountLabel: row.accountLabel,
+    setupSource: setup?.setupSource ?? ('none' as const),
+    connectable: setup?.connectable ?? false,
+    connectedAt: row.createdAt.toISOString(),
+    lastCheckedAt: row.checkedAt ? row.checkedAt.toISOString() : null,
+  };
+}
+
+/** Every connection of a user, in any state, newest first. From our table only: Composio is not asked. */
+export async function connectionsForAdmin(userId: string) {
+  const [rows, setups] = await Promise.all([
+    db()
+      .select()
+      .from(connections)
+      .where(eq(connections.userId, userId))
+      .orderBy(desc(connections.createdAt), desc(connections.id)),
+    appSetups(),
+  ]);
+  return rows.map((r) => toAdminConnection(r, setups.get(r.app)));
+}
+
+export interface RecheckResult {
+  connection: Connection;
+  /** What Composio said (ACTIVE, INITIATED, EXPIRED, FAILED…); null when it has no such account. */
+  composioStatus: string | null;
+  /** Still being set up: a fresh series of checks was queued. */
+  checksQueued: boolean;
+}
+
+/**
+ * An admin's recheck: asks Composio about one connection now, whatever its state, and copies the
+ * answer, as the check job does for a pending one. An account Composio no longer has becomes
+ * `error`, unless it is still pending (then it is treated as the check job treats it: not finished
+ * yet). One still pending gets a fresh series of checks. Undefined: the user has no such
+ * connection. Composio can't be asked: 503, and nothing changes.
+ */
+export async function recheckConnection(
+  userId: string,
+  connectionId: string,
+): Promise<RecheckResult | undefined> {
+  const row = await getConnection(userId, connectionId);
+  if (!row) return undefined;
+  let acc: ComposioAccount | null;
+  try {
+    acc = await composio().account(row.composioAccountId);
+  } catch (err) {
+    logger().warn({ userId, connectionId, err: String(err) }, 'composio recheck failed');
+    throw unavailable("Composio can't be asked right now. Try again in a minute.");
+  }
+  const status = acc ? statusFromComposio(acc.status) : row.status === 'pending' ? null : 'error';
+  const [updated] = await db()
+    .update(connections)
+    .set({
+      checkedAt: new Date(),
+      ...(status ? { status } : {}),
+      ...(acc?.label ? { accountLabel: acc.label } : {}),
+    })
+    .where(and(eq(connections.userId, userId), eq(connections.id, row.id)))
+    .returning();
+  // Disconnected meanwhile.
+  if (!updated) return undefined;
+  let checksQueued = false;
+  if (updated.status === 'pending') {
+    checksQueued = await scheduleConnectionCheck({
+      userId,
+      connectionId: row.id,
+      run: Date.now(),
+      attempt: 0,
+    }).catch((err: unknown) => {
+      logger().warn({ userId, err: String(err) }, 'could not queue the connection check');
+      return false;
+    });
+  }
+  return { connection: updated, composioStatus: acc?.status ?? null, checksQueued };
+}
+
+/**
+ * For each catalog app: its setup on this server, how many users have a connection of it (in any
+ * state), and its connections by state. Numbers only.
+ */
+export async function appConnectionSummary() {
+  const [byStatus, byApp, setups] = await Promise.all([
+    db()
+      .select({ app: connections.app, status: connections.status, n: count() })
+      .from(connections)
+      .groupBy(connections.app, connections.status),
+    db()
+      .select({ app: connections.app, users: countDistinct(connections.userId) })
+      .from(connections)
+      .groupBy(connections.app),
+    appSetups(),
+  ]);
+  const usersOf = new Map(byApp.map((r) => [r.app, r.users]));
+  const countOf = (app: string, status: Connection['status']) =>
+    byStatus.find((r) => r.app === app && r.status === status)?.n ?? 0;
+  return CATALOG.map((app) => {
+    const setup = setups.get(app.slug);
+    return {
+      app: app.slug,
+      name: app.name,
+      setupSource: setup?.setupSource ?? ('none' as const),
+      connectable: setup?.connectable ?? false,
+      users: usersOf.get(app.slug) ?? 0,
+      active: countOf(app.slug, 'active'),
+      pending: countOf(app.slug, 'pending'),
+      expired: countOf(app.slug, 'expired'),
+      failed: countOf(app.slug, 'error'),
+    };
+  });
 }

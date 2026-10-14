@@ -1856,6 +1856,312 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  # ---------------------------------------------------------------- admin: one user's agent and container
+  # Every operation here is admin-only. Every change is written to the audit log with the admin's
+  # id and the reason. No response carries a container token, a Bridge secret, a LiteLLM key or an
+  # API key.
+  /v1/admin/users/{userId}/agent:
+    get:
+      operationId: adminGetUserAgent
+      tags: [admin]
+      summary: One user's agent and container, as support sees it (admin)
+      description: |
+        The container as the vm-manager reports it, the engine, whether a Claude plan is connected
+        (never its sign-in), Claude Code's model and effort, Scout's browser, what pays for the AI,
+        and the usage charged since midnight UTC. When the vm-manager can't be asked, the rest is
+        still answered and `container.reachable` is false.
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminAgent" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/users/{userId}/container/stop:
+    post:
+      operationId: adminStopContainer
+      tags: [admin]
+      summary: Stop one user's container now (admin)
+      description: |
+        A polite stop by default, the way the idle stop does it: Hermes saves to the user's folder
+        first. The vm-manager refuses it (409) while a turn runs, a message is being delivered or a
+        Claude sign-in waits for its code.
+
+        **`force: true` is dangerous.** It ends the container at once, in the middle of a turn if
+        there is one, without letting Hermes save. That turn fails as our fault: the user is told
+        "something went wrong on our side" and its credits are given back. Use it only for a turn
+        that is stuck.
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500, description: "Why. Kept in the audit log, not shown to the user." }
+                force:
+                  type: boolean
+                  default: false
+                  description: "**Dangerous**: stops it even in the middle of a turn (see above)."
+      responses:
+        "200":
+          description: Stopped
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [container]
+                properties:
+                  container: { $ref: "#/components/schemas/AdminContainer" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: No such user, or the user has no container
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: A polite stop was refused (a turn runs, a delivery is in flight, or a Claude sign-in waits)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: The vm-manager could not be asked
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/admin/users/{userId}/container/wake:
+    post:
+      operationId: adminWakeContainer
+      tags: [admin]
+      summary: Wake one user's container now (admin)
+      description: |
+        The same wake a turn makes: the container is made first if the user has none, then started
+        and checked for ready; afterwards the engine and the browser switch are set again if they
+        differ. It needs the user to have credits, because awake time is charged to them (1 credit
+        per 10 minutes; the idle stop puts it back to sleep after 3 quiet minutes).
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500, description: "Why. Kept in the audit log, not shown to the user." }
+      responses:
+        "200":
+          description: Awake
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [container, wasStopped]
+                properties:
+                  container: { $ref: "#/components/schemas/AdminContainer" }
+                  wasStopped: { type: boolean, description: It was asleep and was started now. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The user is out of credits
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: The server is at its awake limit with nothing to stop, or the vm-manager could not be asked. Try again shortly.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/admin/users/{userId}/agent/reset:
+    post:
+      operationId: adminResetAgent
+      tags: [admin]
+      summary: Put chosen agent settings back to their defaults (admin)
+      description: |
+        `engine`: the chosen engine goes back to Hermes (a Claude plan stays connected; the user
+        can choose Claude Code again). `model` and `effort`: Claude Code's model and thinking effort
+        go back to Default, Claude Code's own choice. `browser`: Scout's browser switch is set again
+        from the user's plan and the deployment, as a plan change does. The same functions the user's
+        own settings use make each change, so the vm-manager is told the same way.
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason, what]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500, description: "Why. Kept in the audit log, not shown to the user." }
+                what:
+                  type: array
+                  minItems: 1
+                  uniqueItems: true
+                  items: { type: string, enum: [engine, model, effort, browser] }
+      responses:
+        "200":
+          description: Reset; the agent as it is now
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminAgent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503":
+          description: The browser switch could not be sent to the vm-manager (the other settings were reset)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/admin/users/{userId}/approvals:
+    get:
+      operationId: adminListUserApprovals
+      tags: [admin]
+      summary: One user's approvals, newest first (admin)
+      description: |
+        Every state unless `status` is given. Only the action's name, its app and the short summary
+        the user was shown: never the action's inputs.
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/ApprovalStatus" }
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/AdminApproval" }
+                  nextCursor: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/approvals/{approvalId}/cancel:
+    post:
+      operationId: adminCancelApproval
+      tags: [admin]
+      summary: Cancel a waiting approval (admin)
+      description: |
+        Ends it the way the 24-hour expiry does: it becomes `expired`, the agent is not woken, and
+        nothing can run with it. A late tap on its button gets "That approval was already answered
+        or has expired". Only a waiting approval can be cancelled (409 otherwise).
+      parameters:
+        - { name: approvalId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500, description: "Why. Kept in the audit log, not shown to the user." }
+      responses:
+        "200":
+          description: Cancelled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminApproval" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/admin/users/{userId}/crew-jobs:
+    get:
+      operationId: adminListUserCrewJobs
+      tags: [admin]
+      summary: One user's crew jobs, newest first (admin)
+      description: |
+        Without the brief's text and without the report. `withReport=1` adds each job's report.
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+        - name: withReport
+          in: query
+          required: false
+          description: "`1` or `true` adds the report to each job."
+          schema: { type: string, enum: ["0", "1", "false", "true"] }
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/AdminCrewJob" }
+                  nextCursor: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/crew-jobs/{crewJobId}/cancel:
+    post:
+      operationId: adminCancelCrewJob
+      tags: [admin]
+      summary: Cancel a crew job that has not started (admin)
+      description: |
+        Only a `queued` job: it is marked `failed` with the error "Cancelled by Textcrew support",
+        it never runs, and the user is told in the job's chat. A running job can't be stopped
+        midway (409): the crew job has no stop signal yet. A finished one is 409 too.
+      parameters:
+        - { name: crewJobId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500, description: "Why. Kept in the audit log, not shown to the user." }
+      responses:
+        "200":
+          description: Cancelled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminCrewJob" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   # ---------------------------------------------------------------- webhooks (called by external services)
   /webhooks/clerk:
     post:
@@ -2931,6 +3237,147 @@ components:
               entries: { type: integer }
               attempts: { type: integer }
               lastAt: { type: string, format: date-time }
+
+    # ---- admin: one user's agent and container (no tokens, secrets or keys in any of these)
+    AdminContainer:
+      type: object
+      description: |
+        The user's container as the vm-manager reports it. Never its token or its Bridge secret.
+        The vm-manager does not report when the container woke, so there is no "awake since".
+      required: [reachable, state, busy, lastActiveAt, imageVersion, memoryBytes, engine, claudeSignedIn, browserOn]
+      properties:
+        reachable:
+          type: boolean
+          description: False when the vm-manager could not be asked. The other fields are then null, and `state` is `unknown`.
+        state: { type: string, enum: [none, stopped, waking, awake, busy, broken, unknown] }
+        busy: { type: [boolean, "null"], description: In the middle of a turn. }
+        lastActiveAt:
+          type: [string, "null"]
+          format: date-time
+          description: The last delivered message, tool call or git call.
+        imageVersion: { type: [string, "null"], description: The agent image the container was made from. }
+        memoryBytes: { type: [integer, "null"], description: "Memory in use, while it runs." }
+        engine:
+          type: [string, "null"]
+          enum: [hermes, claude_code, null]
+          description: The engine the vm-manager has on record for the container.
+        claudeSignedIn:
+          type: [boolean, "null"]
+          description: Claude Code has its sign-in in the user's folder, as the vm-manager last saw it. Never the sign-in itself.
+        browserOn:
+          type: [boolean, "null"]
+          description: Scout's browser as the vm-manager has it on record (a running container gets a change at its next wake).
+
+    AdminAgent:
+      type: object
+      required: [userId, plan, container, engine, claude, claudeModel, claudeEffort, browser, ai, today]
+      properties:
+        userId: { type: string }
+        plan: { $ref: "#/components/schemas/PlanId" }
+        container: { $ref: "#/components/schemas/AdminContainer" }
+        engine:
+          type: object
+          required: [chosen, effective]
+          properties:
+            chosen: { $ref: "#/components/schemas/AgentRuntime" }
+            effective:
+              type: [string, "null"]
+              enum: [hermes, claude_code, null]
+              description: What runs (null when the user has no AI source).
+        claude:
+          type: object
+          required: [connected, connectedAt]
+          properties:
+            connected: { type: boolean }
+            connectedAt: { type: [string, "null"], format: date-time }
+        claudeModel: { type: [string, "null"], description: "Null: Default (Claude Code's own choice)." }
+        claudeEffort:
+          type: [string, "null"]
+          enum: [low, medium, high, xhigh, max, null]
+          description: "Null: Default (Claude Code's own choice)."
+        browser:
+          type: object
+          required: [available, wanted, onRecord]
+          properties:
+            available: { type: boolean, description: This deployment has the browser (`BROWSER_AVAILABLE`). }
+            wanted: { type: boolean, description: The deployment has it and the user's plan includes it. }
+            onRecord: { type: [boolean, "null"], description: What the vm-manager has on record (null without a container or when it can't be asked). }
+        ai:
+          type: object
+          required: [access, preference, serverMode, ownKeyProviders]
+          properties:
+            access:
+              type: string
+              enum: [claude_plan, own_key, platform, none]
+              description: What pays for the AI now (`platform` is Textcrew AI, paid in credits).
+            preference: { $ref: "#/components/schemas/AiPreference" }
+            serverMode:
+              type: string
+              enum: [platform, own_only]
+              description: The server's `AI_ACCESS_MODE`.
+            ownKeyProviders:
+              type: array
+              items: { $ref: "#/components/schemas/ByokProvider" }
+              description: The providers the user saved a key for. Never the key.
+        today:
+          type: object
+          description: |
+            Usage charged since midnight UTC, from the 5-minute usage syncs (the last few minutes
+            may not be in it yet).
+          required: [since, awakeSeconds, browserSeconds, creditsCharged]
+          properties:
+            since: { type: string, format: date-time }
+            awakeSeconds: { type: integer }
+            browserSeconds: { type: integer }
+            creditsCharged: { type: integer, description: "AI, awake time and browser time charged by those syncs." }
+
+    AdminApproval:
+      type: object
+      description: An approval without the action's inputs.
+      required: [id, userId, status, summary, app, action, createdAt, expiresAt, decidedAt, decidedVia, used]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        status: { $ref: "#/components/schemas/ApprovalStatus" }
+        summary: { type: string, description: The short summary the user was shown. }
+        app: { type: [string, "null"], examples: [gmail] }
+        action: { type: [string, "null"], examples: [GMAIL_SEND_EMAIL] }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        decidedAt: { type: [string, "null"], format: date-time }
+        decidedVia:
+          type: [string, "null"]
+          description: How it was answered (`web`, `telegram:button`, ...), or `admin` when support cancelled it.
+        used: { type: boolean, description: An approved action already ran with it. }
+
+    AdminCrewJob:
+      type: object
+      description: A crew job without the brief's text. `report` only with `withReport=1`.
+      required: [id, userId, member, status, source, owner, repo, pullNumber, branch, reportTo, postedOnPullRequest, hasReport, error, createdAt, startedAt, finishedAt]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        member: { type: string, enum: [patch, byte] }
+        status: { type: string, enum: [queued, running, done, failed] }
+        source: { type: string, enum: [app, chat] }
+        owner: { type: string }
+        repo: { type: string }
+        pullNumber: { type: [integer, "null"] }
+        branch: { type: [string, "null"] }
+        reportTo:
+          type: object
+          required: [channel, pullRequest, issue]
+          properties:
+            channel: { $ref: "#/components/schemas/ChannelType" }
+            pullRequest: { type: boolean }
+            issue: { type: boolean }
+        postedOnPullRequest: { type: boolean, description: The one review the brief allowed was posted. }
+        hasReport: { type: boolean }
+        report: { type: [string, "null"], description: Only with `withReport=1`. }
+        error: { type: [string, "null"] }
+        createdAt: { type: string, format: date-time }
+        startedAt: { type: [string, "null"], format: date-time }
+        finishedAt: { type: [string, "null"], format: date-time }
 
     AgentRuntime:
       type: string

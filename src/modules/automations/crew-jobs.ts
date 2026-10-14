@@ -11,6 +11,7 @@ import type { Job } from 'bullmq';
 import { and, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { isChannelEnabled } from '../../shared/config.ts';
 import { db } from '../../shared/db/client.ts';
+import { conflict, notFound } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
 import { logger } from '../../shared/logger.ts';
 import { audit } from '../admin/audit.ts';
@@ -768,4 +769,70 @@ export async function releaseCrewJobComment(userId: string, jobId: string): Prom
 /** Account deletion: the user's crew jobs. */
 export async function deleteUserCrewJobs(userId: string): Promise<void> {
   await db().delete(crewJobs).where(eq(crewJobs.userId, userId));
+}
+
+// --- admin tools ---------------------------------------------------------------------------------
+
+/** The error a job cancelled by support carries (the user sees it on the Crew screen). */
+export const CANCELLED_BY_SUPPORT = 'Cancelled by Textcrew support.';
+
+/** Admin tools: one job by its id, whoever's it is (the route is admin-only). */
+export async function crewJobForAdmin(id: string): Promise<CrewJob | undefined> {
+  const [row] = await db().select().from(crewJobs).where(eq(crewJobs.id, id));
+  return row;
+}
+
+/**
+ * Admin tools: cancels a job that has not started. It is marked `failed` with
+ * CANCELLED_BY_SUPPORT in the same step as the check, so the worker's claim (which needs
+ * `queued`) can never run it afterwards; its queued turn ends as "nothing to do". The user is told
+ * in the job's chat. A running job can't be stopped midway (the Bridge has no stop signal for one
+ * job): 409, like a finished one. 404 if there is no such job.
+ */
+export async function cancelQueuedCrewJob(
+  id: string,
+  by: { adminId: string; reason: string },
+): Promise<CrewJob> {
+  const row = await db().transaction(async (tx) => {
+    const [cancelled] = await tx
+      .update(crewJobs)
+      .set({ status: 'failed', error: CANCELLED_BY_SUPPORT, finishedAt: new Date() })
+      .where(and(eq(crewJobs.id, id), eq(crewJobs.status, 'queued')))
+      .returning();
+    if (!cancelled) return undefined;
+    await audit(
+      {
+        userId: cancelled.userId,
+        actor: 'admin',
+        action: 'crew_job_cancelled',
+        summary: `Cancelled by Textcrew support: ${jobTitle(cancelled)}`,
+        details: {
+          crewJobId: id,
+          crew: cancelled.member,
+          adminId: by.adminId,
+          reason: by.reason,
+        },
+      },
+      tx,
+    );
+    return cancelled;
+  });
+  if (!row) {
+    const existing = await crewJobForAdmin(id);
+    if (!existing) throw notFound('Crew job not found');
+    if (existing.status === 'running')
+      throw conflict(
+        "This job is running, and a running crew job can't be stopped midway yet. Its turn ends by itself within 15 minutes; stopping the container by force ends it now, as a failure on our side.",
+      );
+    throw conflict(`This job is already ${existing.status}`);
+  }
+  await queueOutbound({
+    userId: row.userId,
+    sessionKey: row.sessionKey,
+    conversationId: row.conversationId ?? null,
+    text: `"${jobTitle(row)}" was cancelled by Textcrew support and won't run.`,
+  }).catch((err: unknown) =>
+    logger().warn({ userId: row.userId, err: String(err) }, 'crew job cancellation not told'),
+  );
+  return row;
 }

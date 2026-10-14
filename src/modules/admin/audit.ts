@@ -1,4 +1,4 @@
-import { and, desc, eq, lt } from 'drizzle-orm';
+import { and, desc, eq, gte, lt, type SQL } from 'drizzle-orm';
 import { db, type Tx } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import { auditLog } from './schema.ts';
@@ -34,6 +34,37 @@ export async function listAudit(userId: string, opts: { cursor?: string; limit: 
     .select()
     .from(auditLog)
     .where(and(...where))
+    .orderBy(desc(auditLog.id))
+    .limit(opts.limit + 1);
+  const page = rows.slice(0, opts.limit);
+  return { items: page, nextCursor: rows.length > opts.limit ? page[page.length - 1]!.id : null };
+}
+
+export interface AuditFilter {
+  userId?: string;
+  actor?: AuditEntry['actor'];
+  action?: string;
+  /** Entries at or after this time. */
+  from?: Date;
+  /** Entries before this time. */
+  to?: Date;
+  cursor?: string;
+  limit: number;
+}
+
+/** Every user's entries, newest first, for the admins (`GET /v1/admin/audit`). */
+export async function listAuditAll(opts: AuditFilter) {
+  const where: SQL[] = [];
+  if (opts.userId) where.push(eq(auditLog.userId, opts.userId));
+  if (opts.actor) where.push(eq(auditLog.actor, opts.actor));
+  if (opts.action) where.push(eq(auditLog.action, opts.action));
+  if (opts.from) where.push(gte(auditLog.createdAt, opts.from));
+  if (opts.to) where.push(lt(auditLog.createdAt, opts.to));
+  if (opts.cursor) where.push(lt(auditLog.id, opts.cursor));
+  const rows = await db()
+    .select()
+    .from(auditLog)
+    .where(where.length ? and(...where) : undefined)
     .orderBy(desc(auditLog.id))
     .limit(opts.limit + 1);
   const page = rows.slice(0, opts.limit);

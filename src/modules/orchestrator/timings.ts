@@ -301,7 +301,9 @@ export function turnStages(row: TurnTimingRow): Stage[] {
     const parts = w
       ? [
           row.wake ?? '',
-          w.capacityWaitMs ? `making room ${seconds(w.capacityWaitMs)}` : '',
+          w.evicted || (w.capacityWaitMs ?? 0) >= 100
+            ? `making room ${seconds(w.capacityWaitMs ?? 0)}`
+            : '',
           w.containerStartMs ? `container start ${seconds(w.containerStartMs)}` : '',
           w.bridgeReadyMs ? `Bridge ready ${seconds(w.bridgeReadyMs)}` : '',
           w.lockWaitMs ? `waited for another operation ${seconds(w.lockWaitMs)}` : '',
@@ -336,20 +338,25 @@ export function turnStages(row: TurnTimingRow): Stage[] {
   );
   const firstOut = firstOf(s, ['first_text', 'first_tool']);
   if (s.engine_ready !== undefined && firstOut !== undefined) {
+    // Thinking: from the model's first thinking to its first words or tool call (web chat turns,
+    // where the Bridge sees the model's own stream).
     const thinking =
-      s.first_thinking !== undefined &&
-      s.first_text !== undefined &&
-      s.first_text > s.first_thinking
-        ? `, thinking ${seconds(s.first_text - s.first_thinking)}`
+      s.first_thinking !== undefined && firstOut > s.first_thinking
+        ? `, thinking ${seconds(firstOut - s.first_thinking)}`
         : '';
     const response =
       s.first_response !== undefined
-        ? `, first response after ${seconds(s.first_response - s.engine_ready)}`
+        ? `, first response after ${seconds(Math.max(s.first_response - s.engine_ready, 0))}`
+        : '';
+    const cli = b?.cli;
+    const cache =
+      cli?.cache_read_input_tokens !== undefined || cli?.cache_creation_input_tokens !== undefined
+        ? `, prompt cache ${cli.cache_read_input_tokens ?? 0} tokens read and ${cli.cache_creation_input_tokens ?? 0} written in the run`
         : '';
     add(
       'first output',
       Math.max(firstOut - s.engine_ready, 0),
-      `the model's first words or tool call${response}${thinking}`,
+      `the model's first words or tool call${response}${thinking}${cache}`,
     );
   }
   if (firstOut !== undefined && s.engine_done !== undefined) {

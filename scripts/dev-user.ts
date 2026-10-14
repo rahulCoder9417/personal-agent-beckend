@@ -31,6 +31,9 @@
 //   approve         --user <id> [--approval <id>] [--decision approve|reject] [--timeout 900]
 //   pr-review       --user <id> [--repo <owner>/<name> --state on|off]
 //   memories        --user <id> [--clear all|<memoryId>]
+//   timings         --user <id> [--last 10]
+//                   (where the time of each of the last turns went: each stage, how long the user
+//                   waited for the answer, and a line on the biggest stage; never any text)
 //
 // Every command that takes --user also takes --email <the user's email> instead.
 //
@@ -98,6 +101,14 @@ import {
   MEMORY_MAX_COUNT,
 } from '../src/modules/orchestrator/memory.ts';
 import { hideSecrets } from '../src/modules/orchestrator/memory-secrets.ts';
+import {
+  answeredAfter,
+  recentTurnTimings,
+  seconds,
+  turnStages,
+  verdict,
+  type TurnTimingRow,
+} from '../src/modules/orchestrator/timings.ts';
 import { sendWebMessage } from '../src/modules/orchestrator/process-message.ts';
 import { getAgentStatus } from '../src/modules/orchestrator/sandbox.ts';
 import { planPriority, Priority } from '../src/modules/orchestrator/vm.ts';
@@ -125,6 +136,7 @@ const USAGE = `usage: node --import tsx scripts/dev-user.ts <command> [flags]
   approve         --user <id> [--approval <id>] [--decision approve|reject] [--timeout 900]
   pr-review       --user <id> [--repo <owner>/<name> --state on|off]
   memories        --user <id> [--clear all|<memoryId>]
+  timings         --user <id> [--last 10]
 (--email <the user's email> works in place of --user)`;
 
 /** How long `send` and `approve` wait for the agent's turn: a turn is cut off at 15 minutes. */
@@ -286,6 +298,60 @@ function composioLine(acc: ComposioAccount | null | Error): string {
     `Composio: ${acc.status} (app ${acc.toolkit || '?'}, setup ${acc.authConfigId ?? '?'}` +
     `${acc.label ? `, ${shown(acc.label, 80)}` : ''})`
   );
+}
+
+/** One turn's timings as lines: what the turn was, each stage, the answer's wait, the biggest stage. */
+function timingLines(row: TurnTimingRow): string[] {
+  const what = [
+    row.route ? `route ${row.route}` : '',
+    row.engine ? `engine ${row.engine}` : '',
+    row.wake ? `wake ${row.wake}` : '',
+    row.outcome,
+    row.attempt > 1 ? `try ${row.attempt}` : '',
+  ]
+    .filter(Boolean)
+    .join(', ');
+  const stages = turnStages(row);
+  const width = Math.max(...stages.map((st) => st.name.length), 5);
+  const answered = answeredAfter(row);
+  const finished = row.stages.finished;
+  const after =
+    finished !== undefined && row.stages.turn_done !== undefined
+      ? `; after the answer, usage sync and the rest ${seconds(finished - row.stages.turn_done)}`
+      : '';
+  return [
+    `turn ${row.deliveryId} at ${row.startedAt.toISOString()} (${row.channel} ${row.kind}): ${what}`,
+    ...stages.map(
+      (st) =>
+        `  ${st.name.padEnd(width)}  ${seconds(st.ms).padStart(9)}${st.note ? `  ${st.note}` : ''}`,
+    ),
+    answered !== undefined
+      ? `  answer after ${seconds(answered)}${finished !== undefined ? ` (turn over after ${seconds(finished)}${after})` : ''}`
+      : `  no answer${finished !== undefined ? ` (turn over after ${seconds(finished)})` : ''}`,
+    `  ${verdict(row, stages)}`,
+  ];
+}
+
+/** Over several turns: the middle answer time, and the stage that was biggest most often. */
+function timingSummary(rows: TurnTimingRow[]): string[] {
+  const waits = rows
+    .map(answeredAfter)
+    .filter((v): v is number => v !== undefined)
+    .sort((a, b) => a - b);
+  if (!waits.length) return [];
+  const biggest = new Map<string, number>();
+  for (const row of rows) {
+    const stages = turnStages(row);
+    if (!stages.length) continue;
+    const big = stages.reduce((a, b) => (b.ms > a.ms ? b : a)).name;
+    biggest.set(big, (biggest.get(big) ?? 0) + 1);
+  }
+  const [top, times] = [...biggest].sort((a, b) => b[1] - a[1])[0] ?? ['', 0];
+  return [
+    `${rows.length === 1 ? 'over this turn' : `over these ${rows.length} turns`}: answer after ${seconds(waits[Math.floor((waits.length - 1) / 2)]!)} ` +
+      `in the middle (${seconds(waits[0]!)} to ${seconds(waits.at(-1)!)}); ` +
+      `the biggest stage was ${top} in ${times} of them`,
+  ];
 }
 
 /** Runs one command; returns the lines to print. Never returns the Claude code or any secret. */
@@ -711,6 +777,13 @@ export async function devUser(argv: string[]): Promise<string[]> {
         `${all.length} of ${MEMORY_MAX_COUNT} memories`,
         ...all.map((m) => `${m.id} ${m.kind}: ${shown(m.content, 300)}`),
       ];
+    }
+    case 'timings': {
+      // Where the time of the user's last turns went (orchestrator/timings.ts). Newest first.
+      const user = await activeUser(flags);
+      const rows = await recentTurnTimings(user.id, count(flags, 'last', 10, 100));
+      if (!rows.length) return ['no turn timings yet (they are kept 30 days)'];
+      return [...rows.flatMap(timingLines), ...timingSummary(rows)];
     }
     default:
       throw new UsageError(command ? `unknown command: ${command}` : 'no command');

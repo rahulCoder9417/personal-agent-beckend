@@ -50,7 +50,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 14 October 2026: the databases move from the server to Neon
 
-- **Where it is:** on `main` (once merged), not yet on the server. The move needs a script run on the server by hand (`aws-setup.md`, section 8, "Moving the databases to Neon").
+- **Where it is:** on `main` since 14 October, and on the test server since 14 October: the server's three databases now live on Neon.
 - **Why:** you chose to stop keeping the databases in a container on the test server and to use Neon, a managed Postgres, for all three: the backend's, the vm-manager's and LiteLLM's. The existing data on the server is copied over.
 - **What the user notices:** a few minutes when the bot does not answer, while the move runs. After it, replies may be slower: see "Cost and speed".
 - **Backend:**
@@ -76,9 +76,10 @@ Each entry has a heading with the date and the name of the feature, then the par
   - Lint and the type check pass. The full backend run: 761 of 761 tests pass. A first full run had 2 failures under load (a crew job and the usage sync job, both waiting on timing); both files pass alone, and the second full run passed completely.
   - Against Neon for real, in scratch databases that were dropped afterwards: the vm-manager's own database tests with Neon's address (every one passed except one that can't work on Neon for a test-only reason: the tests give each case its own schema through a connection setting that Neon's proxy ignores); LiteLLM's start-up (all 195 of its table changes applied, "database connected", a key made and saved); the backend's migrations, a query and a credit-style lock; the backup's dump tool with the backend's settings.
   - The move script, from the laptop: a local Postgres with the backend's real tables and some rows, into three scratch Neon databases. It created the missing ones, copied all three with matching row counts (35, 2 and 1 tables), refused a second run into the now full databases, and with `--force` replaced them. Docker isn't on the laptop, so the script's Docker commands (stopping the services, the `postgres:18` tools) did not run; they ran through local Postgres 18 tools instead.
-  - Not run on the server.
+  - On the server, 14 October: the dry run passed, then the move copied all three databases with matching row counts (backend 35 tables and 933 rows, vm-manager 4 tables and 59 rows, LiteLLM 82 tables and 228 rows). Everything started on Neon and `api.textcrew.in/healthz` answers "ok".
+  - The deploy at the end of the move reported "failed" by mistake: its health check counted the stopped local database as a service that should be running. Nothing was wrong. The check now leaves that container out, with a test for it.
 - **Still open:**
-  - Run the move on the server (the steps are in `aws-setup.md`, section 8). Watch how long replies take afterwards.
+  - Watch how long replies take now that every query goes to Ohio.
   - If replies are too slow, the fix is a Neon project in Singapore or Mumbai; that is a new project and a second move.
   - Neon keeps its own history of the databases. The nightly copy stays as a second, independent one; dropping it is your call.
   - After a few good days, the old database's volume on the server (`personal-agent_pgdata`) can be deleted.

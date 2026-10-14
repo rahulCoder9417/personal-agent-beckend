@@ -98,7 +98,9 @@ main() {
   done
   compose ps -a --format 'table {{.Service}}\t{{.Status}}'
   local down
-  down=$(compose ps -a --format '{{.Service}} {{.State}}' | awk '$1 != "agent-image" && $2 != "running" {print $1}')
+  # `postgres` is left out: since the move to Neon it is a stopped container kept only for its volume.
+  down=$(compose ps -a --format '{{.Service}} {{.State}}' |
+    awk '$1 != "agent-image" && $1 != "postgres" && $2 != "running" {print $1}')
   if [ "$ok" != 1 ] || [ -n "$down" ]; then
     echo "DEPLOY FAILED: health=$ok not running: ${down:-none}" >&2
     exit 1

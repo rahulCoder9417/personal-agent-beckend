@@ -1,7 +1,7 @@
 // The databases live on Neon on the server; the compose `postgres` is for the laptop only.
 // Docker isn't available in the test run, so this reads the compose file and the deploy scripts,
 // and runs move-to-neon.sh only as far as its checks that need no database.
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -51,6 +51,14 @@ describe('deploy.sh', () => {
     expect(deploy).toContain('compose up -d --wait redis');
     for (const v of ['BACKEND_DATABASE_URL', 'VM_MANAGER_DATABASE_URL', 'LITELLM_DATABASE_URL'])
       expect(deploy).toContain(v);
+  });
+
+  it('health check: the stopped postgres kept for its volume is not a failure', () => {
+    const awk = /awk '([^']+)'/.exec(deploy.slice(deploy.indexOf('down=$(')))?.[1];
+    expect(awk).toBeDefined();
+    const ps = 'api running\npostgres exited\nagent-image exited\nworker exited\n';
+    const down = execFileSync('awk', [awk!], { input: ps, encoding: 'utf8' });
+    expect(down.trim()).toBe('worker');
   });
 });
 

@@ -13,6 +13,7 @@ import { safeEqual } from '../shared/crypto.ts';
 import { errorResponse, mountRoutes, type RouteDef } from './router.ts';
 import { adminRoutes } from './routes/admin.ts';
 import { adminAppRoutes } from './routes/admin-apps.ts';
+import { adminAgentRoutes } from './routes/admin-agent.ts';
 import { billingRoutes } from './routes/billing.ts';
 import { byokRoutes } from './routes/byok.ts';
 import { couponRoutes } from './routes/coupons.ts';
@@ -55,6 +56,7 @@ export const allRoutes: RouteDef[] = [
   ...byokRoutes,
   ...adminRoutes,
   ...adminAppRoutes,
+  ...adminAgentRoutes,
   ...polarWebhookRoutes,
   ...waitlistRoutes,
 ];

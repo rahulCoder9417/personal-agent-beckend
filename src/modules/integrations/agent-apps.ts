@@ -16,7 +16,7 @@ import {
   CATALOG,
   type CatalogApp,
 } from './catalog.ts';
-import { composio, type ComposioTool } from './composio.ts';
+import { toolkitTools, type ComposioTool } from './composio.ts';
 
 /**
  * - `connected`: an active connection, on the user's plan. Its actions are listed.
@@ -183,7 +183,7 @@ export async function appActionsFor(
     states.map(async (s): Promise<ComposioTool[] | Error | null> => {
       if (s.status !== 'connected') return null;
       try {
-        const tools = await composio().listTools([s.app.toolkit]);
+        const tools = await toolkitTools(s.app.toolkit);
         return tools.filter(
           (t) => !q || t.slug.toLowerCase().includes(q) || t.description.toLowerCase().includes(q),
         );

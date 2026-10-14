@@ -305,6 +305,14 @@ const tagCache = new Map<string, string[]>();
  */
 const authConfigCache = new Map<string, AuthConfigInfo>();
 
+/**
+ * An app's actions are the same for every user and change only when Composio changes the app, so
+ * one listing serves every `list_app_actions` call for a while instead of one request to Composio
+ * per app per call. A failed listing is not kept.
+ */
+export const TOOL_LIST_TTL_MS = 10 * 60_000;
+const toolListCache = new Map<string, { at: number; tools: ComposioTool[] }>();
+
 export function composio(): ComposioApi {
   return api;
 }
@@ -314,6 +322,17 @@ export function setComposioApi(fake: ComposioApi | undefined): void {
   api = fake ?? realApi;
   tagCache.clear();
   authConfigCache.clear();
+  toolListCache.clear();
+}
+
+/** One app's actions (its Composio toolkit), from the last listing when it is recent enough. */
+export async function toolkitTools(toolkit: string, now = Date.now()): Promise<ComposioTool[]> {
+  const key = toolkit.toLowerCase();
+  const kept = toolListCache.get(key);
+  if (kept && now - kept.at < TOOL_LIST_TTL_MS) return kept.tools;
+  const tools = await api.listTools([toolkit]);
+  toolListCache.set(key, { at: now, tools });
+  return tools;
 }
 
 /** What Composio says about a setup, or null when it can't be asked right now (nothing cached). */

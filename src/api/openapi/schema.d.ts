@@ -1149,6 +1149,221 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/users/{userId}/apps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One user's app connections (admin)
+         * @description Every connection the user has, in any state, newest first, from our own table. Composio is
+         *     not asked: use the recheck for that.
+         */
+        get: operations["adminListUserApps"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/users/{userId}/apps/{connectionId}/disconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disconnect one of a user's apps (admin)
+         * @description The same as the user's own disconnect: the account is removed at Composio and the
+         *     connection is deleted. App-event automations on that app are left as the user's own
+         *     disconnect leaves them. Audited with the admin's id and the reason.
+         */
+        post: operations["adminDisconnectUserApp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/users/{userId}/apps/{connectionId}/recheck": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask Composio about one of a user's connections again (admin)
+         * @description Runs the connection check now, whatever the connection's state: Composio is asked about
+         *     this account and its answer is copied (`ACTIVE` → active, `EXPIRED` → expired, `FAILED`
+         *     → error). An account Composio no longer has becomes `error`. One still being set up stays
+         *     `pending` and gets a fresh series of checks. Audited with the admin's id and the reason.
+         */
+        post: operations["adminRecheckUserApp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/users/{userId}/channels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One user's linked chats (admin)
+         * @description The chat id itself is never returned, only a masked form.
+         */
+        get: operations["adminListUserChannels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/users/{userId}/channels/{channelLinkId}/unlink": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unlink one of a user's chats (admin)
+         * @description The same as the user's own unlink (`DELETE /v1/channels/{channelLinkId}`), with the same
+         *     `channel_unlinked` entry in the user's activity log, marked as done by an admin. The chat
+         *     then gets the "not linked yet" reply. Audited with the admin's id and the reason.
+         */
+        post: operations["adminUnlinkUserChannel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/users/{userId}/automations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every automation of one user, finished one-time reminders too (admin)
+         * @description Newest first. The instruction text and the trigger's settings are left out.
+         */
+        get: operations["adminListUserAutomations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/automations/{automationId}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pause any user's automation (admin)
+         * @description The same as the user's own pause (its timer is removed; app events for it are ignored), with
+         *     `pausedReason: admin`, so the user sees it was paused by Textcrew. Adding credits does not
+         *     resume it. 409 for a one-time reminder that already ran. Audited with the admin's id and
+         *     the reason.
+         */
+        post: operations["adminPauseAutomation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/automations/{automationId}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume any user's automation (admin)
+         * @description The same as the user's own resume: its timer is set again and its failure count goes back
+         *     to 0. 409 for a one-time reminder that already ran. Audited with the admin's id and the
+         *     reason.
+         */
+        post: operations["adminResumeAutomation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/automations/{automationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete any user's automation (admin)
+         * @description The same as the user's own delete: its timer goes, and its Composio trigger with it (for
+         *     pull-request review, the watch on the repo, and with it the standing approval). Audited
+         *     with the admin's id and the reason.
+         */
+        delete: operations["adminDeleteAutomation"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/apps/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Per app, how many users connected it and whether it can be connected here (admin)
+         * @description Numbers only, one row per app in the catalog.
+         */
+        get: operations["adminAppsSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/waitlist": {
         parameters: {
             query?: never;
@@ -1677,8 +1892,11 @@ export interface components {
              */
             preset?: "pr_review" | null;
             enabled: boolean;
-            /** @enum {string|null} */
-            pausedReason?: "out_of_credits" | "failures" | "user" | null;
+            /**
+             * @description `admin`: paused by Textcrew support. Adding credits does not resume it; the user can.
+             * @enum {string|null}
+             */
+            pausedReason?: "out_of_credits" | "failures" | "user" | "admin" | null;
             /** Format: date-time */
             nextRunAt?: string | null;
             /** Format: date-time */
@@ -1724,8 +1942,11 @@ export interface components {
             repo: string;
             /** @description False while paused. A paused repo gets no reviews and gives no standing approval. */
             enabled: boolean;
-            /** @enum {string|null} */
-            pausedReason: "out_of_credits" | "failures" | "user" | null;
+            /**
+             * @description `admin`: paused by Textcrew support. Adding credits does not resume it; the user can.
+             * @enum {string|null}
+             */
+            pausedReason: "out_of_credits" | "failures" | "user" | "admin" | null;
             /**
              * @description `telegram`: a copy of each verdict is also sent to the user's Telegram chat. The
              *     verdict itself is always in the Automations chat.
@@ -2175,6 +2396,137 @@ export interface components {
                 /** Format: date-time */
                 lastAt: string;
             }[];
+        };
+        /**
+         * @description Where this server's Composio setup for the app comes from. `settings`: named in
+         *     `COMPOSIO_AUTH_CONFIGS` (our own sign-in app, usually). `server_made`: made by the server
+         *     itself and kept in its table. `none`: no setup yet; with `connectable` true the server
+         *     makes one on the first connect (`COMPOSIO_MANAGED_APPS`).
+         * @enum {string}
+         */
+        AdminAppSetupSource: "settings" | "server_made" | "none";
+        AdminUserApp: {
+            /** @description The connection's id */
+            id: string;
+            /** @example gmail */
+            app: string;
+            /** @example Gmail */
+            appName: string;
+            /** @enum {string} */
+            status: "pending" | "active" | "expired" | "error";
+            /** @example work@acme.com */
+            accountLabel: string | null;
+            setupSource: components["schemas"]["AdminAppSetupSource"];
+            /** @description The app can be connected on this server today */
+            connectable: boolean;
+            /**
+             * Format: date-time
+             * @description When the user started connecting it (the connect link was made)
+             */
+            connectedAt: string;
+            /**
+             * Format: date-time
+             * @description When the platform last heard from Composio about this connection (a check, the app
+             *     list, Composio's webhook or an admin's recheck). Null if never.
+             */
+            lastCheckedAt: string | null;
+        };
+        AdminRecheckResult: {
+            connection: components["schemas"]["AdminUserApp"];
+            /**
+             * @description What Composio said, e.g. ACTIVE, INITIATED, EXPIRED, FAILED. Null when it has no such account.
+             * @example ACTIVE
+             */
+            composioStatus: string | null;
+            /** @description The connection is still being set up, and a fresh series of checks was queued. */
+            checksQueued: boolean;
+        };
+        AdminUserChannel: {
+            /** @description The link's id */
+            id: string;
+            channel: components["schemas"]["ChannelType"];
+            /**
+             * @description What the user sees in Settings → Channels (a Telegram name or a masked number).
+             * @example @rahul
+             * @example +91 •••• ••42 10
+             */
+            label: string;
+            /**
+             * @description The chat id or phone number, masked. The full id is never returned.
+             * @example •••• 6789
+             * @example +91 •••• ••42 10
+             */
+            maskedChatId: string;
+            /** Format: date-time */
+            linkedAt: string;
+            /** @description The channel is switched on on this server (`ENABLED_CHANNELS`). */
+            enabled: boolean;
+            /** @description The user blocked the bot; nothing is sent there. */
+            blocked: boolean;
+            /** Format: date-time */
+            lastInboundAt: string | null;
+        };
+        AdminUserAutomation: {
+            id: string;
+            userId: string;
+            title: string;
+            /** @enum {string} */
+            kind: "once" | "repeat" | "event";
+            /**
+             * Format: date-time
+             * @description kind=once
+             */
+            runAt: string | null;
+            /** @description kind=repeat */
+            cron: string | null;
+            /** @description kind=event. The trigger's settings are left out. */
+            trigger: {
+                app: string;
+                event: string;
+            } | null;
+            /**
+             * @description Pull-request review only, the repo it watches.
+             * @example acme/website
+             */
+            repo: string | null;
+            timezone: string | null;
+            enabled: boolean;
+            /** @enum {string|null} */
+            pausedReason: "out_of_credits" | "failures" | "user" | "admin" | null;
+            /** @description Failed runs in a row. Three pause it. */
+            failCount: number;
+            /** Format: date-time */
+            lastRunAt: string | null;
+            /** Format: date-time */
+            nextRunAt: string | null;
+            /** @enum {string|null} */
+            preset: "pr_review" | null;
+            /**
+             * Format: date-time
+             * @description A one-time reminder that already ran. Not in the user's own list.
+             */
+            completedAt: string | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        AdminAppSummary: {
+            /** @example gmail */
+            app: string;
+            /** @example Gmail */
+            name: string;
+            setupSource: components["schemas"]["AdminAppSetupSource"];
+            /** @description The app can be connected on this server today */
+            connectable: boolean;
+            /** @description Users with at least one connection of this app, in any state */
+            users: number;
+            /** @description Connections that work */
+            active: number;
+            /** @description Connections started and not finished */
+            pending: number;
+            /** @description Connections whose sign-in expired */
+            expired: number;
+            /** @description Connections that failed (status `error`) */
+            failed: number;
         };
         /** @enum {string} */
         AgentRuntime: "hermes" | "claude_code";
@@ -4297,6 +4649,311 @@ export interface operations {
                             redemptions?: number;
                             userIds?: string[];
                         }[];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminListUserApps: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["AdminUserApp"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    adminDisconnectUserApp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+                connectionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Disconnected */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    adminRecheckUserApp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+                connectionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Checked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminRecheckResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description Composio can't be asked right now. Nothing changed. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    adminListUserChannels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["AdminUserChannel"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    adminUnlinkUserChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+                channelLinkId: components["parameters"]["ChannelLinkId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Unlinked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    adminListUserAutomations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["AdminUserAutomation"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    adminPauseAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Paused */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUserAutomation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    adminResumeAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Resumed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUserAutomation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    adminDeleteAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    adminAppsSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["AdminAppSummary"][];
                     };
                 };
             };

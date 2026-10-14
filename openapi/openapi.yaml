@@ -1749,6 +1749,315 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  # ---------------------------------------------------------------- admin: one user's apps, chats and automations
+  # Support tools. Every action goes through the same module function as the user's own, and
+  # writes an audit row with the admin's id and the required reason. No Composio account ids,
+  # tokens or secrets, and chat ids only masked.
+  /v1/admin/users/{userId}/apps:
+    get:
+      operationId: adminListUserApps
+      tags: [admin]
+      summary: One user's app connections (admin)
+      description: |
+        Every connection the user has, in any state, newest first, from our own table. Composio is
+        not asked: use the recheck for that.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/AdminUserApp" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/users/{userId}/apps/{connectionId}/disconnect:
+    post:
+      operationId: adminDisconnectUserApp
+      tags: [admin]
+      summary: Disconnect one of a user's apps (admin)
+      description: |
+        The same as the user's own disconnect: the account is removed at Composio and the
+        connection is deleted. App-event automations on that app are left as the user's own
+        disconnect leaves them. Audited with the admin's id and the reason.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: connectionId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 200, pattern: '\S' }
+      responses:
+        "204": { description: Disconnected }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/users/{userId}/apps/{connectionId}/recheck:
+    post:
+      operationId: adminRecheckUserApp
+      tags: [admin]
+      summary: Ask Composio about one of a user's connections again (admin)
+      description: |
+        Runs the connection check now, whatever the connection's state: Composio is asked about
+        this account and its answer is copied (`ACTIVE` → active, `EXPIRED` → expired, `FAILED`
+        → error). An account Composio no longer has becomes `error`. One still being set up stays
+        `pending` and gets a fresh series of checks. Audited with the admin's id and the reason.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: connectionId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 200, pattern: '\S' }
+      responses:
+        "200":
+          description: Checked
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminRecheckResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503":
+          description: Composio can't be asked right now. Nothing changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/admin/users/{userId}/channels:
+    get:
+      operationId: adminListUserChannels
+      tags: [admin]
+      summary: One user's linked chats (admin)
+      description: The chat id itself is never returned, only a masked form.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/AdminUserChannel" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/users/{userId}/channels/{channelLinkId}/unlink:
+    post:
+      operationId: adminUnlinkUserChannel
+      tags: [admin]
+      summary: Unlink one of a user's chats (admin)
+      description: |
+        The same as the user's own unlink (`DELETE /v1/channels/{channelLinkId}`), with the same
+        `channel_unlinked` entry in the user's activity log, marked as done by an admin. The chat
+        then gets the "not linked yet" reply. Audited with the admin's id and the reason.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: "#/components/parameters/ChannelLinkId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 200, pattern: '\S' }
+      responses:
+        "204": { description: Unlinked }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/users/{userId}/automations:
+    get:
+      operationId: adminListUserAutomations
+      tags: [admin]
+      summary: Every automation of one user, finished one-time reminders too (admin)
+      description: Newest first. The instruction text and the trigger's settings are left out.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/AdminUserAutomation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/automations/{automationId}/pause:
+    post:
+      operationId: adminPauseAutomation
+      tags: [admin]
+      summary: Pause any user's automation (admin)
+      description: |
+        The same as the user's own pause (its timer is removed; app events for it are ignored), with
+        `pausedReason: admin`, so the user sees it was paused by Textcrew. Adding credits does not
+        resume it. 409 for a one-time reminder that already ran. Audited with the admin's id and
+        the reason.
+      parameters:
+        - $ref: "#/components/parameters/AutomationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 200, pattern: '\S' }
+      responses:
+        "200":
+          description: Paused
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminUserAutomation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/admin/automations/{automationId}/resume:
+    post:
+      operationId: adminResumeAutomation
+      tags: [admin]
+      summary: Resume any user's automation (admin)
+      description: |
+        The same as the user's own resume: its timer is set again and its failure count goes back
+        to 0. 409 for a one-time reminder that already ran. Audited with the admin's id and the
+        reason.
+      parameters:
+        - $ref: "#/components/parameters/AutomationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 200, pattern: '\S' }
+      responses:
+        "200":
+          description: Resumed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminUserAutomation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/admin/automations/{automationId}:
+    delete:
+      operationId: adminDeleteAutomation
+      tags: [admin]
+      summary: Delete any user's automation (admin)
+      description: |
+        The same as the user's own delete: its timer goes, and its Composio trigger with it (for
+        pull-request review, the watch on the repo, and with it the standing approval). Audited
+        with the admin's id and the reason.
+      parameters:
+        - $ref: "#/components/parameters/AutomationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 200, pattern: '\S' }
+      responses:
+        "204": { description: Deleted }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/apps/summary:
+    get:
+      operationId: adminAppsSummary
+      tags: [admin]
+      summary: Per app, how many users connected it and whether it can be connected here (admin)
+      description: Numbers only, one row per app in the catalog.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/AdminAppSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   # ---------------------------------------------------------------- waitlist
   /v1/waitlist:
     post:
@@ -2428,7 +2737,10 @@ components:
           enum: [pr_review, null]
           description: "`pr_review`: this automation is pull-request review for one repo (see `/v1/pr-reviews`)."
         enabled: { type: boolean }
-        pausedReason: { type: [string, "null"], enum: [out_of_credits, failures, user, null] }
+        pausedReason:
+          type: [string, "null"]
+          enum: [out_of_credits, failures, user, admin, null]
+          description: "`admin`: paused by Textcrew support. Adding credits does not resume it; the user can."
         nextRunAt: { type: [string, "null"], format: date-time }
         lastRunAt: { type: [string, "null"], format: date-time }
         createdAt: { type: string, format: date-time }
@@ -2471,7 +2783,10 @@ components:
         enabled:
           type: boolean
           description: False while paused. A paused repo gets no reviews and gives no standing approval.
-        pausedReason: { type: [string, "null"], enum: [out_of_credits, failures, user, null] }
+        pausedReason:
+          type: [string, "null"]
+          enum: [out_of_credits, failures, user, admin, null]
+          description: "`admin`: paused by Textcrew support. Adding credits does not resume it; the user can."
         channel:
           $ref: "#/components/schemas/ChannelType"
           description: |
@@ -2931,6 +3246,120 @@ components:
               entries: { type: integer }
               attempts: { type: integer }
               lastAt: { type: string, format: date-time }
+
+    # ---- admin: one user's apps, chats and automations
+    AdminAppSetupSource:
+      type: string
+      enum: [settings, server_made, none]
+      description: |
+        Where this server's Composio setup for the app comes from. `settings`: named in
+        `COMPOSIO_AUTH_CONFIGS` (our own sign-in app, usually). `server_made`: made by the server
+        itself and kept in its table. `none`: no setup yet; with `connectable` true the server
+        makes one on the first connect (`COMPOSIO_MANAGED_APPS`).
+
+    AdminUserApp:
+      type: object
+      required: [id, app, appName, status, accountLabel, setupSource, connectable, connectedAt, lastCheckedAt]
+      properties:
+        id: { type: string, description: The connection's id }
+        app: { type: string, examples: [gmail] }
+        appName: { type: string, examples: [Gmail] }
+        status: { type: string, enum: [pending, active, expired, error] }
+        accountLabel: { type: [string, "null"], examples: [work@acme.com] }
+        setupSource: { $ref: "#/components/schemas/AdminAppSetupSource" }
+        connectable: { type: boolean, description: The app can be connected on this server today }
+        connectedAt:
+          type: string
+          format: date-time
+          description: When the user started connecting it (the connect link was made)
+        lastCheckedAt:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            When the platform last heard from Composio about this connection (a check, the app
+            list, Composio's webhook or an admin's recheck). Null if never.
+
+    AdminRecheckResult:
+      type: object
+      required: [connection, composioStatus, checksQueued]
+      properties:
+        connection: { $ref: "#/components/schemas/AdminUserApp" }
+        composioStatus:
+          type: [string, "null"]
+          description: What Composio said, e.g. ACTIVE, INITIATED, EXPIRED, FAILED. Null when it has no such account.
+          examples: [ACTIVE]
+        checksQueued:
+          type: boolean
+          description: The connection is still being set up, and a fresh series of checks was queued.
+
+    AdminUserChannel:
+      type: object
+      required: [id, channel, label, maskedChatId, linkedAt, enabled, blocked, lastInboundAt]
+      properties:
+        id: { type: string, description: The link's id }
+        channel: { $ref: "#/components/schemas/ChannelType" }
+        label:
+          type: string
+          description: What the user sees in Settings → Channels (a Telegram name or a masked number).
+          examples: ["@rahul", "+91 •••• ••42 10"]
+        maskedChatId:
+          type: string
+          description: The chat id or phone number, masked. The full id is never returned.
+          examples: ["•••• 6789", "+91 •••• ••42 10"]
+        linkedAt: { type: string, format: date-time }
+        enabled:
+          type: boolean
+          description: The channel is switched on on this server (`ENABLED_CHANNELS`).
+        blocked: { type: boolean, description: The user blocked the bot; nothing is sent there. }
+        lastInboundAt: { type: [string, "null"], format: date-time }
+
+    AdminUserAutomation:
+      type: object
+      required: [id, userId, title, kind, runAt, cron, trigger, repo, timezone, enabled, pausedReason, failCount, lastRunAt, nextRunAt, preset, completedAt, createdAt]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        title: { type: string }
+        kind: { type: string, enum: [once, repeat, event] }
+        runAt: { type: [string, "null"], format: date-time, description: kind=once }
+        cron: { type: [string, "null"], description: kind=repeat }
+        trigger:
+          type: [object, "null"]
+          description: kind=event. The trigger's settings are left out.
+          required: [app, event]
+          properties:
+            app: { type: string }
+            event: { type: string }
+        repo:
+          type: [string, "null"]
+          description: Pull-request review only, the repo it watches.
+          examples: [acme/website]
+        timezone: { type: [string, "null"] }
+        enabled: { type: boolean }
+        pausedReason: { type: [string, "null"], enum: [out_of_credits, failures, user, admin, null] }
+        failCount: { type: integer, description: Failed runs in a row. Three pause it. }
+        lastRunAt: { type: [string, "null"], format: date-time }
+        nextRunAt: { type: [string, "null"], format: date-time }
+        preset: { type: [string, "null"], enum: [pr_review, null] }
+        completedAt:
+          type: [string, "null"]
+          format: date-time
+          description: A one-time reminder that already ran. Not in the user's own list.
+        createdAt: { type: string, format: date-time }
+
+    AdminAppSummary:
+      type: object
+      required: [app, name, setupSource, connectable, users, active, pending, expired, failed]
+      properties:
+        app: { type: string, examples: [gmail] }
+        name: { type: string, examples: [Gmail] }
+        setupSource: { $ref: "#/components/schemas/AdminAppSetupSource" }
+        connectable: { type: boolean, description: The app can be connected on this server today }
+        users: { type: integer, description: "Users with at least one connection of this app, in any state" }
+        active: { type: integer, description: Connections that work }
+        pending: { type: integer, description: Connections started and not finished }
+        expired: { type: integer, description: Connections whose sign-in expired }
+        failed: { type: integer, description: Connections that failed (status `error`) }
 
     AgentRuntime:
       type: string

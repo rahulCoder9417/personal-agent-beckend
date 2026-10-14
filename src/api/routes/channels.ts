@@ -1,5 +1,4 @@
-import { audit } from '../../modules/admin/audit.ts';
-import { createLinkCode, listLinks, maskDisplayId, unlink } from '../../modules/auth/links.ts';
+import { createLinkCode, listLinks, maskDisplayId, unlinkChat } from '../../modules/auth/links.ts';
 import { config, isChannelEnabled } from '../../shared/config.ts';
 import { badRequest, channelDisabled, notFound } from '../../shared/errors.ts';
 import { enforce } from '../../shared/rate-limit.ts';
@@ -52,16 +51,9 @@ export const channelRoutes = [
   }),
 
   route('unlinkChannel', async (c, { params }) => {
-    const userId = c.get('user').id;
-    const link = await unlink(userId, params.channelLinkId);
-    if (!link) throw notFound('Channel link not found');
-    // Same detail as `channel_linked`: the channel and the name shown at linking, not the chat id.
-    await audit({
-      userId,
-      actor: 'user',
-      action: 'channel_unlinked',
-      summary: `Unlinked ${link.channel} ${link.displayId}`,
-    });
+    // The activity log entry is written with it (the same path as an admin's unlink).
+    if (!(await unlinkChat(c.get('user').id, params.channelLinkId)))
+      throw notFound('Channel link not found');
     return c.body(null, 204);
   }),
 ];

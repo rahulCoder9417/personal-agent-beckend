@@ -4,6 +4,7 @@ import { randomString, sha256Hex } from '../../shared/crypto.ts';
 import { db } from '../../shared/db/client.ts';
 import { channelDisabled } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
+import { audit } from '../admin/audit.ts';
 import { channelLinks, linkCodes } from './schema.ts';
 
 export type ChannelLink = typeof channelLinks.$inferSelect;
@@ -187,6 +188,33 @@ export async function unlink(userId: string, linkId: string): Promise<ChannelLin
   return row;
 }
 
+/** Who unlinks a chat: the user, or an admin for them (with the admin's id and reason). */
+export type UnlinkBy = { actor: 'user' } | { actor: 'admin'; adminId: string; reason: string };
+
+/**
+ * The unlink of Settings → Channels, also used by an admin: removes the link and writes the
+ * activity log entry (the channel and the name shown when it was linked, never the chat id). An
+ * admin's entry also keeps the admin's id and reason, which the user's activity log does not show.
+ */
+export async function unlinkChat(
+  userId: string,
+  linkId: string,
+  by: UnlinkBy = { actor: 'user' },
+): Promise<ChannelLink | undefined> {
+  const link = await unlink(userId, linkId);
+  if (!link) return undefined;
+  await audit({
+    userId,
+    actor: by.actor,
+    action: 'channel_unlinked',
+    summary: `Unlinked ${link.channel} ${link.displayId}`,
+    ...(by.actor === 'admin'
+      ? { details: { adminId: by.adminId, reason: by.reason, linkId: link.id } }
+      : {}),
+  });
+  return link;
+}
+
 export async function touchInbound(linkId: string): Promise<void> {
   await db()
     .update(channelLinks)
@@ -226,11 +254,34 @@ export async function deleteUserLinks(userId: string): Promise<void> {
   await db().delete(linkCodes).where(eq(linkCodes.userId, userId));
 }
 
+const maskPhone = (digits: string) =>
+  `+${digits.slice(0, 2)} •••• ••${digits.slice(-4, -2)} ${digits.slice(-2)}`;
+
 export function maskDisplayId(link: ChannelLink): string {
   if (link.channel === 'telegram') return link.displayId || 'Telegram';
   const digits = link.externalId.replace(/\D/g, '');
   if (digits.length < 6) return link.displayId || link.externalId;
-  return `+${digits.slice(0, 2)} •••• ••${digits.slice(-4, -2)} ${digits.slice(-2)}`;
+  return maskPhone(digits);
+}
+
+/**
+ * A chat id or phone number, masked, for admins: a Telegram chat keeps its last 4 digits, a phone
+ * number its country code and last 4 digits. A short or odd id shows nothing of itself.
+ */
+export function maskChatId(link: Pick<ChannelLink, 'channel' | 'externalId'>): string {
+  if (link.channel === 'telegram')
+    return link.externalId.length > 6 ? `•••• ${link.externalId.slice(-4)}` : '••••';
+  const digits = link.externalId.replace(/\D/g, '');
+  return digits.length < 10 ? '••••' : maskPhone(digits);
+}
+
+/**
+ * What the user sees for a link (Settings → Channels), for admins: never the raw chat id. A
+ * Telegram chat with no username or name was saved under its id; it shows masked.
+ */
+export function adminLinkLabel(link: ChannelLink): string {
+  const label = maskDisplayId(link);
+  return label.includes(link.externalId) ? maskChatId(link) : label;
 }
 
 /** Used or expired link codes older than a day. */

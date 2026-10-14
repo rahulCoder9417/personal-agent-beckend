@@ -362,6 +362,8 @@ Example: Rahul's Telegram is linked to his first account. He signs in to a secon
 
 The user removes a link in the web app, in Settings → Channels. The activity log records it, like the link: the channel and the name shown when it was linked, never the chat id. From then on the chat gets the "not linked yet" reply.
 
+An admin can remove a link for the user (section 31). It goes the same way and writes the same activity log entry, marked as done by an admin.
+
 ## 8. Channels
 
 A channel is one way to talk to the agent. Four are built. One setting decides which are switched on.
@@ -863,6 +865,8 @@ A connection becomes `active`, `expired` or `error` in one of four ways. The fir
 
 Each way asks Composio about each pending connection by its own account id, the ten newest at most. It used to read the user's whole list of accounts at Composio. Composio gives that list in pages, so for a user with many accounts the new one could be on a later page, and it stayed pending for good.
 
+Each connection keeps the time the platform last heard from Composio about it: a check that got an answer, Composio's webhook, or an admin's recheck. Only admins see it. An admin can also ask Composio again about any connection, whatever its state, and disconnect one for the user (section 31).
+
 ### How the agent finds and runs an action
 
 1. The agent calls `list_app_actions`. It can filter by app or by a search word.
@@ -1119,6 +1123,7 @@ The worker's start used to drop such a run at times. On start the worker sets ev
 
 - **Zero credits.** All the user's automations are paused. When credits are added, these are switched on again by themselves.
 - **Three failures in a row.** That automation is paused. The user is told in chat and can resume it in the web app. A paused automation has no timer, and app events for it are ignored.
+- **Paused by Textcrew support.** An admin can pause any automation (section 31). Its paused reason is then `admin`, so the web app can say who paused it. Adding credits does not switch it on again. The user can resume it, or an admin can.
 - **After a restart.** The timers live in the job queue, which can lose its data. So every time the worker starts, it sets the timer of every enabled automation again. A timer that is still there is left as it is, so a run that came due while the worker was stopped is not lost. It runs late and says so (above).
 - **The job queue lost its jobs.** A run whose job was lost is put back from the saved event. It still knows its automation and when it was due.
 
@@ -2007,6 +2012,10 @@ Only a user with the role admin may use them. The role is set in Clerk, the sign
 | Disable or enable a coupon | Switches a campaign off or on; can revoke unspent credits | `/v1/admin/coupons/{id}` |
 | Adjust credits | Adds or removes credits for one user | `/v1/admin/users/{id}/credits` |
 | Free-credit numbers | Shows this month's free credits, the cap and abuse flags | `/v1/admin/stats/free-credits` |
+| One user's apps | Lists each connection; disconnects one, or asks Composio about it again | `/v1/admin/users/{id}/apps` |
+| One user's chats | Lists the linked chats, with the chat id masked; unlinks one | `/v1/admin/users/{id}/channels` |
+| One user's automations | Lists every automation; pauses, resumes or deletes any one | `/v1/admin/users/{id}/automations`, `/v1/admin/automations/{id}` |
+| Apps in numbers | For each app: how many users connected it, its connections by state, and whether it can be connected here | `/v1/admin/apps/summary` |
 | Failed jobs board | Shows the four job queues and their failed jobs | `/admin/queues` |
 
 ### Credit adjustments
@@ -2023,6 +2032,37 @@ Only a user with the role admin may use them. The role is set in Clerk, the sign
 - **Free-credit numbers.** One call shows the current month's numbers: sign-up credits granted and coupon credits granted. It also shows the cap, if one is set, and whether it is reached.
 - **Abuse flags** come with the same call. A flag is one IP address from which 3 or more accounts redeemed coupons that month. Up to 50 addresses are listed.
 - **Failed jobs.** A job that fails is retried, 5 tries in all, with waits of 5 seconds, 30 seconds, 2 minutes and 10 minutes. After the last try it is marked failed and an alert is logged. If `ALERT_WEBHOOK_URL` is set, the alert is also sent there. The board at `/admin/queues` shows the failed jobs. It opens in a browser for a signed-in admin.
+
+### One user's apps, chats and automations
+
+These tools are for support: a user writes in that an app won't connect, a chat should be unlinked, or an automation keeps failing. Each action works exactly like the user's own button, so nothing is left half done.
+
+The rules for all of them:
+
+- **A reason is required.** Every action asks for a short reason, up to 200 characters. A blank one is refused.
+- **Every action is audited.** It writes one row in the activity log with the admin's id and the reason. The user sees the entry in their own activity log, for example "Textcrew support paused "Daily summary"". The admin's id and the reason are kept in the row but not shown to the user.
+- **No secrets.** No Composio account id, token or secret is ever shown. A chat id or phone number is shown only masked: a Telegram chat keeps its last 4 digits ("•••• 3645"), a phone number its country code and last 4 digits. An automation's instruction text, its trigger settings and the chat it was made in are left out.
+
+**Apps.**
+
+- **The list** shows each of the user's connections in any state: the app, the state (active, pending, expired or failed), the account's label (usually its email), where the app's Composio setup comes from on this server, whether the app can be connected here, when the user started connecting it, and when the platform last heard from Composio about it. It reads our own table only; Composio is not asked.
+- **Where the setup comes from:** `settings` means it is named in `COMPOSIO_AUTH_CONFIGS`; `server_made` means the server made it itself; `none` means there is none yet. With `none`, "can be connected" is still true when `COMPOSIO_MANAGED_APPS` lets the server make one on the first connect (section 14).
+- **Disconnect** is the user's own disconnect: the account is removed at Composio and the connection is deleted. Like the user's own, it leaves the user's app-event automations as they are.
+- **Recheck** asks Composio about that one connection now, whatever its state, and copies the answer: active, expired or failed. An account that Composio no longer has becomes failed, unless it was still pending. One still being set up stays pending and gets a fresh series of checks, as after a new connect. If Composio can't be asked, the api answers 503 and nothing changes.
+
+**Chats.** The list shows each linked chat: the channel, what the user sees for it in Settings → Channels, the masked chat id, when it was linked, whether the channel is switched on here, whether the user blocked the bot, and when the chat last wrote. Unlink is the user's own unlink, with the same activity log entry (section 7). The chat then gets the "not linked yet" reply.
+
+**Automations.**
+
+- **The list** shows every automation of the user, also the one-time reminders that already ran: the title, the kind, the moment or the schedule or the app event, the time zone, on or paused and why, the failures in a row, the last and next run, and for pull-request review the repo.
+- **Pause** is the user's own pause: the timer is removed and app events for it are ignored. The paused reason is `admin`, so the user can see that Textcrew paused it. Adding credits does not switch it on again; the user or an admin can.
+- **Resume** is the user's own resume: the timer is set again and the failure count goes back to 0.
+- **Delete** is the user's own delete: the timer goes, and the Composio trigger with it. For pull-request review that is the watch on the repo, and with it the standing permission to post reviews there (section 19).
+- A one-time reminder that already ran cannot be paused or resumed: the api answers 409.
+
+**Apps in numbers.** For each app in the catalog: where its setup comes from, whether it can be connected here, how many users have a connection of it in any state, and its connections by state: active, pending, expired and failed. Numbers only, no user.
+
+Example: Rahul writes that his Gmail shows "connecting" for an hour. The admin opens his apps, sees Gmail pending and last checked an hour ago, and presses recheck with the reason "ticket 41". Composio says it is active, so Gmail becomes active and the agent can use it. Rahul's activity log shows "Textcrew support checked the Gmail connection: active".
 
 ---
 
@@ -2489,7 +2529,7 @@ This section lists every table of the backend's database, grouped by the module 
 | orchestrator | `memories` | Short facts about the user that every engine gets |
 | orchestrator | `chat_engines` | Which engine last finished a turn in each conversation |
 | orchestrator | `turn_timings` | Where each turn's time went, stage by stage, for 30 days. Never any text (section 9) |
-| integrations | `connections` | A user's connected app accounts and their status |
+| integrations | `connections` | A user's connected app accounts, their status, and when Composio last answered about each |
 | integrations | `composio_auth_configs` | The Composio setups the server made itself, one per app. Not per user |
 | integrations | `user_mcp_servers` | The user's own MCP servers, with the secret encrypted |
 | integrations | `composio_triggers` | Made for app triggers. No code reads or writes it today |
@@ -2506,7 +2546,7 @@ This section lists every table of the backend's database, grouped by the module 
 | billing | `coupons` | Coupon campaigns: credits, limits, expiry |
 | billing | `coupon_codes` | The codes of a campaign, stored as hashes |
 | billing | `coupon_redemptions` | Who redeemed which campaign, once per user |
-| admin | `audit_log` | The activity log: who did what, when, and credits charged |
+| admin | `audit_log` | The activity log: who did what, when, and credits charged. An admin's action also keeps the admin's id and reason |
 
 No table holds a "balance" number: the balance is the sum of what is left in a user's grants. The vm-manager has its own small database with three tables: `sandboxes`, `awake_periods` and `browser_usage`. The backend never reads it directly. Example: one Telegram message adds one row in `events` and two rows in `messages`: the message and the answer. The first message of a chat also adds one row in `conversations` and one in `chat_epochs`. It also adds entries in `audit_log`, and one row each in `usage_periods` and `credit_ledger` for the charge.
 
@@ -2523,7 +2563,7 @@ This section says what the web app can do through the api, group by group. Almos
 | Apps | See the app list with status and plan, and which apps can be connected on this server. Start connecting an app. Disconnect one |
 | MCP servers | List the user's own MCP servers. Add one (Max plan), rename it, switch it on or off, remove it |
 | Own AI keys | See which providers have a key and which one is in use, never the key itself. Set, replace or remove one |
-| Automations | List reminders and automations. Pause, resume or delete one |
+| Automations | List reminders and automations, with why one is paused (by the user, after failures, out of credits, or by Textcrew support). Pause, resume or delete one |
 | Pull-request review | List the repositories with review on. Turn review on or off for one |
 | Agent settings and the Claude sign-in | See the container's state and which engine runs. Choose the engine, and Claude Code's model and thinking effort. Start, finish or undo the Claude sign-in |
 | The crew | See the four members, which are available, and the state of Scout's browser |
@@ -2534,7 +2574,7 @@ This section says what the web app can do through the api, group by group. Almos
 | Coupons | Redeem a coupon code |
 | Activity | Read the log of what the agent did |
 | Waitlist | Join the waitlist. The answer is always the same, so nobody can test an email |
-| Admin | Manage coupons, adjust a user's credits, see free-credit totals, and handle the waitlist |
+| Admin | Manage coupons, adjust a user's credits, see free-credit totals, and handle the waitlist. For one user: see their app connections, linked chats and automations; disconnect or recheck an app, unlink a chat, pause, resume or delete an automation, each with a reason. See each app in numbers |
 
 The live stream pushes new messages, message status, conversation changes, approvals, the agent's state, progress lines and credit changes. Long lists come in pages of 30 by default, and 100 at most. Every error has the same shape: a code, a message, and sometimes details. Some addresses are not for the web app. Webhooks are for outside services. `/oauth/callback` is the way back from an app's sign-in, for a provider to send the browser to. `/mcp` and `/git` are for containers only. `/metrics` is for monitoring. Admins also have a page that shows the job queues.
 

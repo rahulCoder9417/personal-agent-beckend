@@ -62,6 +62,28 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 4. The log
 
+### 14 October 2026: the Automations chat can't be deleted
+
+- **Where it is:** on `main` since 14 October, in the backend. It reaches the server with `deploy.sh`.
+- **Why:** you saw "Delete the Automations chat?" in the menu of the pinned Automations chat and don't want it deletable. Every run of every automation answers there, so it should always be there.
+- **What the user notices:**
+  - The pinned Automations chat has no menu any more, so there is nothing to delete it with (the web app's part, described in its README).
+  - Asked to delete it all the same, the api refuses with "The Automations chat can't be deleted", the way it already refused a rename. Nothing changes and nothing goes into the activity log.
+  - Deleting the account still removes it, with everything else.
+- **Backend:**
+  - **Deleting a conversation** answers 409 when it is the Automations chat. Every other conversation is deleted as before; one that isn't the user's still answers 404.
+  - **The yearly clean-up** of old conversations that are empty and not active now leaves the Automations chat too. Before, one with no run for a year would have been removed. It now goes only with the account.
+  - **The safety net stays:** should the Automations chat be missing all the same, the next run starts a new one, with a number never used before, and never answers in the conversation the user has open.
+- **Cost and speed:** none. A delete reads the conversation once more before it starts.
+- **Contracts:** `openapi.yaml` changed: `DELETE /v1/conversations/{conversationId}` lists the 409 and says the Automations chat cannot be deleted, and the conversation's `kind` says so too. The web app has the new copy. `vm.proto` did not change.
+- **Database:** none.
+- **How it was checked:**
+  - New backend tests: the delete answers 409 with the error shape, the chat and its runs stay, the activity log gets nothing, another user gets 404, and the next run still answers there; a missing Automations chat is started again by the next run; deleting the account removes it; the yearly clean-up leaves an old, empty one. The 409 test and the clean-up test failed on the old code.
+  - Lint and the type check pass. 646 of 647 backend tests pass; the one failure is the Hindi title test, which already failed before.
+  - Not on the server.
+- **Docs updated:** `backend-report.md` sections 8, 18, 37, 41 and 44; `hld-mvp.md` section 5.4.
+- **Commits:** backend `c8b4f87`, `88df748`, `dba41ce`.
+
 ### 13 October 2026: Tex knows who it is, and sees every app the user connected
 
 - **Where it is:** on `main` since 13 October, in the backend and the vm-manager. It reaches the server with `deploy.sh`.

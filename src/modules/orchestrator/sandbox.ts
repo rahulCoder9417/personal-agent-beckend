@@ -100,6 +100,34 @@ export async function getAgentStatus(
   }
 }
 
+/**
+ * Admin overview: containers waking, awake or busy right now, as the vm-manager counts them. Null
+ * when it can't be asked: the overview still shows the rest.
+ */
+export async function countAwakeContainers(): Promise<number | null> {
+  try {
+    const { sandboxes } = await vm().listSandboxes({
+      states: [SandboxState.WAKING, SandboxState.AWAKE, SandboxState.BUSY],
+    });
+    return sandboxes.length;
+  } catch (err) {
+    logger().warn({ err: String(err) }, 'awake containers not counted');
+    return null;
+  }
+}
+
+/** The container's state for the admin's user page; null when the vm-manager can't be asked. */
+export async function agentStatusOrNull(
+  userId: string,
+): Promise<Awaited<ReturnType<typeof getAgentStatus>> | null> {
+  try {
+    return await getAgentStatus(userId);
+  } catch (err) {
+    logger().warn({ userId, err: String(err) }, 'container state not read');
+    return null;
+  }
+}
+
 /** Activity = every delivered message and every Platform MCP call (HLD 0.6). Best effort. */
 export function touch(userId: string): void {
   vm()

@@ -247,6 +247,19 @@ export async function updateWaitlistEntry(
   return row!;
 }
 
+/** Admin overview: how many are on the waitlist, and how many still wait. */
+export async function waitlistCounts(): Promise<{ total: number; pending: number }> {
+  const [row] = await db()
+    .select({
+      total: count(),
+      pending: sql<number>`count(*) filter (where ${waitlistEntries.status} = 'pending')`.mapWith(
+        Number,
+      ),
+    })
+    .from(waitlistEntries);
+  return { total: row?.total ?? 0, pending: row?.pending ?? 0 };
+}
+
 export async function waitlistStats() {
   const day = new Date(Date.now() - 86400_000);
   const week = new Date(Date.now() - 7 * 86400_000);

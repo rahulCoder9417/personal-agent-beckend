@@ -1,11 +1,15 @@
+import { adminOverview } from '../../modules/admin/overview.ts';
+import { adminUserDetail, adminUserPage } from '../../modules/admin/users.ts';
 import { getUser } from '../../modules/auth/users.ts';
-import { adjustCredits } from '../../modules/billing/admin.ts';
+import { adjustCredits, setPlanByHand } from '../../modules/billing/admin.ts';
 import { createCoupon, listCoupons, updateCoupon } from '../../modules/billing/coupons.ts';
 import { getBalance, listBalanceGrants } from '../../modules/billing/credits.ts';
 import { freeCreditStats } from '../../modules/billing/free-credits.ts';
 import { creditExpiry } from '../../modules/billing/plans.ts';
-import { badRequest, notFound } from '../../shared/errors.ts';
-import { toBalance, toCoupon } from '../billing-presenters.ts';
+import { getCurrentSubscription } from '../../modules/billing/subscriptions.ts';
+import { badRequest, conflict, notFound } from '../../shared/errors.ts';
+import { toAdminUser, toAdminUserDetail } from '../admin-presenters.ts';
+import { toBalance, toCoupon, toSubscription } from '../billing-presenters.ts';
 import { route } from '../router.ts';
 
 // Admin only: the router adds requireAdmin for every operation tagged `admin` in the spec.
@@ -74,4 +78,48 @@ export const adminRoutes = [
   }),
 
   route('adminFreeCreditStats', async (c) => c.json(await freeCreditStats(), 200)),
+
+  // Counts only: no name, email, id or text.
+  route('adminOverview', async (c) => c.json(await adminOverview(), 200)),
+
+  route('adminListUsers', async (c, { query }) => {
+    const page = await adminUserPage({
+      ...(query.query ? { query: query.query } : {}),
+      ...(query.cursor ? { cursor: query.cursor } : {}),
+      limit: query.limit ?? 30,
+    });
+    return c.json({ items: page.items.map(toAdminUser), nextCursor: page.nextCursor }, 200);
+  }),
+
+  route('adminGetUser', async (c, { params }) => {
+    const detail = await adminUserDetail(params.userId);
+    if (!detail) throw notFound('User not found');
+    return c.json(toAdminUserDetail(detail), 200);
+  }),
+
+  // The plan by hand: the same steps as the ops script's `plan`, audited with the admin's id.
+  route('adminUpdateUser', async (c, { params, body }) => {
+    const user = await getUser(params.userId);
+    if (!user) throw notFound('User not found');
+    if (user.deletedAt) throw conflict('This account is deleted');
+    const { changed } = await setPlanByHand({
+      userId: user.id,
+      from: user.plan,
+      plan: body.plan,
+      adminId: c.get('user').id,
+      ...(body.reason ? { reason: body.reason } : {}),
+    });
+    const sub = await getCurrentSubscription(user.id);
+    return c.json(
+      {
+        userId: user.id,
+        plan: body.plan,
+        previousPlan: user.plan,
+        changed,
+        // The subscription's own plan: one that still runs can set it again at its next event.
+        subscription: toSubscription(sub?.plan ?? body.plan, sub),
+      },
+      200,
+    );
+  }),
 ];

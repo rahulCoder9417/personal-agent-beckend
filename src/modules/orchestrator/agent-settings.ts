@@ -1,7 +1,7 @@
 // Which agent runs for a user (Hermes or Claude Code) and what pays for its AI.
 // We store only the choice and WHEN a Claude plan was connected: never a Claude credential.
 import { Code, ConnectError } from '@connectrpc/connect';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { config } from '../../shared/config.ts';
 import { db, type Tx } from '../../shared/db/client.ts';
 import { badRequest, conflict } from '../../shared/errors.ts';
@@ -129,6 +129,18 @@ export function decideAccess(input: {
 async function settingsRow(userId: string) {
   const [row] = await db().select().from(agentSettings).where(eq(agentSettings.userId, userId));
   return row;
+}
+
+/** Admin: the engine each user chose (Hermes when they never chose). */
+export async function runtimesFor(userIds: string[]): Promise<Map<string, RuntimeName>> {
+  const out = new Map<string, RuntimeName>(userIds.map((id) => [id, 'hermes']));
+  if (!userIds.length) return out;
+  const rows = await db()
+    .select({ userId: agentSettings.userId, runtime: agentSettings.runtime })
+    .from(agentSettings)
+    .where(inArray(agentSettings.userId, userIds));
+  for (const r of rows) out.set(r.userId, r.runtime);
+  return out;
 }
 
 export async function getAgentSettings(userId: string): Promise<AgentSettingsView> {

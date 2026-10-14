@@ -2428,6 +2428,10 @@ export interface components {
         };
         AdminUserDetail: {
             user: components["schemas"]["AdminUser"];
+            /**
+             * @description The Polar subscription, with its own plan when there is one (a plan set by hand can
+             *     differ from it); `status: none` and the user's plan when there is none.
+             */
             subscription: components["schemas"]["Subscription"];
             credits: components["schemas"]["CreditBalance"];
             /** @description The last 20 changes to the user's credits, newest first. */

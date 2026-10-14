@@ -42,6 +42,13 @@ export async function addJob(
   await queue(name).add(jobName, data, opts);
 }
 
+/** Failed jobs in the four queues (kept 30 days): the admin overview's number. */
+export async function failedJobCount(): Promise<number> {
+  let total = 0;
+  for (const q of QUEUES) total += (await queue(q).getJobCounts('failed')).failed ?? 0;
+  return total;
+}
+
 export async function closeQueues(): Promise<void> {
   const all = [...queues.values()];
   queues.clear();

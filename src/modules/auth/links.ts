@@ -1,4 +1,14 @@
-import { and, count, desc, eq, gt, isNull, lt, TransactionRollbackError } from 'drizzle-orm';
+import {
+  and,
+  count,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNull,
+  lt,
+  TransactionRollbackError,
+} from 'drizzle-orm';
 import { config, isChannelEnabled } from '../../shared/config.ts';
 import { randomString, sha256Hex } from '../../shared/crypto.ts';
 import { db } from '../../shared/db/client.ts';
@@ -25,6 +35,19 @@ export async function countChannelLinks(userId: string): Promise<number> {
     .from(channelLinks)
     .where(eq(channelLinks.userId, userId));
   return row?.n ?? 0;
+}
+
+/** Admin: the kinds of chat linked per user (never a chat id or a number). */
+export async function linkedChannelsFor(userIds: string[]): Promise<Map<string, LinkChannel[]>> {
+  const out = new Map<string, LinkChannel[]>();
+  if (!userIds.length) return out;
+  const rows = await db()
+    .selectDistinct({ userId: channelLinks.userId, channel: channelLinks.channel })
+    .from(channelLinks)
+    .where(inArray(channelLinks.userId, userIds))
+    .orderBy(channelLinks.userId, channelLinks.channel);
+  for (const r of rows) out.set(r.userId, [...(out.get(r.userId) ?? []), r.channel]);
+  return out;
 }
 
 /**

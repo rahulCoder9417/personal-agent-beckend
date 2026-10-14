@@ -84,13 +84,18 @@ const STATE_NAMES: Record<SandboxState, AgentState> = {
   [SandboxState.BROKEN]: 'broken',
 };
 
+/** The vm-manager's state in the api's words. */
+export function agentStateOf(state: SandboxState): AgentState {
+  return STATE_NAMES[state] ?? 'none';
+}
+
 export async function getAgentStatus(
   userId: string,
 ): Promise<{ state: AgentState; lastActiveAt: Date | null }> {
   try {
     const s = await vm().getSandbox({ userId });
     return {
-      state: STATE_NAMES[s.state] ?? 'none',
+      state: agentStateOf(s.state),
       lastActiveAt: s.lastActiveAtUnixMs ? new Date(Number(s.lastActiveAtUnixMs)) : null,
     };
   } catch (err) {
@@ -148,5 +153,25 @@ export async function sleepNow(userId: string, reason: string): Promise<boolean>
   } catch (err) {
     logger().info({ userId, reason, err: String(err) }, 'container left to the idle stop');
     return false;
+  }
+}
+
+/**
+ * Asks the vm-manager to stop the user's container now, politely: an admin suspended the account.
+ * `none`: the user has no container. `refused`: the vm-manager said no (a turn runs, a delivery is
+ * in flight, a Claude sign-in waits) or could not be reached; the idle stop then does it later,
+ * and nothing wakes the container while the account is suspended. Never fails.
+ */
+export async function stopPolitely(
+  userId: string,
+  reason: string,
+): Promise<'stopped' | 'none' | 'refused'> {
+  try {
+    await vm().stopSandbox({ userId, force: false, reason });
+    return 'stopped';
+  } catch (err) {
+    if (err instanceof ConnectError && err.code === Code.NotFound) return 'none';
+    logger().info({ userId, reason, err: String(err) }, 'container left to the idle stop');
+    return 'refused';
   }
 }

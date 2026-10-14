@@ -304,6 +304,11 @@ describe('GET /v1/admin/users', () => {
     const second = await named(`Second ${tag}`, `second-${tag}@Example.com`, { plan: 'max' });
     const third = await named(`Third ${tag}`, `third-${tag}@example.com`);
     await db().update(users).set({ deletedAt: new Date() }).where(eq(users.id, third.id));
+    const suspendedAt = new Date(Date.now() - 60_000);
+    await db()
+      .update(users)
+      .set({ status: 'suspended', suspendedAt })
+      .where(eq(users.id, first.id));
 
     // Second: 120 credits, less 20 charged; Telegram linked; Claude Code; two apps, one active.
     await createGrant({
@@ -374,6 +379,7 @@ describe('GET /v1/admin/users', () => {
       plan: 'max',
       role: 'user',
       status: 'active',
+      suspendedAt: null,
       flagged: false,
       createdAt: expect.any(String),
       deletedAt: null,
@@ -385,7 +391,13 @@ describe('GET /v1/admin/users', () => {
     });
     expect(p1.items[0]).toMatchObject({ id: third.id, status: 'deleted', engine: 'hermes' });
     expect(p1.items[0]!.deletedAt).not.toBeNull();
-    expect(p2.items[0]).toMatchObject({ credits: 0, channels: [], connectedApps: 0 });
+    expect(p2.items[0]).toMatchObject({
+      credits: 0,
+      channels: [],
+      connectedApps: 0,
+      status: 'suspended',
+      suspendedAt: suspendedAt.toISOString(),
+    });
     expect(p2.items[0]!.lastActiveAt).toBeNull();
 
     // By part of an email, in another case; by a whole id; nothing for a part of an id.

@@ -13,6 +13,11 @@ export const connections = pgTable(
       .default('pending'),
     accountLabel: text(),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    /**
+     * When the platform last heard from Composio about this account: a check that got an answer,
+     * Composio's webhook, or an admin's recheck. Null if never. Shown to admins only.
+     */
+    checkedAt: timestamp({ withTimezone: true }),
   },
   (t) => [uniqueIndex().on(t.composioAccountId), index().on(t.userId)],
 );

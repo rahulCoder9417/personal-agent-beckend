@@ -252,6 +252,8 @@ export const configSchema = z.object({
   METRICS_TOKEN: optional,
   /** Optional webhook (e.g. Slack incoming webhook) for alerts. */
   ALERT_WEBHOOK_URL: optional,
+  /** The deployed commit, passed on by deploy.sh; shown on the admin health page. */
+  GIT_COMMIT: optional,
   /** Requests per minute per IP on every endpoint (specific endpoints have stricter limits). */
   RATE_LIMIT_PER_IP_PER_MIN: z.coerce.number().int().positive().default(600),
   ATTACHMENTS_DIR: z.string().default('.tmp/attachments'),

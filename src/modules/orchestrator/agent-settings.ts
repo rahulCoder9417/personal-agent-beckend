@@ -318,6 +318,8 @@ export async function updateAgentSettings(
     claudeModel?: string | null;
     claudeEffort?: ClaudeEffort | null;
   },
+  /** Who made the change, for the activity log: the user, or support (admin tools). */
+  by: 'user' | 'admin' = 'user',
 ): Promise<AgentSettingsView> {
   if (patch.claudeModel != null && !isClaudeModel(patch.claudeModel))
     throw badRequest('Unknown Claude model', { claudeModel: patch.claudeModel });
@@ -344,7 +346,7 @@ export async function updateAgentSettings(
   if (runtime) {
     await audit({
       userId,
-      actor: 'user',
+      actor: by,
       action: 'agent_runtime_changed',
       summary: `Agent switched to ${patch.runtime === 'claude_code' ? 'Claude Code' : 'Hermes'}`,
     });
@@ -352,7 +354,7 @@ export async function updateAgentSettings(
   if (preference) {
     await audit({
       userId,
-      actor: 'user',
+      actor: by,
       action: 'ai_preference_changed',
       summary:
         patch.aiPreference === 'platform'

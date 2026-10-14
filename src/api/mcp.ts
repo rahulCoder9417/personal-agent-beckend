@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs';
 import { Readable } from 'node:stream';
 import type { Hono } from 'hono';
+import { isSuspended } from '../modules/auth/users.ts';
 import { getAttachment, verifyFileSignature } from '../modules/channels/files.ts';
 import { userIdForMcpToken } from '../modules/orchestrator/sandbox.ts';
 import { handleMcpRequest } from '../modules/platform-mcp/server.ts';
@@ -34,6 +35,13 @@ export function mountMcp(app: Hono<AppEnv>): void {
       return c.json(
         { jsonrpc: '2.0', error: { code: -32001, message: 'Unauthorized' }, id: null },
         401,
+      );
+    }
+    // Suspended by an admin: a turn that was running keeps no tools; the container is stopped.
+    if (await isSuspended(userId)) {
+      return c.json(
+        { jsonrpc: '2.0', error: { code: -32003, message: 'This account is suspended' }, id: null },
+        403,
       );
     }
     const rl = await hit({ key: `mcp:user:${userId}`, max: 240, windowSeconds: 60 });

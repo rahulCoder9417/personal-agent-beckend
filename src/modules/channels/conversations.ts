@@ -10,7 +10,9 @@
 //
 // The Automations chat (`kind` automations) is where every run of every automation answers: one
 // per user, a web conversation beside the others, titled "Automations". It is never the active
-// one, so the user's next message never goes into it unless they write in it.
+// one, so the user's next message never goes into it unless they write in it. The user cannot
+// delete it (the orchestrator refuses), and the retention clean-up leaves it: it goes only with
+// the account.
 import { rm } from 'node:fs/promises';
 import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm';
 import { db, type Tx } from '../../shared/db/client.ts';
@@ -205,8 +207,8 @@ export async function activeConversation(
  * The conversation a message to `sessionKey` is saved in: the one named, when it is this user's
  * and of that chat (a reply written during a turn stays in the turn's conversation even if the
  * user has opened another one since), else the chat's active one. With `automations` (the one
- * named is the Automations chat), else the Automations chat: when the user deleted it during a
- * run, the run's reply starts a new one rather than landing in the conversation they have open.
+ * named is the Automations chat), else the Automations chat: should it be missing, the run's
+ * reply starts a new one rather than landing in the conversation the user has open.
  */
 export async function conversationFor(
   userId: string,
@@ -330,8 +332,9 @@ export async function findAutomationsChat(
  * time it is needed (a run, or the first automation made), in web chat beside the active
  * conversation, which stays the active one. It gets web chat's next number, so the agent keeps a
  * context of its own for it, and it is never made the active one. One per user: two runs at the
- * same moment start one between them (the web chat's lock, and a unique index behind it). After
- * the user deletes it, the next call starts a new one, with a number never used before.
+ * same moment start one between them (the web chat's lock, and a unique index behind it). The
+ * user cannot delete it, but should it be missing all the same, the next call starts a new one,
+ * with a number never used before.
  */
 export async function automationsChat(userId: string): Promise<ConversationRow> {
   const found = await findAutomationsChat(userId);
@@ -547,7 +550,8 @@ export async function noteMessage(message: {
 
 /**
  * Chat history retention: a conversation that is not active, has had no message since `before`
- * and has none left is removed. Returns how many.
+ * and has none left is removed, except the Automations chat, which stays for as long as the
+ * account does. Returns how many.
  */
 export async function cleanupEmptyConversations(before: Date): Promise<number> {
   const rows = await db()
@@ -555,6 +559,7 @@ export async function cleanupEmptyConversations(before: Date): Promise<number> {
     .where(
       and(
         eq(conversations.active, false),
+        eq(conversations.kind, 'chat'),
         lt(conversations.lastMessageAt, before),
         sql`not exists (select 1 from ${messages} where ${messages.conversationId} = ${conversations.id})`,
       ),

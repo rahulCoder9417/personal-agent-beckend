@@ -409,8 +409,8 @@ The rules:
 - **A reply stays where its question was asked.** What the agent sends during a turn is saved in that turn's conversation, also when the user has opened another conversation meanwhile. An approval's answer goes back to the conversation that asked for it.
 - **Every automation answers in the Automations chat.** Each user has one, in web chat beside the other conversations. It is never the active one: a run never makes it active, and neither does the user writing in it. So the user's next message never goes into it unless they write there. An automation made on Telegram also sends a copy of each answer to that Telegram chat (section 18).
 - **Renaming:** the user can give any conversation a name of 1 to 80 characters. A later message does not change it back. The Automations chat keeps its name: the api answers 409.
-- **Deleting:** the conversation goes, with its messages and their files. They are the user's own data. A file that a message in another conversation still shows is kept. The activity log gets "Deleted a conversation in web chat" or "on Telegram". It never holds the title or the text of a message.
-- **After the active web conversation is deleted,** the newest remaining web conversation becomes the active one, never the Automations chat. When none is left, an empty one is started. After a Telegram chat's current conversation is deleted, the chat's next message starts a new one. After the Automations chat is deleted, the next run starts a new one.
+- **Deleting:** the conversation goes, with its messages and their files. They are the user's own data. A file that a message in another conversation still shows is kept. The activity log gets "Deleted a conversation in web chat" or "on Telegram". It never holds the title or the text of a message. The Automations chat cannot be deleted: the api answers 409. It stays for as long as the account does, and goes with the account.
+- **After the active web conversation is deleted,** the newest remaining web conversation becomes the active one, never the Automations chat. When none is left, an empty one is started. After a Telegram chat's current conversation is deleted, the chat's next message starts a new one.
 - **A number is never used twice.** The table `chat_epochs` keeps, for each chat, the highest number given out. It only goes up, also after a delete. The reason: the engine may still hold the deleted conversation's context under its old number, and a new conversation must not pick that up.
 
 How the context stays separate:
@@ -428,7 +428,7 @@ What the web app calls:
 | `GET /v1/conversations` | Lists the user's conversations, the one with the newest message first. `channel` narrows it to web or Telegram. `kind=automations` gives only the Automations chat, `kind=chat` everything else, so the web app can pin it apart. Pages of 30 |
 | `POST /v1/conversations` | Starts a new web conversation and makes it the active one |
 | `PATCH /v1/conversations/{conversationId}` | Renames it, or makes a web conversation the active one. Both answer 409 for the Automations chat |
-| `DELETE /v1/conversations/{conversationId}` | Deletes it with its messages and files |
+| `DELETE /v1/conversations/{conversationId}` | Deletes it with its messages and files. 409 for the Automations chat |
 | `GET /v1/messages` | With a conversation's id: its messages. With `channel=web` only: the active web conversation's messages. With nothing: every message |
 | `POST /v1/messages` | Sends a message. With a conversation's id it goes into that web conversation, which becomes the active one first. The Automations chat is written in where it is: it stays not active |
 
@@ -1029,12 +1029,13 @@ Every run of every automation answers in one place, the user's Automations chat.
 | The Automations chat | What it is |
 |---|---|
 | One per user | A conversation of its own kind, in web chat, called "Automations" |
-| When it starts | When the user makes an automation and has none yet, or else at the next run. Also after it was deleted |
+| When it starts | When the user makes an automation and has none yet, or else at the next run |
 | Its number | Web chat's next number, like a new chat. So the agent keeps a context of its own for it: each run sees the runs before it |
 | Never the active one | A run never makes it active. The user's next message goes where it went before |
 | Writing in it | The user can open it in the web app and write there. The agent answers there, with the runs in mind. Writing there does not make it active either |
 | Its name | It keeps it. A rename is refused |
-| Deleting it | Its runs go with it. The next run starts a new one, with a number never used before, so the agent starts afresh there |
+| Deleting it | Not possible. The api answers 409, and the web app offers no Delete for it. It goes only when the account is deleted, with everything else. The yearly clean-up of old, empty conversations leaves it too |
+| If it is missing all the same | A safety net: the next run starts a new one, with a number never used before, so the agent starts afresh there. It never falls back to the conversation the user has open |
 
 What answers there:
 
@@ -1056,7 +1057,7 @@ The web app shows it pinned at the top of the chat list, apart from the dated li
 
 The notice "paused after 3 failures" is copied the same way. What the agent says after the user answers an approval that a run asked for stays in the Automations chat only: the user answered in the web app, where the follow-up is.
 
-Starting the Automations chat is safe to repeat: two runs at the same moment start one between them. If the user deletes it while a run is going on, the run's answer starts a new one. It never falls back to the conversation the user has open.
+Starting the Automations chat is safe to repeat: two runs at the same moment start one between them.
 
 **Example.** Rahul asks on Telegram "every morning at 9, list my open pull requests and issues". Each morning at 9 the list appears in his Automations chat. His Telegram gets "⏰ Daily open PRs and issues", the list, and "To follow up, open the Automations chat in the Textcrew web app". At lunch he opens the web app and asks in the Automations chat "which one is oldest?". The agent has the list in mind. Meanwhile his Telegram chat with Tex is untouched: if he writes "hi" there, the agent answers without the list.
 
@@ -1086,7 +1087,7 @@ The worker's start used to drop such a run at times. On start the worker sets ev
 
 - **The plan limit is reached.** The tool says how many the plan allows. Nothing is saved.
 - **No credits when it fires.** No turn runs. The user gets the out-of-credits message in the Automations chat, with a copy on Telegram when the automation was made there, and the automation is paused. The copy names the web app instead of the purchase link (section 10).
-- **The user deletes the Automations chat during a run.** The run's answer starts a new Automations chat. It never lands in the conversation the user has open.
+- **The user tries to delete the Automations chat.** The api answers 409 and nothing changes. The web app does not offer it.
 - **The automation is deleted while it runs.** The run stops before the agent gets it. The job is tried again, finds no automation and ends.
 
 ## 19. Pull-request review
@@ -2355,7 +2356,7 @@ Every job is safe to run again, so a job that did not finish is simply run again
 2. It registers the timer of every enabled automation again.
 3. It registers the repeating jobs again: usage sync, credit expiry, approval expiry, clean-up, backup and health check.
 
-A failing job is tried 5 times, with waits of 5 seconds, 30 seconds, 2 minutes and 10 minutes. After the last failure its event is marked "failed" and an alert is raised. A daily clean-up removes finished events older than 30 days and messages older than 365 days. A conversation that has had no message for 365 days, has none left and is not the active one is removed too.
+A failing job is tried 5 times, with waits of 5 seconds, 30 seconds, 2 minutes and 10 minutes. After the last failure its event is marked "failed" and an alert is raised. A daily clean-up removes finished events older than 30 days and messages older than 365 days. A conversation that has had no message for 365 days, has none left and is not the active one is removed too, except the Automations chat.
 
 ### Rate limits on public endpoints
 
@@ -2473,7 +2474,7 @@ This section says what the web app can do through the api, group by group. Almos
 |---|---|
 | Profile | Read the user's name, plan and credit summary, and whether a time zone was ever set. Change the name and time zone. The app sets the time zone from the browser once, while nobody has set one |
 | Channels and linking | See linked chat apps and which channels are on. Get a one-time code to link Telegram. Unlink a chat |
-| Chat and the live stream | List the conversations, with the Automations chat apart if asked. Start a new web conversation, open an earlier one, rename or delete one (the Automations chat keeps its name). Read the messages of one conversation, or of all. Send a message into the active web conversation or into one the app names. Upload a file up to 10 MB. Keep a live stream open |
+| Chat and the live stream | List the conversations, with the Automations chat apart if asked. Start a new web conversation, open an earlier one, rename or delete one (the Automations chat keeps its name and cannot be deleted). Read the messages of one conversation, or of all. Send a message into the active web conversation or into one the app names. Upload a file up to 10 MB. Keep a live stream open |
 | Approvals | List approvals, the waiting ones by default. Approve or reject one |
 | Apps | See the app list with status and plan, and which apps can be connected on this server. Start connecting an app. Disconnect one |
 | MCP servers | List the user's own MCP servers. Add one (Max plan), rename it, switch it on or off, remove it |
@@ -2659,6 +2660,7 @@ The backend has 626 automated tests. They use a real database and real queues, a
 | Reminders and automations | Yes: a one-time reminder, a daily automation, the 15-minute limit |
 | Conversations: the list, going back to an earlier one, rename, delete | No. Built on 9 October, with the automated tests only |
 | The Automations chat: every run answering there, and the copy on Telegram | No. Built on 13 October, with the automated tests only, and the web app's part in its demo mode |
+| The Automations chat cannot be deleted | No. Built on 14 October, with the automated tests only, and the web app's part in its demo mode |
 | A late run saying so; the time zone set from the browser | No. Built on 13 October, with the automated tests only, and the web app's part in its demo mode |
 | Replies to a chat app as plain text, with the formatting kept for the web app | No. Built on 9 October, with the automated tests only |
 | Connecting straight to the provider with our own sign-in app, apps the server sets up at Composio by itself, `/oauth/callback` | No. Built on 13 October, with the automated tests only and a stand-in for Composio. No own sign-in app exists yet, and `COMPOSIO_MANAGED_APPS` is not set on the server |

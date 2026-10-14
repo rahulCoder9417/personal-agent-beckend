@@ -1149,6 +1149,189 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Jobs in the queues, by queue and state (admin)
+         * @description Newest first within a queue. Without `queue`, the four queues are paged one after the
+         *     other (inbound, outbound, scheduled, system). `waiting` includes the jobs waiting with a
+         *     priority (paid users' inbound turns). `data` holds ids only: every other field of the job's
+         *     data is left out and only its name is listed in `omittedKeys`, so no message text, token
+         *     or key is ever shown. `failedReason` is the error's first line, with anything that looks
+         *     like a secret removed.
+         */
+        get: operations["adminListJobs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/jobs/counts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How many jobs each queue holds, by state (admin)
+         * @description `waiting` includes the jobs waiting with a priority.
+         */
+        get: operations["adminJobCounts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/jobs/{queue}/{jobId}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run a failed job once more (admin)
+         * @description Only a failed job. It goes back in line and runs once more, as the "retry" button of the
+         *     queue board does: its own "already done?" checks decide what is left to do, so nothing is
+         *     done twice. Written to the audit log with the admin's id and the reason.
+         */
+        post: operations["adminRetryJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/jobs/{queue}/{jobId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a failed or finished job (admin)
+         * @description Only a failed or a completed job; never one that is waiting, delayed or running (409).
+         *     Written to the audit log with the admin's id and the reason. The job's event, if it has
+         *     one, keeps its status in the database.
+         */
+        delete: operations["adminRemoveJob"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The audit log of every user, newest first (admin)
+         * @description Every entry of the activity log: what users, agents, admins and the system did. Filters
+         *     combine. `from` and `to` bound the entry's time (`to` excluded). `details` comes with
+         *     every field that looks like a secret replaced by "[redacted]".
+         */
+        get: operations["adminListAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/timings/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Where turns spent their time over the last days (admin)
+         * @description From the turn timings only (kept 30 days). Per stage, as long as it kept the user waiting:
+         *     how many turns had it, the median and the 90th percentile in milliseconds. The wake is
+         *     split by kind (warm, cold, capacity, recreated). `total` is the time from the message
+         *     being queued to the answer. Then the turns per route, engine and outcome, and the 20
+         *     slowest turns with their biggest stage. Never any text.
+         */
+        get: operations["adminTimingsSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The settings that shape behaviour, read-only (admin)
+         * @description Built from a fixed list, never by reading the whole environment. `settings` are the
+         *     settings that are not secret: switches, limits, lists and addresses (without any user
+         *     name or password in them). For each secret, `secrets` says only whether it is set. `apps`
+         *     is the app catalog with whether each app can be connected on this server, and how.
+         *     `AWAKE_CAP` is the vm-manager's own setting: the backend can't read it, so its value is
+         *     null.
+         */
+        get: operations["adminGetConfig"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Can the backend reach what it depends on (admin)
+         * @description Asks Postgres, Redis, the vm-manager, LiteLLM and Composio, each with a 3-second limit, and
+         *     says for each `ok`, `error` or `off` (not set up on this server), with a short message.
+         *     `ok` is true when none is `error`. `version` is the backend's version and the deployed
+         *     commit, when the deploy passed it on (`GIT_COMMIT`).
+         */
+        get: operations["adminGetHealth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/waitlist": {
         parameters: {
             query?: never;
@@ -4296,6 +4479,384 @@ export interface operations {
                             ip?: string;
                             redemptions?: number;
                             userIds?: string[];
+                        }[];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminListJobs: {
+        parameters: {
+            query?: {
+                queue?: "inbound" | "outbound" | "scheduled" | "system";
+                state?: "failed" | "waiting" | "active" | "delayed" | "completed";
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: {
+                            id: string;
+                            /** @enum {string} */
+                            queue: "inbound" | "outbound" | "scheduled" | "system";
+                            /** @example process-message */
+                            name: string;
+                            /** @enum {string} */
+                            state: "failed" | "waiting" | "active" | "delayed" | "completed";
+                            /** @description Tries made so far */
+                            attempts: number;
+                            maxAttempts: number;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            processedAt: string | null;
+                            /** Format: date-time */
+                            finishedAt: string | null;
+                            /**
+                             * Format: date-time
+                             * @description When a delayed job becomes due. Null for any other job.
+                             */
+                            dueAt: string | null;
+                            /** @description First line of the last error, at most 300 characters, secrets removed. */
+                            failedReason: string | null;
+                            userId: string | null;
+                            /** @description The ids in the job's data (fields named `id` or ending in `Id`/`Ids`). Nothing else. */
+                            data: {
+                                [key: string]: string | number | string[];
+                            };
+                            /** @description Names of the data fields left out. Their values are never shown. */
+                            omittedKeys: string[];
+                        }[];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminJobCounts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        queues: {
+                            /** @enum {string} */
+                            queue: "inbound" | "outbound" | "scheduled" | "system";
+                            failed: number;
+                            waiting: number;
+                            active: number;
+                            delayed: number;
+                            completed: number;
+                        }[];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminRetryJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                queue: "inbound" | "outbound" | "scheduled" | "system";
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Back in line */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    adminRemoveJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                queue: "inbound" | "outbound" | "scheduled" | "system";
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    adminListAudit: {
+        parameters: {
+            query?: {
+                userId?: string;
+                actor?: "user" | "agent" | "admin" | "system";
+                action?: string;
+                from?: string;
+                to?: string;
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: {
+                            id: string;
+                            userId: string | null;
+                            /** @enum {string} */
+                            actor: "user" | "agent" | "admin" | "system";
+                            /**
+                             * @example job_retried
+                             * @example credits_adjusted
+                             */
+                            action: string;
+                            summary: string;
+                            /** @description The entry's details, secrets replaced by "[redacted]". */
+                            details: {
+                                [key: string]: unknown;
+                            } | null;
+                            creditsCharged: number | null;
+                            /** Format: date-time */
+                            createdAt: string;
+                        }[];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminTimingsSummary: {
+        parameters: {
+            query?: {
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        days: number;
+                        /** Format: date-time */
+                        since: string;
+                        /** @description Turns in the window */
+                        turns: number;
+                        stages: {
+                            /**
+                             * @example queue
+                             * @example route
+                             * @example wake cold
+                             * @example wake warm
+                             * @example engine start
+                             * @example first output
+                             * @example work
+                             * @example send answer
+                             * @example total
+                             */
+                            stage: string;
+                            count: number;
+                            p50Ms: number;
+                            p90Ms: number;
+                        }[];
+                        routes: {
+                            /** @description The route, or `none` for a turn that ended before routing */
+                            name: string;
+                            count: number;
+                        }[];
+                        engines: {
+                            /** @description hermes, claude_code, or `none` */
+                            name: string;
+                            count: number;
+                        }[];
+                        outcomes: {
+                            name: string;
+                            count: number;
+                        }[];
+                        slowest: {
+                            deliveryId: string;
+                            userId: string;
+                            /** Format: date-time */
+                            startedAt: string;
+                            totalMs: number;
+                            biggestStage: string | null;
+                            biggestStageMs: number | null;
+                            route: string | null;
+                            engine: string | null;
+                            wake: string | null;
+                            outcome: string;
+                        }[];
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminGetConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        environment: "development" | "test" | "production";
+                        settings: {
+                            /** @example CREW_AVAILABLE */
+                            name: string;
+                            /** @example crew */
+                            group: string;
+                            value: string | number | boolean | string[] | null;
+                            note?: string;
+                        }[];
+                        secrets: {
+                            /** @example COMPOSIO_API_KEY */
+                            name: string;
+                            set: boolean;
+                        }[];
+                        apps: {
+                            slug: string;
+                            name: string;
+                            connectable: boolean;
+                            /**
+                             * @description `settings`: named in COMPOSIO_AUTH_CONFIGS. `made_by_server`: the server
+                             *     made it earlier. `server_may_make`: COMPOSIO_MANAGED_APPS lets the server
+                             *     make it on the first connect. `none`: can't be connected here.
+                             * @enum {string}
+                             */
+                            setup: "settings" | "made_by_server" | "server_may_make" | "none";
+                        }[];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminGetHealth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ok: boolean;
+                        /** Format: date-time */
+                        checkedAt: string;
+                        version: {
+                            /** @example 0.1.0 */
+                            version: string;
+                            /** @example accd3c4 */
+                            commit: string | null;
+                            /** @example v22.11.0 */
+                            node: string;
+                        };
+                        services: {
+                            /** @enum {string} */
+                            name: "postgres" | "redis" | "vm-manager" | "litellm" | "composio";
+                            /** @enum {string} */
+                            status: "ok" | "error" | "off";
+                            message: string;
+                            /** @description How long the check took */
+                            ms: number;
                         }[];
                     };
                 };

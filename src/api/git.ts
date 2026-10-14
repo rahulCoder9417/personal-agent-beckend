@@ -1,5 +1,6 @@
 import type { Context, Hono } from 'hono';
 import { audit } from '../modules/admin/audit.ts';
+import { isSuspended } from '../modules/auth/users.ts';
 import {
   GitGatewayError,
   gitInfoRefs,
@@ -43,6 +44,7 @@ export function mountGit(app: Hono<AppEnv>): void {
       const token = containerToken(c);
       const userId = token ? await userIdForMcpToken(token) : null;
       if (!userId) return text(401, 'Unauthorized');
+      if (await isSuspended(userId)) return text(403, 'This account is suspended');
       const rl = await hit({ key: `git:user:${userId}`, max: 300, windowSeconds: 60 });
       if (!rl.allowed) return text(429, 'Rate limited', { 'Retry-After': String(rl.retryAfter) });
       touch(userId);

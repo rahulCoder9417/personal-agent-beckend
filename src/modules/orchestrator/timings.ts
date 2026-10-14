@@ -4,7 +4,7 @@
 // the hand-over to the container, and the Bridge's own report of the engine (its start, the model's
 // first words, tools, the crew, the answer sent). Never any text the user or the agent wrote: only
 // stage names, times, ids and counts. Writing the row never fails the turn.
-import { desc, eq, lt } from 'drizzle-orm';
+import { desc, eq, gte, lt, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../shared/db/client.ts';
 import { currentJob } from '../../shared/job-context.ts';
@@ -226,6 +226,33 @@ export async function recentTurnTimings(userId: string, limit: number): Promise<
     .where(eq(turnTimings.userId, userId))
     .orderBy(desc(turnTimings.startedAt))
     .limit(limit);
+}
+
+/**
+ * Admin overview: turns that started since each moment, and how many of them ended in an error or
+ * failed. Timings are kept 30 days, so a window longer than that is cut short.
+ */
+export async function turnCounts(
+  dayStart: Date,
+  weekStart: Date,
+): Promise<{ today: number; last7d: number; failedToday: number; failed7d: number }> {
+  const failed = sql`${turnTimings.outcome} in ('error', 'failed')`;
+  const n = (where: SQL) => sql<number>`count(*) filter (where ${where})`.mapWith(Number);
+  const [row] = await db()
+    .select({
+      today: n(sql`${turnTimings.startedAt} >= ${dayStart}`),
+      last7d: n(sql`${turnTimings.startedAt} >= ${weekStart}`),
+      failedToday: n(sql`${turnTimings.startedAt} >= ${dayStart} and ${failed}`),
+      failed7d: n(sql`${turnTimings.startedAt} >= ${weekStart} and ${failed}`),
+    })
+    .from(turnTimings)
+    .where(gte(turnTimings.startedAt, dayStart < weekStart ? dayStart : weekStart));
+  return {
+    today: row?.today ?? 0,
+    last7d: row?.last7d ?? 0,
+    failedToday: row?.failedToday ?? 0,
+    failed7d: row?.failed7d ?? 0,
+  };
 }
 
 /** One stage of a turn as a person reads it: its name, how long it took, and a note. */

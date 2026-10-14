@@ -3215,7 +3215,11 @@ components:
       required: [user, subscription, credits, ledger, apps, automations, crewJobs, turns, activity, agent, container]
       properties:
         user: { $ref: "#/components/schemas/AdminUser" }
-        subscription: { $ref: "#/components/schemas/Subscription" }
+        subscription:
+          $ref: "#/components/schemas/Subscription"
+          description: |
+            The Polar subscription, with its own plan when there is one (a plan set by hand can
+            differ from it); `status: none` and the user's plan when there is none.
         credits: { $ref: "#/components/schemas/CreditBalance" }
         ledger:
           type: array

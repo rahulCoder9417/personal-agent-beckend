@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, count, eq, inArray } from 'drizzle-orm';
 import { config } from '../../shared/config.ts';
 import { db } from '../../shared/db/client.ts';
 import { notFound, planLimit, unavailable } from '../../shared/errors.ts';
@@ -29,6 +29,19 @@ export type Connection = typeof connections.$inferSelect;
 
 export async function listConnections(userId: string): Promise<Connection[]> {
   return db().select().from(connections).where(eq(connections.userId, userId));
+}
+
+/** Admin: how many active app connections each user has. Users with none are left out. */
+export async function activeConnectionCounts(userIds: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (!userIds.length) return out;
+  const rows = await db()
+    .select({ userId: connections.userId, n: count() })
+    .from(connections)
+    .where(and(inArray(connections.userId, userIds), eq(connections.status, 'active')))
+    .groupBy(connections.userId);
+  for (const r of rows) out.set(r.userId, r.n);
+  return out;
 }
 
 export async function activeConnections(

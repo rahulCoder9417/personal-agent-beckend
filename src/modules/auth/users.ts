@@ -1,5 +1,5 @@
 import { createClerkClient } from '@clerk/backend';
-import { and, eq, isNull, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, isNull, lt, ne, or, sql, type SQL } from 'drizzle-orm';
 import { config } from '../../shared/config.ts';
 import { db, type Tx } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
@@ -132,6 +132,78 @@ export async function setPlan(userId: string, plan: PlanId, tx: Tx = db()): Prom
 
 export async function flagUser(userId: string): Promise<void> {
   await db().update(users).set({ flagged: true }).where(eq(users.id, userId));
+}
+
+// --- admin reads (counts and lists; never anything a user wrote) ------------------------------
+
+/** Midnight UTC of the given moment's day: where "today" starts in the admin numbers. */
+export function utcDayStart(now = new Date()): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
+
+export interface UserCounts {
+  /** Accounts that are not deleted. */
+  total: number;
+  deleted: number;
+  /** Sign-ups since midnight UTC, and in the last 7 days (deleted ones too: they signed up). */
+  newToday: number;
+  new7d: number;
+  /** Accounts that are not deleted, by plan. */
+  plans: Record<PlanId, number>;
+}
+
+export async function userCounts(now = new Date()): Promise<UserCounts> {
+  const day = utcDayStart(now);
+  const week = new Date(now.getTime() - 7 * 86400_000);
+  const n = (where: SQL) => sql<number>`count(*) filter (where ${where})`.mapWith(Number);
+  const alive = sql`${users.deletedAt} is null`;
+  const [row] = await db()
+    .select({
+      total: n(alive),
+      deleted: n(sql`${users.deletedAt} is not null`),
+      newToday: n(sql`${users.createdAt} >= ${day}`),
+      new7d: n(sql`${users.createdAt} >= ${week}`),
+      free: n(sql`${alive} and ${users.plan} = 'free'`),
+      pro: n(sql`${alive} and ${users.plan} = 'pro'`),
+      max: n(sql`${alive} and ${users.plan} = 'max'`),
+    })
+    .from(users);
+  return {
+    total: row?.total ?? 0,
+    deleted: row?.deleted ?? 0,
+    newToday: row?.newToday ?? 0,
+    new7d: row?.new7d ?? 0,
+    plans: { free: row?.free ?? 0, pro: row?.pro ?? 0, max: row?.max ?? 0 },
+  };
+}
+
+/** `%` and `_` typed by the admin are letters, not wildcards. */
+const likePattern = (text: string) => `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+
+/**
+ * Users newest first, deleted ones too. `query`: part of an email or a name (any letter case), or
+ * a whole user id. The cursor is the last id of the page before.
+ */
+export async function searchUsers(opts: {
+  query?: string;
+  cursor?: string;
+  limit: number;
+}): Promise<{ items: User[]; nextCursor: string | null }> {
+  const where: SQL[] = [];
+  const q = opts.query?.trim();
+  if (q) {
+    const like = likePattern(q);
+    where.push(or(eq(users.id, q), ilike(users.email, like), ilike(users.name, like))!);
+  }
+  if (opts.cursor) where.push(lt(users.id, opts.cursor));
+  const rows = await db()
+    .select()
+    .from(users)
+    .where(where.length ? and(...where) : undefined)
+    .orderBy(desc(users.id))
+    .limit(opts.limit + 1);
+  const items = rows.slice(0, opts.limit);
+  return { items, nextCursor: rows.length > opts.limit ? items[items.length - 1]!.id : null };
 }
 
 export function isValidTimezone(tz: string): boolean {

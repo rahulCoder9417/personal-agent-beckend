@@ -16,5 +16,8 @@ export {
 } from './usage.ts';
 export { queueTurnRefund, type FailedTurn } from './jobs.ts';
 export { canUseModel } from './models.ts';
-export { getBalance, listBalanceGrants } from './credits.ts';
+export { balancesFor, creditsSince, getBalance, listBalanceGrants, listLedger } from './credits.ts';
+export { adjustCredits, setPlanByHand } from './admin.ts';
+export { getCurrentSubscription, type Subscription } from './subscriptions.ts';
+export { monthStart } from './free-credits.ts';
 export { CHAT_COUPON_PATTERN, redeemFromChat } from './chat.ts';

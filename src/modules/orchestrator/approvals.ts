@@ -1,5 +1,5 @@
 import type { Job } from 'bullmq';
-import { and, desc, eq, gt, isNull, lt, lte } from 'drizzle-orm';
+import { and, count, desc, eq, gt, isNull, lt, lte } from 'drizzle-orm';
 import { db } from '../../shared/db/client.ts';
 import { conflict, notFound } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
@@ -295,4 +295,13 @@ export async function expireApprovals(): Promise<number> {
     .returning();
   for (const r of rows) await publish(r.userId, 'approval.resolved', toApiApproval(r));
   return rows.length;
+}
+
+/** Admin overview: approvals waiting for an answer that have not expired. */
+export async function countOpenApprovals(now = new Date()): Promise<number> {
+  const [row] = await db()
+    .select({ n: count() })
+    .from(approvals)
+    .where(and(eq(approvals.status, 'pending'), gt(approvals.expiresAt, now)));
+  return row?.n ?? 0;
 }

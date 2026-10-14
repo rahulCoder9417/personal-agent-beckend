@@ -5,7 +5,7 @@
 //
 // Every change runs in a transaction holding a per-user advisory lock, and carries an
 // idempotency key (unique in the ledger), so re-running a job can't apply it twice.
-import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
 import { db, type Tx } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import { creditGrants, creditLedger } from './schema.ts';
@@ -39,6 +39,44 @@ export async function getBalance(userId: string, now = new Date(), tx: Tx = db()
     .from(creditGrants)
     .where(and(eq(creditGrants.userId, userId), counted(now)));
   return Number(row?.total ?? 0);
+}
+
+/** Admin: the balance of each user, worked out from the grants the same way. */
+export async function balancesFor(
+  userIds: string[],
+  now = new Date(),
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>(userIds.map((id) => [id, 0]));
+  if (!userIds.length) return out;
+  const rows = await db()
+    .select({
+      userId: creditGrants.userId,
+      total: sql<string | null>`coalesce(sum(${creditGrants.remaining}), 0)`,
+    })
+    .from(creditGrants)
+    .where(and(inArray(creditGrants.userId, userIds), counted(now)))
+    .groupBy(creditGrants.userId);
+  for (const r of rows) out.set(r.userId, Number(r.total ?? 0));
+  return out;
+}
+
+/**
+ * Admin overview: credits granted this month (every source; refunds and chargebacks are negative
+ * grants and left out) and credits charged this month, less charges given back. From the first day
+ * of the month, UTC.
+ */
+export async function creditsSince(since: Date): Promise<{ granted: number; spent: number }> {
+  const [granted] = await db()
+    .select({ n: sql<string | null>`coalesce(sum(${creditGrants.amount}), 0)` })
+    .from(creditGrants)
+    .where(and(gt(creditGrants.amount, 0), gte(creditGrants.createdAt, since)));
+  const [spent] = await db()
+    .select({ n: sql<string | null>`coalesce(sum(${creditLedger.delta}), 0)` })
+    .from(creditLedger)
+    .where(
+      and(inArray(creditLedger.reason, ['charge', 'reversal']), gte(creditLedger.createdAt, since)),
+    );
+  return { granted: Number(granted?.n ?? 0), spent: -Number(spent?.n ?? 0) };
 }
 
 export async function getNextExpiry(userId: string, now = new Date()): Promise<Date | null> {

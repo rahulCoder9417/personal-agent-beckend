@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, gte, inArray, isNull, lt } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { db } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import {
@@ -361,4 +361,31 @@ export async function cleanupMessages(olderThanDays = 365): Promise<number> {
     .returning({ id: messages.id });
   await cleanupEmptyConversations(before);
   return rows.length;
+}
+
+// --- admin reads: when, never what ------------------------------------------------------------
+
+/** Admin: when each user last sent a message, on any channel. Users with none are left out. */
+export async function lastInboundAtFor(userIds: string[]): Promise<Map<string, Date>> {
+  const out = new Map<string, Date>();
+  if (!userIds.length) return out;
+  const rows = await db()
+    .select({
+      userId: messages.userId,
+      at: sql<Date | string>`max(${messages.createdAt})`,
+    })
+    .from(messages)
+    .where(and(inArray(messages.userId, userIds), eq(messages.direction, 'in')))
+    .groupBy(messages.userId);
+  for (const r of rows) out.set(r.userId, new Date(r.at));
+  return out;
+}
+
+/** Admin overview: how many users sent at least one message since `since`, on any channel. */
+export async function activeUserCount(since: Date): Promise<number> {
+  const [row] = await db()
+    .select({ n: sql<number>`count(distinct ${messages.userId})`.mapWith(Number) })
+    .from(messages)
+    .where(and(eq(messages.direction, 'in'), gte(messages.createdAt, since)));
+  return row?.n ?? 0;
 }

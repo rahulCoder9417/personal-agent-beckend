@@ -1149,6 +1149,80 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The platform's numbers at a glance (admin)
+         * @description Counts only: no name, email, id or text. "Today" starts at midnight UTC; "7 days" is the
+         *     last 7 × 24 hours. Turn counts come from the turn timings, which are kept 30 days.
+         *     `containers.awake` is null when the vm-manager can't be asked, and `jobs.failed` when the
+         *     job queues can't be read; the other numbers still come.
+         */
+        get: operations["adminOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Users, newest first, with search (admin)
+         * @description Deleted accounts are listed too, marked `deleted`. The balance is worked out from the
+         *     user's grants, as everywhere else. Never a message, a memory, a key or a token.
+         */
+        get: operations["adminListUsers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/users/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One user's details (admin)
+         * @description Counts and metadata only. Never the user's messages, memories, keys, tokens, app account
+         *     names or the arguments of what the agent did: the activity entries are the one-line
+         *     summaries the user sees in their own activity log.
+         */
+        get: operations["adminGetUser"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Set a user's plan by hand (admin)
+         * @description The steps a paid change of plan takes, with no payment and no credits: the plan, the
+         *     LiteLLM key's models and budget, Scout's browser switch (from the agent's next start) and
+         *     the queue priority. The same plan again changes nothing. Written to the activity log with
+         *     the admin's id. A Polar subscription that is still running can set its own plan again at
+         *     its next event; `subscription` says whether there is one.
+         */
+        patch: operations["adminUpdateUser"];
+        trace?: never;
+    };
     "/v1/waitlist": {
         parameters: {
             query?: never;
@@ -2175,6 +2249,216 @@ export interface components {
                 /** Format: date-time */
                 lastAt: string;
             }[];
+        };
+        AdminOverview: {
+            /** Format: date-time */
+            generatedAt: string;
+            users: {
+                /** @description Accounts that are not deleted */
+                total: number;
+                newToday: number;
+                new7d: number;
+                /** @description Accounts that sent a message in the last 7 days, on any channel */
+                active7d: number;
+                deleted: number;
+            };
+            /** @description Accounts that are not deleted, by plan. */
+            plans: {
+                free: number;
+                pro: number;
+                max: number;
+            };
+            turns: {
+                today: number;
+                last7d: number;
+                /** @description Turns that ended in an error or failed */
+                failedToday: number;
+                failed7d: number;
+            };
+            containers: {
+                /** @description Containers waking, awake or busy right now. Null when the vm-manager can't be asked. */
+                awake: number | null;
+            };
+            credits: {
+                /** @example 2026-10 */
+                month: string;
+                /** @description Credits granted this month (UTC), every source */
+                granted: number;
+                /** @description Credits charged this month, less charges given back */
+                spent: number;
+            };
+            approvals: {
+                /** @description Approvals waiting for an answer, not expired */
+                open: number;
+            };
+            jobs: {
+                /** @description Failed jobs in the four queues (kept 30 days). Null when the queues can't be read. */
+                failed: number | null;
+            };
+            waitlist: {
+                total: number;
+                pending: number;
+            };
+        };
+        AdminUser: {
+            id: string;
+            email: string;
+            emailVerified: boolean;
+            name: string;
+            timezone: string;
+            plan: components["schemas"]["PlanId"];
+            /** @enum {string} */
+            role: "user" | "admin";
+            /** @enum {string} */
+            status: "active" | "deleted";
+            /** @description Marked after a chargeback */
+            flagged: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            deletedAt: string | null;
+            /**
+             * Format: date-time
+             * @description When the user last sent a message, on any channel (messages are kept 365 days).
+             */
+            lastActiveAt: string | null;
+            /** @description The balance, worked out from the grants */
+            credits: number;
+            engine: components["schemas"]["AgentRuntime"];
+            /** @description The chat apps linked (the kinds only, never a chat id or number). */
+            channels: ("whatsapp" | "telegram" | "imessage")[];
+            /** @description App connections that are active */
+            connectedApps: number;
+        };
+        AdminUserApp: {
+            /** @example gmail */
+            app: string;
+            /** @example Gmail */
+            name: string;
+            /** @enum {string} */
+            status: "pending" | "active" | "expired" | "error";
+            /** Format: date-time */
+            connectedAt: string;
+        };
+        AdminUserAutomation: {
+            id: string;
+            title: string;
+            /** @enum {string} */
+            kind: "once" | "repeat" | "event";
+            /** @enum {string|null} */
+            preset: "pr_review" | null;
+            enabled: boolean;
+            /** @enum {string|null} */
+            pausedReason: "out_of_credits" | "failures" | "user" | null;
+            /** Format: date-time */
+            nextRunAt: string | null;
+            /** Format: date-time */
+            lastRunAt: string | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        AdminUserCrewJob: {
+            id: string;
+            /** @enum {string} */
+            member: "patch" | "byte";
+            /** @enum {string} */
+            status: "queued" | "running" | "done" | "failed";
+            /** @enum {string} */
+            source: "app" | "chat";
+            /** @example acme/website */
+            repo: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            finishedAt: string | null;
+        };
+        /** @description Where one turn's time went. Stage names and milliseconds only, never any text. */
+        AdminTurnTiming: {
+            /** @description The turn's delivery id */
+            id: string;
+            /** Format: date-time */
+            startedAt: string;
+            kind: string;
+            channel: string;
+            /**
+             * @example task
+             * @example simple
+             */
+            route: string | null;
+            /** @enum {string|null} */
+            engine: "hermes" | "claude_code" | null;
+            /**
+             * @example warm
+             * @example cold
+             * @example capacity
+             * @example recreated
+             */
+            wake: string | null;
+            /**
+             * @example done
+             * @example simple
+             * @example error
+             * @example failed
+             * @example retry
+             */
+            outcome: string;
+            attempt: number;
+            /** @description How long after the message was queued the user had the answer. */
+            answeredMs: number | null;
+            stages: {
+                /**
+                 * @example queue
+                 * @example route
+                 * @example wake
+                 * @example work
+                 */
+                name: string;
+                ms: number;
+            }[];
+        };
+        AdminActivityEntry: {
+            id: string;
+            /** @enum {string} */
+            actor: "user" | "agent" | "admin" | "system";
+            action: string;
+            summary: string;
+            creditsCharged: number | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        AdminUserDetail: {
+            user: components["schemas"]["AdminUser"];
+            subscription: components["schemas"]["Subscription"];
+            credits: components["schemas"]["CreditBalance"];
+            /** @description The last 20 changes to the user's credits, newest first. */
+            ledger: components["schemas"]["LedgerEntry"][];
+            apps: components["schemas"]["AdminUserApp"][];
+            /** @description Automations that are not finished, newest first. */
+            automations: components["schemas"]["AdminUserAutomation"][];
+            /** @description The last 20 crew jobs, newest first. */
+            crewJobs: components["schemas"]["AdminUserCrewJob"][];
+            /** @description The last 20 turns' timings, newest first. */
+            turns: components["schemas"]["AdminTurnTiming"][];
+            /** @description The last 20 activity-log entries, newest first. */
+            activity: components["schemas"]["AdminActivityEntry"][];
+            agent: {
+                runtime: components["schemas"]["AgentRuntime"];
+                /** @enum {string|null} */
+                effectiveRuntime: "hermes" | "claude_code" | null;
+                /** @enum {string} */
+                aiAccess: "claude_plan" | "own_key" | "platform" | "none";
+                claudeConnected: boolean;
+            };
+            /** @description The container's state from the vm-manager; null when it can't be asked. */
+            container: components["schemas"]["AgentStatus"] | null;
+        };
+        AdminPlanChange: {
+            userId: string;
+            plan: components["schemas"]["PlanId"];
+            previousPlan: components["schemas"]["PlanId"];
+            changed: boolean;
+            /** @description A running Polar subscription can set its own plan again at its next event. */
+            subscription: components["schemas"]["Subscription"];
         };
         /** @enum {string} */
         AgentRuntime: "hermes" | "claude_code";
@@ -4302,6 +4586,119 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    adminOverview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOverview"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminListUsers: {
+        parameters: {
+            query?: {
+                /** @description Part of an email or a name (any letter case), or a whole user id. */
+                query?: string;
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["AdminUser"][];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminGetUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUserDetail"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    adminUpdateUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    plan: components["schemas"]["PlanId"];
+                    /** @description Why, for the activity log. */
+                    reason?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Done (or nothing to change) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminPlanChange"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     joinWaitlist: {

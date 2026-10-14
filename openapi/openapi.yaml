@@ -1749,6 +1749,122 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /v1/admin/overview:
+    get:
+      operationId: adminOverview
+      tags: [admin]
+      summary: The platform's numbers at a glance (admin)
+      description: |
+        Counts only: no name, email, id or text. "Today" starts at midnight UTC; "7 days" is the
+        last 7 × 24 hours. Turn counts come from the turn timings, which are kept 30 days.
+        `containers.awake` is null when the vm-manager can't be asked, and `jobs.failed` when the
+        job queues can't be read; the other numbers still come.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminOverview" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/admin/users:
+    get:
+      operationId: adminListUsers
+      tags: [admin]
+      summary: Users, newest first, with search (admin)
+      description: |
+        Deleted accounts are listed too, marked `deleted`. The balance is worked out from the
+        user's grants, as everywhere else. Never a message, a memory, a key or a token.
+      parameters:
+        - name: query
+          in: query
+          required: false
+          description: Part of an email or a name (any letter case), or a whole user id.
+          schema: { type: string, minLength: 1, maxLength: 200 }
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/AdminUser" }
+                  nextCursor: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/admin/users/{userId}:
+    get:
+      operationId: adminGetUser
+      tags: [admin]
+      summary: One user's details (admin)
+      description: |
+        Counts and metadata only. Never the user's messages, memories, keys, tokens, app account
+        names or the arguments of what the agent did: the activity entries are the one-line
+        summaries the user sees in their own activity log.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminUserDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: adminUpdateUser
+      tags: [admin]
+      summary: Set a user's plan by hand (admin)
+      description: |
+        The steps a paid change of plan takes, with no payment and no credits: the plan, the
+        LiteLLM key's models and budget, Scout's browser switch (from the agent's next start) and
+        the queue priority. The same plan again changes nothing. Written to the activity log with
+        the admin's id. A Polar subscription that is still running can set its own plan again at
+        its next event; `subscription` says whether there is one.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan]
+              additionalProperties: false
+              properties:
+                plan: { $ref: "#/components/schemas/PlanId" }
+                reason:
+                  type: string
+                  maxLength: 200
+                  description: Why, for the activity log.
+      responses:
+        "200":
+          description: Done (or nothing to change)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminPlanChange" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   # ---------------------------------------------------------------- waitlist
   /v1/waitlist:
     post:
@@ -2931,6 +3047,224 @@ components:
               entries: { type: integer }
               attempts: { type: integer }
               lastAt: { type: string, format: date-time }
+
+    AdminOverview:
+      type: object
+      required: [generatedAt, users, plans, turns, containers, credits, approvals, jobs, waitlist]
+      properties:
+        generatedAt: { type: string, format: date-time }
+        users:
+          type: object
+          required: [total, newToday, new7d, active7d, deleted]
+          properties:
+            total: { type: integer, description: "Accounts that are not deleted" }
+            newToday: { type: integer }
+            new7d: { type: integer }
+            active7d: { type: integer, description: "Accounts that sent a message in the last 7 days, on any channel" }
+            deleted: { type: integer }
+        plans:
+          type: object
+          description: Accounts that are not deleted, by plan.
+          required: [free, pro, max]
+          properties:
+            free: { type: integer }
+            pro: { type: integer }
+            max: { type: integer }
+        turns:
+          type: object
+          required: [today, last7d, failedToday, failed7d]
+          properties:
+            today: { type: integer }
+            last7d: { type: integer }
+            failedToday: { type: integer, description: "Turns that ended in an error or failed" }
+            failed7d: { type: integer }
+        containers:
+          type: object
+          required: [awake]
+          properties:
+            awake:
+              type: [integer, "null"]
+              description: Containers waking, awake or busy right now. Null when the vm-manager can't be asked.
+        credits:
+          type: object
+          required: [month, granted, spent]
+          properties:
+            month: { type: string, examples: ["2026-10"] }
+            granted: { type: integer, description: "Credits granted this month (UTC), every source" }
+            spent: { type: integer, description: "Credits charged this month, less charges given back" }
+        approvals:
+          type: object
+          required: [open]
+          properties:
+            open: { type: integer, description: "Approvals waiting for an answer, not expired" }
+        jobs:
+          type: object
+          required: [failed]
+          properties:
+            failed:
+              type: [integer, "null"]
+              description: Failed jobs in the four queues (kept 30 days). Null when the queues can't be read.
+        waitlist:
+          type: object
+          required: [total, pending]
+          properties:
+            total: { type: integer }
+            pending: { type: integer }
+
+    AdminUser:
+      type: object
+      required: [id, email, emailVerified, name, timezone, plan, role, status, flagged, createdAt, deletedAt, lastActiveAt, credits, engine, channels, connectedApps]
+      properties:
+        id: { type: string }
+        email: { type: string }
+        emailVerified: { type: boolean }
+        name: { type: string }
+        timezone: { type: string }
+        plan: { $ref: "#/components/schemas/PlanId" }
+        role: { type: string, enum: [user, admin] }
+        status: { type: string, enum: [active, deleted] }
+        flagged: { type: boolean, description: "Marked after a chargeback" }
+        createdAt: { type: string, format: date-time }
+        deletedAt: { type: [string, "null"], format: date-time }
+        lastActiveAt:
+          type: [string, "null"]
+          format: date-time
+          description: When the user last sent a message, on any channel (messages are kept 365 days).
+        credits: { type: integer, description: "The balance, worked out from the grants" }
+        engine: { $ref: "#/components/schemas/AgentRuntime" }
+        channels:
+          type: array
+          description: The chat apps linked (the kinds only, never a chat id or number).
+          items: { type: string, enum: [whatsapp, telegram, imessage] }
+        connectedApps: { type: integer, description: "App connections that are active" }
+
+    AdminUserApp:
+      type: object
+      required: [app, name, status, connectedAt]
+      properties:
+        app: { type: string, examples: [gmail] }
+        name: { type: string, examples: [Gmail] }
+        status: { type: string, enum: [pending, active, expired, error] }
+        connectedAt: { type: string, format: date-time }
+
+    AdminUserAutomation:
+      type: object
+      required: [id, title, kind, preset, enabled, pausedReason, nextRunAt, lastRunAt, createdAt]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        kind: { type: string, enum: [once, repeat, event] }
+        preset: { type: [string, "null"], enum: [pr_review, null] }
+        enabled: { type: boolean }
+        pausedReason: { type: [string, "null"], enum: [out_of_credits, failures, user, null] }
+        nextRunAt: { type: [string, "null"], format: date-time }
+        lastRunAt: { type: [string, "null"], format: date-time }
+        createdAt: { type: string, format: date-time }
+
+    AdminUserCrewJob:
+      type: object
+      required: [id, member, status, source, repo, createdAt, finishedAt]
+      properties:
+        id: { type: string }
+        member: { type: string, enum: [patch, byte] }
+        status: { type: string, enum: [queued, running, done, failed] }
+        source: { type: string, enum: [app, chat] }
+        repo: { type: string, examples: [acme/website] }
+        createdAt: { type: string, format: date-time }
+        finishedAt: { type: [string, "null"], format: date-time }
+
+    AdminTurnTiming:
+      type: object
+      description: Where one turn's time went. Stage names and milliseconds only, never any text.
+      required: [id, startedAt, kind, channel, route, engine, wake, outcome, attempt, answeredMs, stages]
+      properties:
+        id: { type: string, description: "The turn's delivery id" }
+        startedAt: { type: string, format: date-time }
+        kind: { type: string }
+        channel: { type: string }
+        route: { type: [string, "null"], examples: [task, simple] }
+        engine: { type: [string, "null"], enum: [hermes, claude_code, null] }
+        wake: { type: [string, "null"], examples: [warm, cold, capacity, recreated] }
+        outcome: { type: string, examples: [done, simple, error, failed, retry] }
+        attempt: { type: integer }
+        answeredMs:
+          type: [integer, "null"]
+          description: How long after the message was queued the user had the answer.
+        stages:
+          type: array
+          items:
+            type: object
+            required: [name, ms]
+            properties:
+              name: { type: string, examples: [queue, route, wake, work] }
+              ms: { type: integer }
+
+    AdminActivityEntry:
+      type: object
+      required: [id, actor, action, summary, creditsCharged, createdAt]
+      properties:
+        id: { type: string }
+        actor: { type: string, enum: [user, agent, admin, system] }
+        action: { type: string }
+        summary: { type: string }
+        creditsCharged: { type: [integer, "null"] }
+        createdAt: { type: string, format: date-time }
+
+    AdminUserDetail:
+      type: object
+      required: [user, subscription, credits, ledger, apps, automations, crewJobs, turns, activity, agent, container]
+      properties:
+        user: { $ref: "#/components/schemas/AdminUser" }
+        subscription: { $ref: "#/components/schemas/Subscription" }
+        credits: { $ref: "#/components/schemas/CreditBalance" }
+        ledger:
+          type: array
+          description: The last 20 changes to the user's credits, newest first.
+          items: { $ref: "#/components/schemas/LedgerEntry" }
+        apps:
+          type: array
+          items: { $ref: "#/components/schemas/AdminUserApp" }
+        automations:
+          type: array
+          description: Automations that are not finished, newest first.
+          items: { $ref: "#/components/schemas/AdminUserAutomation" }
+        crewJobs:
+          type: array
+          description: The last 20 crew jobs, newest first.
+          items: { $ref: "#/components/schemas/AdminUserCrewJob" }
+        turns:
+          type: array
+          description: The last 20 turns' timings, newest first.
+          items: { $ref: "#/components/schemas/AdminTurnTiming" }
+        activity:
+          type: array
+          description: The last 20 activity-log entries, newest first.
+          items: { $ref: "#/components/schemas/AdminActivityEntry" }
+        agent:
+          type: object
+          required: [runtime, effectiveRuntime, aiAccess, claudeConnected]
+          properties:
+            runtime: { $ref: "#/components/schemas/AgentRuntime" }
+            effectiveRuntime: { type: [string, "null"], enum: [hermes, claude_code, null] }
+            aiAccess: { type: string, enum: [claude_plan, own_key, platform, none] }
+            claudeConnected: { type: boolean }
+        container:
+          description: The container's state from the vm-manager; null when it can't be asked.
+          oneOf:
+            - { $ref: "#/components/schemas/AgentStatus" }
+            - { type: "null" }
+
+    AdminPlanChange:
+      type: object
+      required: [userId, plan, previousPlan, changed, subscription]
+      properties:
+        userId: { type: string }
+        plan: { $ref: "#/components/schemas/PlanId" }
+        previousPlan: { $ref: "#/components/schemas/PlanId" }
+        changed: { type: boolean }
+        subscription:
+          $ref: "#/components/schemas/Subscription"
+          description: A running Polar subscription can set its own plan again at its next event.
 
     AgentRuntime:
       type: string

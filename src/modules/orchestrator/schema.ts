@@ -106,3 +106,34 @@ export const chatEngines = pgTable(
   },
   (t) => [primaryKey({ columns: [t.userId, t.sessionKey, t.epoch, t.runtime] })],
 );
+
+/**
+ * Where each turn's time went (docs/backend-report.md, "Where a turn's time goes"): one row per
+ * turn, written once when the turn ends; a retried job writes it again. Only stage names, times,
+ * ids and counts: never the message, the answer or anything else the user or the agent wrote.
+ * `stages`: each stage's moment in milliseconds after `startedAt` (the moment the job was queued).
+ * `details`: how the route was decided, how the wake went, and the Bridge's own report.
+ */
+export const turnTimings = pgTable(
+  'turn_timings',
+  {
+    /** The turn's delivery id (the event id for a message). */
+    deliveryId: text().primaryKey(),
+    userId: text().notNull(),
+    kind: text().notNull(),
+    channel: text().notNull(),
+    /** task, simple, spam, out_of_credits or connect_ai; null when the turn ended before routing. */
+    route: text(),
+    engine: text({ enum: ['hermes', 'claude_code'] }),
+    /** warm, cold, capacity (another container was stopped first) or recreated; null: no wake. */
+    wake: text(),
+    /** done, error, simple, spam, out_of_credits, retry (the job will try again) or failed. */
+    outcome: text().notNull(),
+    attempt: integer().notNull().default(1),
+    startedAt: timestamp({ withTimezone: true }).notNull(),
+    stages: jsonb().$type<Record<string, number>>().notNull(),
+    details: jsonb().$type<Record<string, unknown>>().notNull(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index().on(t.userId, t.startedAt), index().on(t.createdAt)],
+);

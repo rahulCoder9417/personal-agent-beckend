@@ -172,10 +172,16 @@ function claudeChoiceOf(
 export async function claudeTurnOptions(
   userId: string,
 ): Promise<{ model?: string; effort?: ClaudeEffort }> {
-  const { claudeModel, claudeEffort } = claudeChoiceOf(await settingsRow(userId));
+  return claudeOptionsOf(claudeChoiceOf(await settingsRow(userId)));
+}
+
+/** The same, from settings the turn has already read (no second read of the row). */
+export function claudeOptionsOf(
+  settings: Pick<AgentSettingsView, 'claudeModel' | 'claudeEffort'>,
+): { model?: string; effort?: ClaudeEffort } {
   return {
-    ...(claudeModel ? { model: claudeModel } : {}),
-    ...(claudeEffort ? { effort: claudeEffort } : {}),
+    ...(settings.claudeModel ? { model: settings.claudeModel } : {}),
+    ...(settings.claudeEffort ? { effort: settings.claudeEffort } : {}),
   };
 }
 
@@ -276,8 +282,10 @@ export async function pushRuntime(userId: string, settings?: AgentSettingsView):
 export async function syncRuntimeAfterWake(
   userId: string,
   sandbox: { runtime?: AgentRuntime } | undefined,
+  /** The user's settings when the caller has just read them. */
+  read?: AgentSettingsView,
 ): Promise<RuntimeName> {
-  const settings = await getAgentSettings(userId);
+  const settings = read ?? (await getAgentSettings(userId));
   const wanted: RuntimeName = settings.effectiveRuntime ?? 'hermes';
   if (!sandbox || sameVmRuntime(sandbox.runtime, toVmRuntime(wanted))) return wanted;
   if (await pushRuntime(userId, settings)) return wanted;

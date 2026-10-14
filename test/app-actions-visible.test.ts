@@ -14,7 +14,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { devUser, UsageError } from '../scripts/dev-user.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
 import { startConnect } from '../src/modules/integrations/apps.ts';
-import { pickManagedSetup, type ComposioTool } from '../src/modules/integrations/composio.ts';
+import {
+  pickManagedSetup,
+  TOOL_LIST_TTL_MS,
+  toolkitTools,
+  type ComposioTool,
+} from '../src/modules/integrations/composio.ts';
 import { handleCheckConnection } from '../src/modules/integrations/jobs.ts';
 import { connections } from '../src/modules/integrations/tables.ts';
 import { ensureSandbox } from '../src/modules/orchestrator/sandbox.ts';
@@ -181,6 +186,33 @@ describe('list_app_actions: every connected app gets its share', () => {
       'googlecalendar',
     ]);
     expect(res.apps.find((a) => a.app === 'github')!.note).toMatch(/could not be listed right now/);
+  });
+});
+
+describe("an app's actions are listed once for a while, not at every call", () => {
+  it('a second list_app_actions does not ask Composio again; a failed listing is not kept', async () => {
+    realisticTools();
+    const { mcp } = await agentUser([
+      { app: 'github', status: 'active' },
+      { app: 'googlecalendar', status: 'active' },
+    ]);
+    await mcp('list_app_actions');
+    expect(composio.state.toolRequests).toHaveLength(2);
+    const again = (await mcp('list_app_actions', { app: 'googlecalendar' })).json as Listing;
+    expect(again.actions).toHaveLength(3);
+    expect(composio.state.toolRequests).toHaveLength(2);
+    // Another user with the same app is served from the same listing: actions are not per user.
+    const other = await agentUser([{ app: 'googlecalendar', status: 'active' }]);
+    await other.mcp('list_app_actions');
+    expect(composio.state.toolRequests).toHaveLength(2);
+
+    composio.state.toolsError.set('notion', new Error('composio is slow'));
+    await expect(toolkitTools('notion')).rejects.toThrow('composio is slow');
+    expect((await toolkitTools('notion')).length).toBeGreaterThan(0);
+    // After the time it is kept, Composio is asked again.
+    const later = Date.now() + TOOL_LIST_TTL_MS + 1;
+    await toolkitTools('googlecalendar', later);
+    expect(composio.state.toolRequests.at(-1)).toEqual(['googlecalendar']);
   });
 });
 

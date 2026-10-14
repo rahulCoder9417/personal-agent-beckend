@@ -17,7 +17,8 @@ import {
 import { handleRunAutomation } from '../src/modules/automations/jobs.ts';
 import { messages } from '../src/modules/channels/schema.ts';
 import { closeQueues, queue } from '../src/modules/events/queues.ts';
-import { SUSPENDED_TEXT, sendWebMessage } from '../src/modules/orchestrator/process-message.ts';
+import { saveWebMessage } from '../src/modules/channels/messages.ts';
+import { SUSPENDED_TEXT } from '../src/modules/orchestrator/process-message.ts';
 import { ensureSandbox } from '../src/modules/orchestrator/sandbox.ts';
 import { runTurn } from '../src/modules/orchestrator/turn.ts';
 import { db } from '../src/shared/db/client.ts';
@@ -581,8 +582,14 @@ describe('admin accounts: suspend and unsuspend', () => {
   it('a web message sent before the suspension is not answered', async () => {
     const admin = await createUser({ role: 'admin' });
     const user = await chatUser();
-    // Saved and queued while active; the turn starts only after the suspension.
-    const { message } = await sendWebMessage(user.id, { text: 'late one', clientMessageId: 'w1' });
+    // Saved while active, its turn not started yet (no job here: the worker would race the
+    // suspension); the turn starts only after the suspension.
+    const { message } = await saveWebMessage({
+      userId: user.id,
+      text: 'late one',
+      clientMessageId: 'w1',
+    });
+    expect(message.status).toBe('queued');
     await expectContract(
       'adminSuspendUser',
       await send('POST', `/v1/admin/users/${user.id}/suspend`, admin.token, { reason: 'x' }),

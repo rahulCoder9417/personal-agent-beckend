@@ -15,14 +15,16 @@ import type { MediaRef } from '../channels/schema.ts';
 import { publish } from '../channels/stream.ts';
 import type { Channel } from '../channels/types.ts';
 import {
-  claudeTurnOptions,
+  claudeOptionsOf,
   fallBackIfClaudeSignedOut,
+  getAgentSettings,
   syncRuntimeAfterWake,
   type RuntimeName,
 } from './agent-settings.ts';
 import { syncBrowserAfterWake } from './browser.ts';
 import { crewOfProgress } from './crew.ts';
 import { ensureSandbox } from './sandbox.ts';
+import { TurnTimer, type RouteTimes } from './timings.ts';
 import { recordEngineTurn, turnText } from './turn-context.ts';
 import { DeliverEventType, DeliverKind, planPriority, vm } from './vm.ts';
 
@@ -58,10 +60,24 @@ export type RouteDecision =
 
 export type TurnOutcome = 'done' | 'out_of_credits' | 'simple' | 'spam' | 'error';
 
+/**
+ * What the turn gives the route hook besides the message: a way to start waking the container while
+ * the route is decided, and a record of how long each part of the decision took (timings.ts).
+ */
+export interface RouteContext {
+  /**
+   * Start waking the container now (setting WAKE_WHILE_ROUTING). Safe to call more than once. The
+   * turn waits for the wake only if the message turns out to be a task; otherwise the container
+   * just idles until its idle stop.
+   */
+  wakeEarly?: () => void;
+  times?: RouteTimes;
+}
+
 /** Filled in by other modules (billing, Jev routing). Defaults keep a turn working without them. */
 export interface TurnHooks {
   hasCredits(userId: string): Promise<boolean>;
-  route(input: TurnInput): Promise<RouteDecision>;
+  route(input: TurnInput, ctx?: RouteContext): Promise<RouteDecision>;
   afterTurn(userId: string, outcome: TurnOutcome): Promise<void>;
   /** The turn failed on our side: queue its refund (billing). Quick; never does the refund here. */
   onPlatformFault(
@@ -332,7 +348,60 @@ const turnSays = (input: TurnInput) => ({
   inAutomationsChat: input.inAutomationsChat === true,
 });
 
+/**
+ * Runs one turn, and writes where its time went (timings.ts) when it ends, whatever the outcome.
+ * `retry`: the job will try again; `failed`: an error the job does not retry by itself.
+ */
 export async function runTurn(given: TurnInput): Promise<TurnOutcome> {
+  const timer = new TurnTimer({
+    deliveryId: given.deliveryId,
+    userId: given.userId,
+    kind: given.kind,
+    channel: given.channel,
+  });
+  try {
+    const outcome = await turnSteps(given, timer);
+    timer.outcome = outcome;
+    return outcome;
+  } catch (err) {
+    timer.outcome = err instanceof RetryableTurnError ? 'retry' : 'failed';
+    throw err;
+  } finally {
+    timer.mark('finished');
+    await timer.save();
+  }
+}
+
+/** The user and the vm-manager's answer to the wake. */
+interface Woken {
+  plan: Parameters<typeof planPriority>[0];
+  woke: Awaited<ReturnType<ReturnType<typeof vm>['wakeSandbox']>>;
+}
+
+/** Makes sure the container exists and wakes it. Null: the user is gone. */
+async function wakeContainer(userId: string, timer: TurnTimer): Promise<Woken | null> {
+  const user = await getActiveUser(userId);
+  if (!user) return null;
+  await ensureSandbox(userId);
+  timer.mark('wake_started');
+  let woke;
+  try {
+    woke = await vm().wakeSandbox({ userId, priority: planPriority(user.plan) });
+  } catch (err) {
+    if (
+      err instanceof ConnectError &&
+      [Code.ResourceExhausted, Code.Unavailable, Code.DeadlineExceeded].includes(err.code)
+    ) {
+      throw new RetryableTurnError(`wake failed: ${err.message}`);
+    }
+    throw err;
+  }
+  timer.mark('woken');
+  timer.noteWake(woke);
+  return { plan: user.plan, woke };
+}
+
+async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcome> {
   const { userId } = given;
   const log = logger().child({ userId, deliveryId: given.deliveryId });
   // The turn's conversation: the message's own (or the Automations chat), else the chat's active
@@ -348,44 +417,52 @@ export async function runTurn(given: TurnInput): Promise<TurnOutcome> {
   const said = turnSays(input);
 
   if (!(await hooks.hasCredits(userId))) {
+    timer.route = 'out_of_credits';
     await queueOutbound({ userId, ...said, text: outOfCreditsText(input.channel) });
+    timer.mark('answered');
     if (input.inboundMessageId) await setMessageStatus(input.inboundMessageId, 'delivered');
     return 'out_of_credits';
   }
 
-  const decision = await hooks.route(input);
+  // The container may start waking while the route is decided (routing.ts calls `wakeEarly` once
+  // the message is one Jev will judge), so a task does not wait for both one after the other.
+  let wakeOnce: Promise<Woken | null> | undefined;
+  const wake = () => (wakeOnce ??= wakeContainer(userId, timer));
+  const decision = await hooks.route(input, {
+    wakeEarly: () => {
+      // A wake nobody waits for (the route said simple) must not end as an unhandled error.
+      if (config().WAKE_WHILE_ROUTING) wake().catch(() => {});
+    },
+    times: timer.routeTimes,
+  });
+  timer.mark('routed');
+  timer.route = decision.kind;
   if (decision.kind === 'spam') {
     if (input.inboundMessageId) await setMessageStatus(input.inboundMessageId, 'delivered');
     return 'spam';
   }
   if (decision.kind === 'simple') {
     await queueOutbound({ userId, ...said, text: decision.reply });
+    timer.mark('answered');
     if (input.inboundMessageId) await setMessageStatus(input.inboundMessageId, 'delivered');
     await hooks.afterTurn(userId, 'simple');
     return 'simple';
   }
 
-  const user = await getActiveUser(userId);
-  if (!user) return 'error';
-
-  await ensureSandbox(userId);
-  await publish(userId, 'agent.status', { state: 'waking', lastActiveAt: null });
-  let woke;
-  try {
-    woke = await vm().wakeSandbox({ userId, priority: planPriority(user.plan) });
-  } catch (err) {
-    if (
-      err instanceof ConnectError &&
-      [Code.ResourceExhausted, Code.Unavailable, Code.DeadlineExceeded].includes(err.code)
-    ) {
-      throw new RetryableTurnError(`wake failed: ${err.message}`);
-    }
-    throw err;
-  }
+  // The settings are read while the container wakes; they say which engine it must run.
+  const reading = getAgentSettings(userId);
+  reading.catch(() => {});
+  if (!timer.has('woken'))
+    await publish(userId, 'agent.status', { state: 'waking', lastActiveAt: null });
+  const awake = await wake();
+  if (!awake) return 'error';
+  const { woke } = awake;
+  const settings = await reading;
   // The container runs the agent the user's settings say (Hermes or Claude Code).
-  const engine = await syncRuntimeAfterWake(userId, woke.sandbox);
+  const engine = await syncRuntimeAfterWake(userId, woke.sandbox, settings);
+  timer.engine = engine;
   // Scout's browser is on for this container only if the plan says so (HLD 11.3).
-  await syncBrowserAfterWake(userId, user.plan, woke.sandbox);
+  await syncBrowserAfterWake(userId, awake.plan, woke.sandbox);
   // What is known about the user (the same in every conversation), and a recap of this
   // conversation if the engine changed (HLD 0.9).
   const text = await turnText({ ...input, conversation }, engine);
@@ -398,7 +475,7 @@ export async function runTurn(given: TurnInput): Promise<TurnOutcome> {
   const metadata: Record<string, unknown> = {
     chat_epoch: conversation.epoch,
     stream_text: streamsDraft(input),
-    ...(engine === 'claude_code' ? { claude: await claudeTurnOptions(userId) } : {}),
+    ...(engine === 'claude_code' ? { claude: claudeOptionsOf(settings) } : {}),
   };
 
   // From here until the turn ends, read_page knows which engine is calling it (HLD 5.1), and what
@@ -409,9 +486,11 @@ export async function runTurn(given: TurnInput): Promise<TurnOutcome> {
     turnId: input.deliveryId,
     inAutomationsChat: input.inAutomationsChat === true,
   });
-  const outcome = await deliverTurn(input, { text, apps: decision.apps, metadata, log }).finally(
-    () => Promise.all([clearTurnEngine(userId), clearTurnConversation(userId)]),
-  );
+  const outcome = await deliverTurn(
+    input,
+    { text, apps: decision.apps, metadata, log },
+    timer,
+  ).finally(() => Promise.all([clearTurnEngine(userId), clearTurnConversation(userId)]));
 
   if (!outcome) throw new RetryableTurnError('deliver stream ended without turn_done');
   // This engine now has the conversation up to here. A failed turn is not recorded: it gets the
@@ -460,10 +539,12 @@ async function deliverTurn(
     metadata: Record<string, unknown>;
     log: ReturnType<typeof logger>;
   },
+  timer: TurnTimer,
 ): Promise<TurnOutcome | null> {
   const { userId } = input;
   const { text, log } = turn;
   const startedAt = new Date();
+  timer.mark('deliver_sent');
   const progress = { crewLines: 0 };
   // Whether a draft of the answer was shown in the web app during this turn.
   let drafted = false;
@@ -490,6 +571,7 @@ async function deliverTurn(
   for await (const ev of stream) {
     switch (ev.type) {
       case DeliverEventType.ACCEPTED:
+        timer.mark('accepted');
         if (input.inboundMessageId) await setMessageStatus(input.inboundMessageId, 'processing');
         await publish(userId, 'agent.status', {
           state: 'busy',
@@ -497,15 +579,21 @@ async function deliverTurn(
         });
         break;
       case DeliverEventType.WORKING:
+        timer.mark('first_progress');
         await reportProgress(input, ev, progress);
         break;
       case DeliverEventType.TEXT_DELTA:
+        if (ev.message) timer.mark('first_draft');
         if (await publishDraft(input, ev)) drafted = true;
         break;
       case DeliverEventType.TURN_DONE:
+        timer.mark('turn_done');
+        timer.noteBridge(ev.timingsJson);
         outcome = 'done';
         break;
       case DeliverEventType.ERROR: {
+        timer.mark('turn_done');
+        timer.noteBridge(ev.timingsJson);
         outcome = 'error';
         log.warn({ platformFault: ev.platformFault, message: ev.message }, 'turn error');
         // A half-written answer goes away before the user is told the turn failed.

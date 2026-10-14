@@ -83,11 +83,11 @@ export function wireModules(): void {
   // Bring your own AI: no AI source (AI_ACCESS_MODE=own_only) → "connect your AI", no wake.
   // A Claude plan answers everything itself: no Jev, no platform-model quick replies.
   setTurnHooks({
-    route: async (input) => {
+    route: async (input, ctx) => {
       const { aiAccess } = await getAgentSettings(input.userId);
       if (aiAccess === 'none') return { kind: 'simple', reply: connectAiText() };
       if (aiAccess === 'claude_plan') return { kind: 'task' };
-      return routeTurn(input);
+      return routeTurn(input, ctx);
     },
   });
 

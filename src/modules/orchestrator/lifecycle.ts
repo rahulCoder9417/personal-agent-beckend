@@ -6,6 +6,7 @@ import { deleteUserChannelData } from '../channels/messages.ts';
 import { deleteAgentSettings } from './agent-settings.ts';
 import { deleteAllMemories } from './memory.ts';
 import { deleteSandboxRecord, ensureSandbox } from './sandbox.ts';
+import { deleteTurnTimings } from './timings.ts';
 import { deleteChatEngines } from './turn-context.ts';
 import { vm } from './vm.ts';
 
@@ -46,6 +47,7 @@ export async function handleDeleteUser(job: Job): Promise<unknown> {
   // Shared memory and the engine each conversation ran on (HLD 0.9).
   await deleteAllMemories(userId);
   await deleteChatEngines(userId);
+  await deleteTurnTimings(userId);
   await hooks.offboard(userId);
   await deleteUserLinks(userId);
   // Messages, files, conversations and each chat's counter.

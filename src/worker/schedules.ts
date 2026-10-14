@@ -3,6 +3,7 @@ import { cleanupWaitlistAttempts } from '../modules/auth/waitlist.ts';
 import { cleanupMessages } from '../modules/channels/messages.ts';
 import { cleanupEvents } from '../modules/events/cleanup.ts';
 import { queue } from '../modules/events/queues.ts';
+import { cleanupTurnTimings } from '../modules/orchestrator/timings.ts';
 import { logger } from '../shared/logger.ts';
 
 /** Repeating system jobs (idempotent: upserted by id on every worker start). */
@@ -26,13 +27,14 @@ export async function registerSystemSchedules(): Promise<void> {
   );
 }
 
-/** system/cleanup (daily): old events and messages, used link codes. */
+/** system/cleanup (daily): old events and messages, used link codes, turn timings past 30 days. */
 export async function handleCleanup(): Promise<unknown> {
   const result = {
     events: await cleanupEvents(),
     linkCodes: await cleanupLinkCodes(),
     messages: await cleanupMessages(),
     waitlistAttempts: await cleanupWaitlistAttempts(),
+    turnTimings: await cleanupTurnTimings(),
   };
   logger().info(result, 'cleanup done');
   return result;

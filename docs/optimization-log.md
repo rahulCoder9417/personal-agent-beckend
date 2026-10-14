@@ -62,6 +62,38 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 4. The log
 
+### 14 October 2026: admins can change a role, suspend an account, delete one, and sign a user out
+
+- **Where it is:** on `main` since 14 October, in the backend. It reaches the server with `deploy.sh`, which also adds the two new columns.
+- **Why:** the admin tools could hand out and take back credits, but not act on an account. Making someone an admin meant editing Clerk by hand, there was no way to stop an abusive account short of deleting it in Clerk, and no way to sign a user out.
+- **What the user notices:**
+  - Nothing, unless an admin acts on their account.
+  - A suspended user: the web app gets "account suspended" on every call (403, code `account_suspended`), so it can say so. Telegram messages are saved but not answered, with one short notice a day at most: "Your Textcrew account is suspended, so I can't answer messages right now." Automations stop. When the suspension is lifted, everything works again and the automations come back (or wait for credits, at zero). Messages sent while suspended stay unanswered.
+  - A deleted user: the same as deleting their own account.
+  - A user signed out by an admin: asked to sign in again within about a minute.
+- **Backend:**
+  - **Four admin tools,** each with a required reason and one activity-log row holding the admin's id and that reason. The user's own activity list shows a plain line ("An admin suspended this account"), never the reason.
+  - **The role** is set in Clerk first, in the user's public metadata, through Clerk's Backend API, then on our own row at once. Clerk's next "user updated" webhook carries the same role. An admin cannot remove their own admin role. A suspended account cannot be made an admin.
+  - **Suspend:** the account gets a status, owned by the sign-in part of the backend. While suspended, every signed-in call is refused, the live stream too; the container's calls to the platform's tools and the git gateway are refused; chat messages are saved, marked handled and not answered; no turn runs and the container is never woken, also for a web message, an automation's run or a crew job queued just before. Automations that are on, or paused for lack of credits, are paused with a new reason, "admin". The container is stopped politely through the vm-manager; while a turn runs the vm-manager refuses, and the idle check stops it 3 minutes after the turn. The admin's answer says whether it stopped at once.
+  - **Unsuspend:** the account works again; the automations paused by the suspension come back on, or, at zero credits, wait paused for lack of credits.
+  - **Delete:** the admin types the user's email as a check. The user is deleted in Clerk, the account is marked deleted at once, and the same deletion job as a user's own deletion runs (the container and folder through `DeleteSandbox`, keys, connections, automations, chats, messages, files, memories; the subscription set to not renew). The log row keeps only the admin's id, the user's id and the reason.
+  - **Sign out everywhere:** every active Clerk session of the user is ended.
+  - An admin cannot suspend or delete themselves, nor another admin before taking their role away. Repeating an action changes nothing and writes no second row.
+  - Decided here: one notice a day per chat rather than none, so a Telegram user is not left guessing; a suspension does not ban the user in Clerk (they can still sign in, and the web app gets the clear `account_suspended` answer instead); held messages are never answered later; a paid subscription keeps renewing during a suspension.
+- **Cost and speed:** each call from a container to the platform's tools or the git gateway, and each turn, reads the account's status once more: one small database read. Not measured.
+- **Contracts:** `openapi.yaml` changed: five new admin operations (`PUT /v1/admin/users/{userId}/role`, `POST .../suspend`, `POST .../unsuspend`, `POST .../sessions/revoke`, `DELETE /v1/admin/users/{userId}`), the error code `account_suspended`, and the automation pause reason `admin`. The web app should show a clear "account suspended" screen on that code. `vm.proto` did not change.
+- **Database:** two new columns on `users`, owned by the sign-in part: the status (active or suspended) and when the suspension started (migration 0021). No new table.
+- **How it was checked:**
+  - New tests: every tool is admin-only (403 for a normal user, 401 without a session) with the error shape; a blank reason is refused; an unknown user is 404; the role is set through the Clerk stand-in and applies at the next request, the following Clerk webhook keeps it, setting it twice writes nothing, removing your own admin role is refused and Clerk is not asked, Clerk down or not set up answers 503 and changes nothing; a suspended user is refused on the profile, the automations list, sending a web message and the live stream, the container's tool call and git call are refused, two Telegram messages are saved and not answered with exactly one notice, no wake and no delivery, a turn queued before does nothing, suspending twice writes one row; automations are paused and resumed (the user's own pause kept, the timer removed and set again), at zero credits they wait for credits, a run that fires during a suspension goes back to paused; the container stop is asked of the vm-manager fake, and a refused stop is reported; self and admins are refused; delete refuses a wrong email, yourself and an admin, deletes in Clerk, runs the deletion job through `DeleteSandbox`, keeps no email in the log row, and Clerk down changes nothing; signing out ends the sessions and is logged.
+  - Lint, the type check and the contract check pass. The 18 new tests pass, three runs in a row. The whole suite: 677 of 680 pass. The three failures are not from this change: the Hindi title test, which already failed before, and two Jev-routing tests that depend on timing; they pass when run alone (3 runs of 3), and one of them failed the same way on `main` without this change.
+  - Not run against the real Clerk, nor on the server.
+- **Still open:**
+  - The web app needs a screen for `account_suspended`, and the admin panel needs buttons for these tools.
+  - A live stream already open when an account is suspended stays open until it reconnects.
+  - Whether a suspension should also cancel a paid subscription is your decision; today it does not.
+- **Docs updated:** `backend-report.md` sections 4, 6, 13, 17, 18, 31 (new parts on the account tools), 33, 38, 40, 41 and 43.
+- **Commits:** backend `e95e033`, `d8cc52f`, `560f17b`, `a7cee95`.
+
 ### 14 October 2026: every turn says where its time went; a greeting no longer waits for each step in turn
 
 - **Where it is:** on `main` since 14 October, in the backend and the vm-manager. It reaches the server with `deploy.sh`, which also adds the new table.

@@ -225,7 +225,7 @@ This section follows one request from the web app through the api, check by chec
 The web app signs the user in with Clerk. Clerk gives the browser a session token, a signed text that proves who the user is. The web app sends it with every request.
 
 1. The api checks the token's signature with Clerk's key. A missing, old or forged token is refused.
-2. The token holds Clerk's id of the user. The api finds the matching row in `users`. A deleted account is refused.
+2. The token holds Clerk's id of the user. The api finds the matching row in `users`. A deleted account is refused. A suspended account is refused with `account_suspended` (section 31).
 3. If there is no row yet, the api reads the user from Clerk and creates the account. This covers a user who arrives before Clerk's sign-up webhook.
 
 ### The error shape
@@ -238,6 +238,7 @@ Every error looks the same: an `error` object with a `code`, a `message` and som
 | 401 | `unauthorized` | No session, or a bad one |
 | 402 | `out_of_credits` | The balance is zero |
 | 403 | `forbidden`, `plan_limit`, `channel_disabled` | Not allowed, not in the plan, or the channel is off |
+| 403 | `account_suspended` | An admin suspended the account. Every signed-in call answers this until it is lifted |
 | 404 | `not_found` | Unknown address or item |
 | 409 | `conflict` | The action does not fit the current state |
 | 429 | `rate_limited` | Too many requests. `Retry-After` says how long to wait |
@@ -305,8 +306,9 @@ This section follows a new person from sign-up to an account with credits and a 
 ### Other paths
 
 - **The web app arrives first.** If a request comes before Clerk's webhook, the api creates the account from Clerk's data. The same onboarding job is added once.
-- **Clerk reports a change.** The email, its verified state and the role are updated. An admin is a user whose role is set to admin in Clerk.
+- **Clerk reports a change.** The email, its verified state and the role are updated. An admin is a user whose role is set to admin in Clerk. The admin tool that changes a role sets it in Clerk first and on our row at once, so this webhook then agrees (section 31).
 - **Clerk reports a deletion.** The account is marked deleted and a delete job runs. It removes the container and its data, the LiteLLM key, app connections, automations, linked chats, conversations, messages, files and memories. It also stops the subscription from renewing.
+- **An admin deletes the account.** The admin tool deletes the user in Clerk, marks the account deleted and adds the same delete job. Clerk's deletion webhook then finds nothing left to do (section 31).
 
 ### What can go wrong
 
@@ -777,7 +779,7 @@ The Platform MCP is the platform's tool server. MCP is a standard way for an AI 
 2. The backend gets only a hash of the token. A hash is a one-way fingerprint: nobody can turn it back into the token.
 3. The backend saves the hash next to the user id, in the table `sandbox_tokens`.
 4. On every call, the container sends its token. The api makes its hash and looks it up.
-5. Found: the call runs as that user. Not found: the call is refused.
+5. Found: the call runs as that user. Not found: the call is refused. Found, but an admin suspended the account: the call is refused too (section 31).
 6. The user id always comes from this lookup. No tool has an input for a user id. So an agent cannot act as another user, whatever a web page tells it.
 
 ### The tools
@@ -992,7 +994,7 @@ The git gateway lets the agent use normal git on the user's GitHub repositories.
 
 1. Inside the container, git is set up to send every `github.com` address to the gateway, at `/git` on the api.
 2. Git adds the container token to each request. The agent runs a normal clone and needs no password.
-3. The api turns the container token into the user id, exactly as the tool server does. An unknown token is refused.
+3. The api turns the container token into the user id, exactly as the tool server does. An unknown token is refused, and so is the token of a suspended account.
 4. The api takes that user's GitHub access from their GitHub connection at Composio. It is never logged and never saved.
 5. The api passes the request on to GitHub and streams the answer back.
 
@@ -1119,6 +1121,7 @@ The worker's start used to drop such a run at times. On start the worker sets ev
 
 - **Zero credits.** All the user's automations are paused. When credits are added, these are switched on again by themselves.
 - **Three failures in a row.** That automation is paused. The user is told in chat and can resume it in the web app. A paused automation has no timer, and app events for it are ignored.
+- **An admin suspends the account.** Every automation that is on, or paused for lack of credits, is paused with the reason "admin". When the suspension is lifted they come back, or wait for credits if the balance is zero. A run that fires during a suspension does nothing and is paused the same way (section 31).
 - **After a restart.** The timers live in the job queue, which can lose its data. So every time the worker starts, it sets the timer of every enabled automation again. A timer that is still there is left as it is, so a run that came due while the worker was stopped is not lost. It runs late and says so (above).
 - **The job queue lost its jobs.** A run whose job was lost is put back from the saved event. It still knows its automation and when it was due.
 
@@ -1996,7 +1999,7 @@ Example: a user has a connected Claude plan and a saved OpenAI key. With Claude 
 
 ## 31. Admin tools
 
-Admin tools are for the founder and trusted staff. They hand out free credits, correct balances and show what failed.
+Admin tools are for the founder and trusted staff. They hand out free credits, correct balances, show what failed, and act on accounts: the role, a suspension, a deletion, signing a user out.
 
 Only a user with the role admin may use them. The role is set in Clerk, the sign-in service, in the user's public metadata. The backend copies it when Clerk sends the user's data. Anyone else gets "Admins only".
 
@@ -2008,6 +2011,10 @@ Only a user with the role admin may use them. The role is set in Clerk, the sign
 | Adjust credits | Adds or removes credits for one user | `/v1/admin/users/{id}/credits` |
 | Free-credit numbers | Shows this month's free credits, the cap and abuse flags | `/v1/admin/stats/free-credits` |
 | Failed jobs board | Shows the four job queues and their failed jobs | `/admin/queues` |
+| Change the role | Makes a user an admin, or takes the role away | `/v1/admin/users/{id}/role` |
+| Suspend, unsuspend | Puts an account on hold, or lifts the hold | `/v1/admin/users/{id}/suspend`, `/unsuspend` |
+| Delete an account | Deletes the account, as the user's own deletion does | `/v1/admin/users/{id}` |
+| Sign out everywhere | Ends every sign-in session of the user | `/v1/admin/users/{id}/sessions/revoke` |
 
 ### Credit adjustments
 
@@ -2023,6 +2030,56 @@ Only a user with the role admin may use them. The role is set in Clerk, the sign
 - **Free-credit numbers.** One call shows the current month's numbers: sign-up credits granted and coupon credits granted. It also shows the cap, if one is set, and whether it is reached.
 - **Abuse flags** come with the same call. A flag is one IP address from which 3 or more accounts redeemed coupons that month. Up to 50 addresses are listed.
 - **Failed jobs.** A job that fails is retried, 5 tries in all, with waits of 5 seconds, 30 seconds, 2 minutes and 10 minutes. After the last try it is marked failed and an alert is logged. If `ALERT_WEBHOOK_URL` is set, the alert is also sent there. The board at `/admin/queues` shows the failed jobs. It opens in a browser for a signed-in admin.
+
+### The account tools: the rules they share
+
+- **A reason is required.** Each call carries a short reason. A blank one is refused.
+- **Each is in the activity log.** One row for the user, with the admin's id and the reason. The user's own activity list shows only a plain line, such as "An admin suspended this account". The reason stays out of it.
+- **Not on yourself, not on an admin.** An admin cannot remove their own admin role, suspend themselves or delete themselves. Another admin can be suspended or deleted only after their admin role is taken away. These answer "conflict" and change nothing.
+- **Twice is safe.** Setting the role a user already has, suspending a suspended account, or lifting a suspension that is not there changes nothing and writes no second row.
+
+### Changing the role
+
+1. The admin sends the new role (user or admin) and a reason.
+2. The backend sets the role in Clerk first, in the user's public metadata, through Clerk's Backend API. If Clerk cannot be reached, or `CLERK_SECRET_KEY` is not set, the answer is "unavailable" and nothing changes.
+3. Then it sets the role on our own row at once. The user's next request already has it.
+4. Clerk then sends its usual "user updated" webhook. It carries the same role, so the two agree.
+
+A suspended account cannot be made an admin: the suspension must be lifted first.
+
+Example: Asha joins the support team. The founder makes her an admin with the reason "joins support". Her next page load shows the admin screens.
+
+### Suspending an account
+
+A suspension puts an account on hold until an admin lifts it. Nothing is deleted.
+
+| What | While suspended |
+|---|---|
+| The web app | Every signed-in call answers 403 with the code `account_suspended`, the live stream too. The web app can say so plainly |
+| Telegram and the other chat apps | Messages are saved but not answered. The chat gets one short notice at most once a day: "Your Textcrew account is suspended, so I can't answer messages right now." Files are not downloaded and voice notes are not transcribed. Link codes, `/new`, coupon codes and approval buttons do nothing |
+| Web messages sent just before | Saved, never answered. The turn sees the suspension and stops |
+| Automations | Those that are on, or paused because credits ran out, are paused with the reason "admin". Ones the user paused, or that were paused after failures, stay as they are |
+| The container | Stopped politely through the vm-manager. If a turn is running, the vm-manager refuses; the turn finishes, its tool calls are refused, and the idle check stops the container 3 minutes later. It is never woken while the account is suspended |
+| The container's own calls | The platform's tools and the git gateway refuse them |
+| Crew jobs | One that was waiting fails with "The account was suspended when the job was due to start" |
+| Credits and the plan | Unchanged. A paid subscription keeps renewing; cancel it apart if needed |
+
+**Lifting it.** The account works again at once. The automations the suspension paused come back: switched on if the user has credits, or else paused for lack of credits, so they come back with the next credits like any other. The container wakes with the user's next message. Messages held during the suspension stay unanswered. The agent may see them in the chat's history, marked as earlier messages and not as requests.
+
+Example: three people report spam from Ravi's agent. The founder suspends his account with the reason "spam reports". Ravi's Telegram messages get one notice that day and no answers. His daily summary does not run. A week later the founder lifts it. His summary runs again the next morning.
+
+### Deleting an account
+
+1. The admin sends a reason and the user's email, typed out as a check. If the email does not match, nothing happens. Letter case and spaces around it don't matter.
+2. The backend deletes the user in Clerk, through its Backend API. If Clerk cannot be reached, nothing changes. If Clerk no longer has the user, the backend goes on.
+3. It marks the account deleted at once, so every sign-in is refused, and adds the same delete job a user's own deletion adds (section 6): the container and the user's folder through the vm-manager's `DeleteSandbox`, the LiteLLM key, app connections, automations, linked chats, conversations, messages, files and memories. A renewing subscription is set to not renew.
+4. Clerk's "user deleted" webhook arrives later, finds the account deleted already, and adds nothing.
+
+The activity-log row keeps the admin's id, the deleted user's id and the reason. Never the email or the name. A second delete of the same account answers "not found".
+
+### Signing a user out everywhere
+
+The backend asks Clerk to end every active session of the user. The answer says how many were ended. A session token the browser already holds still works until it expires, about one minute, because the api checks tokens without asking Clerk each time. After that the user must sign in again. This does not suspend the account.
 
 ---
 
@@ -2082,7 +2139,7 @@ Each user has one container, named `pa-sbx-` plus the user id. Each user also ha
 
 ### Waking, in steps
 
-1. The backend checks that the user has credits. At zero credits nothing is woken, and the user is told.
+1. The backend checks that the user has credits. At zero credits nothing is woken, and the user is told. A suspended account's container is never woken, and nothing is said in the turn (section 31).
 2. The backend sends `WakeSandbox` with the user's plan priority. The vm-manager locks this user, so two operations never overlap.
 3. If the container is already running, the vm-manager answers at once.
 4. It checks the limit on awake containers and reserves a place. The state is "waking".
@@ -2111,6 +2168,7 @@ The answer itself is not in this stream. The Bridge sends it through the platfor
 |---|---|---|
 | The idle check, every minute | Awake, quiet for 3 minutes, no turn, no delivery in flight | Politely |
 | The backend, after a crew job | The job's turn has ended | Politely. Refused while a turn runs, a delivery is in flight or a Claude sign-in waits; the idle check then does it later |
+| The backend, when an admin suspends the account | At once | Politely, refused in the same cases. The idle check then does it, and nothing wakes it again until the suspension is lifted |
 | The limit on awake containers | Another user needs the place | Politely |
 | The stuck-turn timer | A turn runs longer than 15 minutes | By force |
 | The health check | The container does not answer, even after restarts | By force, then "broken" |
@@ -2438,6 +2496,8 @@ These are the rules that must never be broken. Each one closes a way in that wou
 | Approvals before risky actions | Sending to others, deleting and paying need the user's yes. One approval fits one exact action, once |
 | Every user query is filtered by user id | One user can never read another user's rows |
 | Every action is in the activity log | The user can see what the agent did, and when |
+| Every admin action on an account needs a reason and is logged | The admin's id and the reason are kept. An admin cannot demote, suspend or delete their own account, and must take another admin's role away before suspending or deleting them |
+| A suspended account can do nothing | Its signed-in calls, its container's tool and git calls and its turns are all refused, and its container is not woken |
 | Containers are locked down | gVisor, hard limits, read-only system files, no privileges, no internet of their own |
 | No secrets in logs | A secret written to a log would sit there in plain text |
 
@@ -2473,7 +2533,7 @@ This section lists every table of the backend's database, grouped by the module 
 
 | Module | Table | What it holds |
 |---|---|---|
-| auth | `users` | One row per person: email, name, time zone and whether anyone set it, plan, role |
+| auth | `users` | One row per person: email, name, time zone and whether anyone set it, plan, role, and whether an admin suspended the account (and since when) |
 | auth | `link_codes` | One-time codes to link a chat app, stored as hashes, with an expiry |
 | auth | `channel_links` | Which chat belongs to which user |
 | auth | `waitlist_entries` | People waiting for access, with request details for abuse checks |
@@ -2534,9 +2594,9 @@ This section says what the web app can do through the api, group by group. Almos
 | Coupons | Redeem a coupon code |
 | Activity | Read the log of what the agent did |
 | Waitlist | Join the waitlist. The answer is always the same, so nobody can test an email |
-| Admin | Manage coupons, adjust a user's credits, see free-credit totals, and handle the waitlist |
+| Admin | Manage coupons, adjust a user's credits, see free-credit totals, and handle the waitlist. Change a user's role, suspend an account or lift the suspension, delete an account, and sign a user out everywhere. Each account action needs a reason |
 
-The live stream pushes new messages, message status, conversation changes, approvals, the agent's state, progress lines and credit changes. Long lists come in pages of 30 by default, and 100 at most. Every error has the same shape: a code, a message, and sometimes details. Some addresses are not for the web app. Webhooks are for outside services. `/oauth/callback` is the way back from an app's sign-in, for a provider to send the browser to. `/mcp` and `/git` are for containers only. `/metrics` is for monitoring. Admins also have a page that shows the job queues.
+The live stream pushes new messages, message status, conversation changes, approvals, the agent's state, progress lines and credit changes. Long lists come in pages of 30 by default, and 100 at most. Every error has the same shape: a code, a message, and sometimes details. While an admin has suspended an account, every signed-in call of that user answers 403 with the code `account_suspended`. Some addresses are not for the web app. Webhooks are for outside services. `/oauth/callback` is the way back from an app's sign-in, for a provider to send the browser to. `/mcp` and `/git` are for containers only. `/metrics` is for monitoring. Admins also have a page that shows the job queues.
 
 Example: linking Telegram takes three steps. The app asks for a link code and shows it. The user sends the code to the bot. The app reads the channel list again and shows the new chat.
 
@@ -2676,6 +2736,10 @@ These were found by reading the code while this report was written. Each is desc
 - Backups stay on the same disk as the data until an outside store is set.
 - With no alert channel set, failures are only in the logs.
 - A saved memory cannot be checked against what the user really said. A planted "fact" stays until the user sees and deletes it.
+- **The account tools have not run against the real Clerk.** Setting the role, deleting a user in Clerk and ending sessions were checked with a stand-in for Clerk only (section 31).
+- **A live stream that is open when an account is suspended stays open.** New calls are refused, but the web app's open stream keeps receiving that user's own updates until it reconnects.
+- **Signing a user out takes up to a minute.** A session token the browser already holds is checked without asking Clerk, so it works until it expires.
+- **A suspension does not stop a turn that is running.** The turn finishes; its calls to the platform's tools are refused, so it can do little. The container stops at the idle check after it.
 - Any LiteLLM key can list the names of the models in LiteLLM and the provider model each one calls. With own keys, that shows that some user uses a given model, under a name that does not say who. The keys themselves are never shown.
 
 ## 44. What has run for real

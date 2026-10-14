@@ -1,6 +1,7 @@
 FROM node:22-slim
-# pg_dump for the nightly backup job. It must be at least as new as the server (postgres:16 in
-# compose), so it comes from the PostgreSQL apt repo, not the distro's older client.
+# pg_dump for the nightly backup job. It must be at least as new as the server: Neon runs
+# Postgres 18 (the laptop's postgres:16 is older, which is fine), so it comes from the
+# PostgreSQL apt repo, not the distro's older client.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl \
  && install -d /usr/share/postgresql-common/pgdg \
@@ -10,7 +11,7 @@ RUN apt-get update \
  && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
       > /etc/apt/sources.list.d/pgdg.list \
  && apt-get update \
- && apt-get install -y --no-install-recommends postgresql-client-16 \
+ && apt-get install -y --no-install-recommends postgresql-client-18 \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 RUN corepack enable

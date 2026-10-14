@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { runBackup, setCommandRunner } from '../src/modules/admin/backup.ts';
+import { pgDumpConnection, runBackup, setCommandRunner } from '../src/modules/admin/backup.ts';
 import { handleHealthCheck } from '../src/modules/admin/health.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
 import { setVmClient, type VmClient } from '../src/modules/orchestrator/vm.ts';
@@ -53,6 +53,38 @@ describe('backups', () => {
       delete process.env.BACKUP_UPLOAD_CMD;
       resetConfig();
     }
+  });
+
+  it('pg_dump reaches Neon with its TLS settings, the password only in the environment', () => {
+    const { dbname, env } = pgDumpConnection(
+      'postgresql://owner:p%40ss@ep-x-1.us-east-2.aws.neon.tech/agent?sslmode=verify-full&channel_binding=require',
+    );
+    expect(dbname).toBe('agent');
+    expect(env).toEqual({
+      PGHOST: 'ep-x-1.us-east-2.aws.neon.tech',
+      PGPORT: '5432',
+      PGUSER: 'owner',
+      PGPASSWORD: 'p@ss',
+      PGSSLMODE: 'verify-full',
+      PGCHANNELBINDING: 'require',
+      // libpq needs a root certificate for verify-full: the system's.
+      PGSSLROOTCERT: 'system',
+    });
+    // A named root certificate is kept; `require` needs none.
+    expect(
+      pgDumpConnection('postgresql://a:b@h/x?sslmode=verify-ca&sslrootcert=/ca.pem').env
+        .PGSSLROOTCERT,
+    ).toBe('/ca.pem');
+    expect(pgDumpConnection('postgresql://a:b@h:6543/x?sslmode=require').env).toMatchObject({
+      PGPORT: '6543',
+      PGSSLMODE: 'require',
+    });
+    expect(pgDumpConnection('postgresql://a:b@h/x?sslmode=require').env.PGSSLROOTCERT).toBe(
+      undefined,
+    );
+    // The laptop's local database: no TLS settings at all.
+    const local = pgDumpConnection('postgresql://agent:agent@localhost:5432/agent').env;
+    expect(Object.keys(local).sort()).toEqual(['PGHOST', 'PGPASSWORD', 'PGPORT', 'PGUSER']);
   });
 });
 

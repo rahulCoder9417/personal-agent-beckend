@@ -32,6 +32,37 @@ export function setCommandRunner(r: CommandRunner | undefined): void {
   runner = r ?? realRunner;
 }
 
+/**
+ * How pg_dump reaches the database in DATABASE_URL: the database name for `--dbname` and the rest
+ * as libpq environment variables, so the password is never in the arguments. The URL's TLS
+ * settings are kept: Neon refuses a connection without TLS (`sslmode=require`) and asks for
+ * channel binding. `verify-full` needs a root certificate; when the URL names none, libpq is told
+ * to use the system's.
+ */
+export function pgDumpConnection(databaseUrl: string): {
+  dbname: string;
+  env: Record<string, string>;
+} {
+  const url = new URL(databaseUrl);
+  const env: Record<string, string> = {
+    PGHOST: url.hostname,
+    PGPORT: url.port || '5432',
+    PGUSER: decodeURIComponent(url.username),
+    PGPASSWORD: decodeURIComponent(url.password),
+  };
+  const params: Array<[param: string, name: string]> = [
+    ['sslmode', 'PGSSLMODE'],
+    ['channel_binding', 'PGCHANNELBINDING'],
+    ['sslrootcert', 'PGSSLROOTCERT'],
+  ];
+  for (const [param, name] of params) {
+    const value = url.searchParams.get(param);
+    if (value) env[name] = value;
+  }
+  if (env.PGSSLMODE?.startsWith('verify-') && !env.PGSSLROOTCERT) env.PGSSLROOTCERT = 'system';
+  return { dbname: decodeURIComponent(url.pathname.slice(1)), env };
+}
+
 const day = (d: Date) => d.toISOString().slice(0, 10);
 
 /**
@@ -47,22 +78,11 @@ export async function runBackup(
   await mkdir(dir, { recursive: true });
 
   // 1. Postgres (custom format, restorable with pg_restore). The URL goes via env, never args/logs.
-  const url = new URL(c.DATABASE_URL);
+  const { dbname, env } = pgDumpConnection(c.DATABASE_URL);
   await runner(
     'pg_dump',
-    [
-      '--format=custom',
-      '--no-owner',
-      `--file=${join(dir, 'postgres.dump')}`,
-      '--dbname',
-      url.pathname.slice(1),
-    ],
-    {
-      PGHOST: url.hostname,
-      PGPORT: url.port || '5432',
-      PGUSER: decodeURIComponent(url.username),
-      PGPASSWORD: decodeURIComponent(url.password),
-    },
+    ['--format=custom', '--no-owner', `--file=${join(dir, 'postgres.dump')}`, '--dbname', dbname],
+    env,
   );
 
   // 2. Every user's /data volume, via the vm-manager (it alone touches Docker).

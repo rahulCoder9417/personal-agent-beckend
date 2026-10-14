@@ -12,7 +12,15 @@ let instance: Db | undefined;
 
 export function db(): Db {
   if (!instance) {
-    pool = new pg.Pool({ connectionString: config().DATABASE_URL, max: 20 });
+    // The database is on Neon, in Ohio: a new connection costs about 1.5 to 2.5 seconds from
+    // Mumbai (TLS and sign-in, several round trips of ~260 ms). Idle connections are kept for
+    // 5 minutes instead of pg's 10 seconds, so a reply rarely waits for one.
+    pool = new pg.Pool({
+      connectionString: config().DATABASE_URL,
+      max: 20,
+      idleTimeoutMillis: 5 * 60_000,
+      keepAlive: true,
+    });
     instance = drizzle(pool, { schema, casing: 'snake_case' });
   }
   return instance;

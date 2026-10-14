@@ -49,7 +49,7 @@ Node 22 · TypeScript (strict) · Hono (api) · BullMQ + Redis (jobs) · Postgre
 Fill these in during Phase 0 and keep them current:
 
 - Install: `pnpm install`
-- Dev (infra + api + worker): `docker compose -f infra/docker-compose.yml up -d && pnpm dev`
+- Dev (infra + api + worker): `docker compose -f infra/docker-compose.yml --profile localdb up -d && pnpm dev` (`localdb` starts the local Postgres; the server uses Neon instead)
 - Lint / types / tests: `pnpm lint && pnpm typecheck && pnpm test`
 - OpenAPI lint: `pnpm openapi:lint` · Regenerate API types: `pnpm openapi:gen`
 - Regenerate gRPC client: `pnpm proto:gen`

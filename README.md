@@ -12,7 +12,7 @@ Design: `docs/hld-mvp.md` (the product, the parts, the main flows, the decisions
 ```bash
 pnpm install
 cp .env.example .env            # fill in ENCRYPTION_KEY at least
-docker compose -f infra/docker-compose.yml up -d
+docker compose -f infra/docker-compose.yml --profile localdb up -d   # localdb: the laptop's own Postgres
 pnpm db:migrate
 pnpm dev                        # api on :8080 + worker
 ```

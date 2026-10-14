@@ -6,11 +6,15 @@
 #   vm-manager/   git clone of personal-agent-vm-manager
 #   user-frontend-web/   optional: git clone of personal-agent-web-frontend (the `web` service);
 #                        needs web.env, clerk_secret and WEB_DOMAIN (the web app's README, "Running on the server")
-#   compose.env   compose variables (Postgres password, LiteLLM master key, VM_INTERNAL_SECRET, domain…)
+#   compose.env   compose variables (the three database URLs on Neon, LiteLLM master key,
+#                 VM_INTERNAL_SECRET, domain…)
 #   backups/      BACKUP_HOST_DIR
 #
-# Steps: pull the repos (hard reset to origin/main) → build images (cached layers are reused) →
-# migrations → up → recreate services whose bind-mounted config changed → health check.
+# Steps: pull the repos (hard reset to origin/main) → check the database URLs are set → build images
+# (cached layers are reused) → migrations → up → recreate services whose bind-mounted config
+# changed → health check.
+# The databases are on Neon since 14 Oct 2026: the server's own `postgres` service is not started
+# (it is behind the `localdb` profile). move-to-neon.sh did the one-off copy.
 # The whole body is in main() so bash has parsed it before `git reset` rewrites this file; after
 # the pull the script re-runs itself from the new copy with --no-pull.
 set -euo pipefail
@@ -51,14 +55,26 @@ main() {
     RECREATE="$changed" exec "$be/infra/deploy/deploy.sh" --no-pull
   fi
 
+  # Without these the services would look for the local `postgres`, which no longer runs here.
+  local var missing=()
+  for var in BACKEND_DATABASE_URL VM_MANAGER_DATABASE_URL LITELLM_DATABASE_URL; do
+    grep -q "^$var=." "$root/compose.env" || missing+=("$var")
+  done
+  if [ ${#missing[@]} -gt 0 ]; then
+    echo "DEPLOY STOPPED: compose.env has no ${missing[*]}." >&2
+    echo "The databases live on Neon now: add the URLs, then run infra/deploy/move-to-neon.sh" >&2
+    echo "once (it copies the data and deploys)." >&2
+    exit 1
+  fi
+
   echo "== build"
   compose build --quiet
   # User containers are re-created from a new agent image on their next wake (vm-manager rollout).
   AGENT_IMAGE_VERSION=$("${docker[@]}" image inspect personal-agent/agent:dev --format '{{.Id}}')
   export AGENT_IMAGE_VERSION
 
-  echo "== migrations"
-  compose up -d --wait postgres redis
+  echo "== migrations (on Neon)"
+  compose up -d --wait redis
   compose run --rm --no-deps api pnpm --silent db:migrate
 
   echo "== up"

@@ -1,12 +1,17 @@
 # Local development stack (HLD sections 3 and 4).
-#   docker compose -f infra/docker-compose.yml up -d            infra only; run api + worker on the host (pnpm dev)
-#   docker compose -f infra/docker-compose.yml --profile app up -d   also runs api + worker in containers
+#   docker compose -f infra/docker-compose.yml --profile localdb up -d   infra only; run api + worker on the host (pnpm dev)
+#   docker compose -f infra/docker-compose.yml --profile localdb --profile app up -d   also runs api + worker in containers
 #   (the vm-manager and the agent image are built from ../vm-manager)
 #   docker compose -f infra/docker-compose.yml --profile egress-test run --rm egress-test
 #
+# Databases: three, one each for the backend, the vm-manager and LiteLLM. Their addresses come from
+# BACKEND_DATABASE_URL, VM_MANAGER_DATABASE_URL and LITELLM_DATABASE_URL. Not set, they point at
+# the `postgres` service below, which starts only with `--profile localdb` (the laptop). The test
+# server sets all three to Neon (managed Postgres) in compose.env and never starts `postgres`.
+#
 # Networks:
 #   edge     Caddy + api. Only Caddy publishes ports (80/443).
-#   platform api, worker, vm-manager, postgres, redis, litellm, egress-proxy. No published ports except
+#   platform api, worker, vm-manager, postgres (laptop only), redis, litellm, egress-proxy. No published ports except
 #            127.0.0.1 bindings for local dev. Outbound internet is allowed (the worker calls Telegram,
 #            Composio, …; LiteLLM calls the model providers). Nothing on it is reachable from outside.
 #   sandbox  user containers + egress-proxy + vm-manager. `internal: true`: no route to the internet,
@@ -60,9 +65,11 @@ services:
       <<: *hc
       test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:2019/config/']
 
+  # Laptop only (`--profile localdb`). The server's databases are on Neon (see the top).
   postgres:
     image: postgres:16
     restart: unless-stopped
+    profiles: [localdb]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-agent}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agent}
@@ -92,7 +99,9 @@ services:
     restart: unless-stopped
     command: ['--config', '/app/config.yaml', '--port', '4000']
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/litellm
+      # On Neon: the direct host (no `-pooler`). LiteLLM's Prisma sets up its tables at start and
+      # that does not work through the pooler.
+      DATABASE_URL: ${LITELLM_DATABASE_URL:-postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/litellm}
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-dev-master-key}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -103,8 +112,9 @@ services:
       STORE_MODEL_IN_DB: 'True'
     ports: ['127.0.0.1:4000:4000']
     volumes: ['./litellm/config.yaml:/app/config.yaml:ro']
+    # `required: false`: wait for the local database only when it runs (`--profile localdb`).
     depends_on:
-      postgres: { condition: service_healthy }
+      postgres: { condition: service_healthy, required: false }
     networks: [platform]
     healthcheck:
       <<: *hc
@@ -152,7 +162,9 @@ services:
   vm-manager:
     build: ../../vm-manager
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/vm_manager
+      # On Neon: the direct host. Its migrations hold a lock for the whole session, which the
+      # pooler does not keep.
+      DATABASE_URL: ${VM_MANAGER_DATABASE_URL:-postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/vm_manager}
       VM_INTERNAL_SECRET: ${VM_INTERNAL_SECRET:-dev-internal-secret-change-me-0123456789}
       SANDBOX_NETWORK: personal-agent_sandbox
       EGRESS_PROXY_URL: http://172.30.0.2:3128
@@ -174,7 +186,7 @@ services:
       - ${BACKUP_HOST_DIR:-./.backups}:/backups
     ports: ['127.0.0.1:9090:9090']
     depends_on:
-      postgres: { condition: service_healthy }
+      postgres: { condition: service_healthy, required: false }
       agent-image: { condition: service_completed_successfully }
     networks: [platform, sandbox]
     restart: always
@@ -193,13 +205,13 @@ services:
     command: ['node', '--import', 'tsx', 'src/api/main.ts']
     env_file: [../.env]
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/agent
+      DATABASE_URL: ${BACKEND_DATABASE_URL:-postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/agent}
       REDIS_URL: redis://redis:6379
       VM_MANAGER_URL: http://vm-manager:9090
       LITELLM_URL: http://litellm:4000
       GIT_COMMIT: ${GIT_COMMIT:-}
     depends_on:
-      postgres: { condition: service_healthy }
+      postgres: { condition: service_healthy, required: false }
       redis: { condition: service_healthy }
     networks: [edge, platform]
     profiles: [app]
@@ -212,13 +224,13 @@ services:
     volumes:
       - ${BACKUP_HOST_DIR:-./.backups}:/var/backups/personal-agent
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/agent
+      DATABASE_URL: ${BACKEND_DATABASE_URL:-postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/agent}
       REDIS_URL: redis://redis:6379
       VM_MANAGER_URL: http://vm-manager:9090
       LITELLM_URL: http://litellm:4000
       GIT_COMMIT: ${GIT_COMMIT:-}
     depends_on:
-      postgres: { condition: service_healthy }
+      postgres: { condition: service_healthy, required: false }
       redis: { condition: service_healthy }
     networks: [platform]
     profiles: [app]

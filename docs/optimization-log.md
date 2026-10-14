@@ -91,6 +91,35 @@ Each entry has a heading with the date and the name of the feature, then the par
 - **Docs updated:** `backend-report.md` sections 7, 14, 18, 31 (a new part, "One user's apps, chats and automations"), 40 and 41.
 - **Commits:** backend `ee28db1`, `bfac455`, `daf9666`, `5eb0805`, `c65fb44`.
 
+### 14 October 2026: support can see and put right one user's agent
+
+- **Where it is:** on `main` since 14 October, in the backend. It reaches the server with `deploy.sh`.
+- **Why:** when a user writes in, support had no way to see their agent: whether the container is awake or stuck, which engine and model run, what pays for the AI, what waits for a yes. Nor to put it right without touching the database.
+- **What the user notices:**
+  - Nothing, until support acts. Then a short line in their activity log, such as "Textcrew support stopped the agent's container". Never the admin's reason.
+  - A crew job support cancels is shown as failed with "Cancelled by Textcrew support.", and the job's chat says it won't run.
+  - After a stop by force in the middle of a turn, that turn's answer is "Sorry, something went wrong on our side", and its credits come back.
+- **Backend:** eight new admin calls, for admins only:
+  - **The view** of one user's agent: the container as the vm-manager reports it (state, busy, last active, image, memory, the engine and browser switch on record, Claude signed in or not), the engine chosen and the one that runs, Claude plan connected and since when, the model and effort, the browser, what pays for the AI, and the usage charged since midnight UTC. If the vm-manager can't be asked, the rest still shows.
+  - **Stop the container**, politely (refused while it is in use) or by force, which is marked dangerous in the contract and the report. **Wake it**, the same wake a turn makes; the user must have credits, since the awake time is theirs to pay.
+  - **Reset settings**: the engine back to Hermes, the Claude model and the effort back to Default, the browser switch set again from the plan. The user's own settings functions make the change.
+  - **Approvals**: the list without the actions' inputs, and cancelling a waiting one the way the 24-hour expiry does.
+  - **Crew jobs**: the list without the brief's text (the report only when asked for), and cancelling one that hasn't started. A running job can't be stopped on its own, so that is refused.
+  - Every change needs a reason and is written to the audit log with the admin's id and the reason. No answer holds a container token, a Bridge secret, a LiteLLM key or an API key.
+- **Cost and speed:** none for users who are left alone. A wake by support costs the user its awake time, 1 credit per 10 minutes, about a third of a credit before the idle stop.
+- **Contracts:** `openapi.yaml` changed: the eight calls above and four new shapes for them, all under the `admin` tag. Nothing changed for the web app's existing calls. `vm.proto` did not change: only calls it already has are used (`GetSandbox`, `StopSandbox`, `WakeSandbox`, `SetAgentRuntime`, `SetBrowser`).
+- **Database:** none.
+- **How it was checked:**
+  - New backend tests (20): every call answers 401 without a session, 403 to a user who isn't an admin and 404 for an unknown user, and needs a real reason; the view's fields, with no container id, allowlist, token or LiteLLM key in it, and with the vm-manager down or no container; the fake vm-manager receives the polite stop, the forced stop and the wake with the plan's priority, and the engine is set again after the wake; a refused stop is 409 and audits nothing; a user without credits is not woken; the reset changes the settings and tells the fake vm-manager, and a browser switch that can't be sent answers 503 with the rest kept; approvals are listed without their inputs, and a cancelled one can't be answered or cancelled twice; crew jobs are listed without the brief or the report, a cancelled one never runs and its user is told, and running, finished and unknown jobs are refused. Two deliberate mistakes in the code (an approval's inputs in the answer; cancelling a running job) made three of these tests fail.
+  - Lint, the type check and the spec check pass. 681 of 682 backend tests pass; the one failure is the Hindi title test, which already failed before.
+  - Not run against a real vm-manager: the tests use the fake one. Not on the server.
+- **Still open:**
+  - The vm-manager does not say when a container woke, so the view has no "awake since". A new field on `Sandbox` would give it, if you want it.
+  - A running crew job can't be stopped on its own. That needs a new call to the vm-manager and the Bridge; today a stop by force ends it, as a failure on our side.
+  - No admin screen uses these calls yet.
+- **Docs updated:** `backend-report.md` sections 31 (a new part, "One user's agent and container"), 33 and 41.
+- **Commits:** backend `f43668f`, `81e5a1b`.
+
 ### 14 October 2026: every turn says where its time went; a greeting no longer waits for each step in turn
 
 - **Where it is:** on `main` since 14 October, in the backend and the vm-manager. It reaches the server with `deploy.sh`, which also adds the new table.

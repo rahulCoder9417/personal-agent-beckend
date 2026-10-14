@@ -2001,7 +2001,7 @@ Example: a user has a connected Claude plan and a saved OpenAI key. With Claude 
 
 ## 31. Admin tools
 
-Admin tools are for the founder and trusted staff. They hand out free credits, correct balances and show what failed.
+Admin tools are for the founder and trusted staff. They hand out free credits, correct balances and show what failed. They also let support look at one user's agent and container and put it right.
 
 Only a user with the role admin may use them. The role is set in Clerk, the sign-in service, in the user's public metadata. The backend copies it when Clerk sends the user's data. Anyone else gets "Admins only".
 
@@ -2017,6 +2017,11 @@ Only a user with the role admin may use them. The role is set in Clerk, the sign
 | One user's automations | Lists every automation; pauses, resumes or deletes any one | `/v1/admin/users/{id}/automations`, `/v1/admin/automations/{id}` |
 | Apps in numbers | For each app: how many users connected it, its connections by state, and whether it can be connected here | `/v1/admin/apps/summary` |
 | Failed jobs board | Shows the four job queues and their failed jobs | `/admin/queues` |
+| One user's agent | Shows the container, the engine, the AI and today's usage | `/v1/admin/users/{id}/agent` |
+| Stop or wake a container | Stops a user's container (politely, or by force) or wakes it | `/v1/admin/users/{id}/container/stop` and `/wake` |
+| Reset agent settings | Puts the engine, the Claude model, the effort or the browser switch back to the default | `/v1/admin/users/{id}/agent/reset` |
+| A user's approvals | Lists them; cancels a waiting one | `/v1/admin/users/{id}/approvals`, `/v1/admin/approvals/{id}/cancel` |
+| A user's crew jobs | Lists them; cancels one that has not started | `/v1/admin/users/{id}/crew-jobs`, `/v1/admin/crew-jobs/{id}/cancel` |
 
 ### Credit adjustments
 
@@ -2063,6 +2068,57 @@ The rules for all of them:
 **Apps in numbers.** For each app in the catalog: where its setup comes from, whether it can be connected here, how many users have a connection of it in any state, and its connections by state: active, pending, expired and failed. Numbers only, no user.
 
 Example: Rahul writes that his Gmail shows "connecting" for an hour. The admin opens his apps, sees Gmail pending and last checked an hour ago, and presses recheck with the reason "ticket 41". Composio says it is active, so Gmail becomes active and the agent can use it. Rahul's activity log shows "Textcrew support checked the Gmail connection: active".
+
+### One user's agent and container
+
+These tools look at one user's agent and change a few things about it. They work only through the vm-manager's existing calls (section 32) and the backend's own functions, the same ones a turn or the user's own settings use. They never talk to Docker or to a container.
+
+**The rules for all of them**
+
+- Every change needs a reason. It goes to the audit log with the admin's id and the reason.
+- The user's activity log shows a short line, such as "Textcrew support stopped the agent's container". It never shows the reason.
+- A change that is refused writes nothing.
+- No answer ever holds a container token, a Bridge secret, a LiteLLM key or an API key. For own keys, only the names of the providers are shown.
+- An approval is shown without its inputs: only the action's name, its app and the short summary the user was shown. A crew job is shown without the brief's text, and without its report unless the admin asks for it (`?withReport=1`).
+
+**The view** shows, for one user:
+
+| What | Where it comes from |
+|---|---|
+| The container's state (none, stopped, waking, awake, busy, broken), busy or not, last active, the image, the memory in use | The vm-manager's `GetSandbox` |
+| The engine and the browser switch the vm-manager has on record, and whether Claude Code has its sign-in | The same |
+| The engine chosen and the one that really runs (section 30) | The backend |
+| Claude plan connected, and since when. Never the sign-in | The backend |
+| Claude Code's model and effort ("Default" shows as empty) | The backend |
+| Scout's browser: on this server, wanted by the plan, on record | The backend and the vm-manager |
+| What pays for the AI, the user's choice, the server's `AI_ACCESS_MODE`, and which providers have a key | The backend |
+| Awake seconds, browser seconds and credits charged since midnight UTC | The 5-minute usage syncs (the last few minutes may be missing) |
+
+The vm-manager does not report when a container woke, so there is no "awake since". If the vm-manager cannot be asked, the rest is still shown, and the container is marked "unknown".
+
+**Stopping a container**
+
+- By default the stop is polite, like the idle stop: Hermes saves to the user's folder first. The vm-manager refuses it while a turn runs, a message is being delivered or a Claude sign-in waits for its code. The admin gets "in use" and can try again later.
+- **A stop by force is dangerous.** It ends the container at once, even in the middle of a turn, and Hermes does not save first. That turn fails as our fault: the user gets "Sorry, something went wrong on our side" and the turn's credits back. A crew job in that turn fails. Use it only for a turn that is stuck. The vm-manager's own 15-minute timer does the same to a stuck turn.
+
+**Waking a container** is the same wake a turn makes. The container is made first if the user has none. Afterwards the engine and the browser switch are set again if they differ. The awake time is charged to the user, 1 credit per 10 minutes. So the user must have credits, and a container woken and left alone costs about a third of a credit before the idle stop. When the server is at its awake limit with nothing to stop, the admin is told to try again shortly.
+
+**Resetting settings.** The admin picks any of four:
+
+| Setting | Goes back to |
+|---|---|
+| The engine | Hermes. A connected Claude plan stays connected, and the user can choose Claude Code again |
+| Claude Code's model | Default: Claude Code's own choice |
+| The thinking effort | Default: Claude Code's own choice |
+| Scout's browser switch | What the user's plan and the server say, as after a change of plan |
+
+The same functions as the user's own settings make the change, so the vm-manager is told in the same way. If the browser switch cannot be sent, the other settings are still reset, and the admin is told to try again.
+
+**Cancelling an approval.** Only a waiting one. It ends the way the 24-hour expiry ends one (section 15): it becomes "expired", the agent is not woken, and nothing can run with it. A late tap on its button gets "That approval was already answered or has expired."
+
+**Cancelling a crew job.** Only one that waits (section 20). It is marked failed with "Cancelled by Textcrew support." and never runs. The user is told in the job's chat. A job that already runs cannot be stopped on its own: the Bridge has no way to stop one job. The admin is refused, and the job ends by itself within 15 minutes. A stop by force ends it now, as a failure on our side.
+
+**Example.** Rahul writes to support that his agent "keeps using the wrong model". The admin opens his agent: Claude Code, Sonnet 4.6, effort max, the container busy. The admin resets the model and the effort with the reason "user report: wrong model". Rahul's next turn runs on Claude Code's own choice. His activity log shows "Textcrew support reset the agent's Claude model (back to Default), thinking effort (back to Default)".
 
 ---
 
@@ -2132,6 +2188,8 @@ Each user has one container, named `pa-sbx-` plus the user id. Each user also ha
 
 If the start or the ready check fails, the vm-manager makes the container again from the image and tries once more. If that fails too, the state is "broken". After a good wake, the backend checks the engine and the browser switch, and sends the right value if one differs.
 
+Support can also wake a container from the admin tools (section 31). It is the same wake, and the user must have credits for it.
+
 ### Delivering a message
 
 The backend sends `Deliver` with the message text, the chat it came from and a delivery id. The vm-manager counts the delivery as "in flight" and passes it to the Bridge. From then on nothing may stop the container. Events come back as a stream:
@@ -2154,8 +2212,9 @@ The answer itself is not in this stream. The Bridge sends it through the platfor
 | The limit on awake containers | Another user needs the place | Politely |
 | The stuck-turn timer | A turn runs longer than 15 minutes | By force |
 | The health check | The container does not answer, even after restarts | By force, then "broken" |
+| Support, with the admin tools (section 31) | An admin asks, with a reason | Politely, refused like the backend's own stop. By force only when the admin says so |
 
-A container is never stopped in the middle of a turn, unless the turn is stuck. "Quiet" means no delivered message, no tool call and no git call. Each of those resets the clock. A Claude sign-in that waits for its code also keeps the container awake. A polite stop goes like this:
+A container is never stopped in the middle of a turn, unless the turn is stuck or support stops it by force. "Quiet" means no delivered message, no tool call and no git call. Each of those resets the clock. A Claude sign-in that waits for its code also keeps the container awake. A polite stop goes like this:
 
 1. The vm-manager tells the Bridge to shut down. Hermes saves its memory to the user's folder, within 20 seconds.
 2. Docker stops the container. A stop by force skips step 1 and ends it at once.
@@ -2574,7 +2633,7 @@ This section says what the web app can do through the api, group by group. Almos
 | Coupons | Redeem a coupon code |
 | Activity | Read the log of what the agent did |
 | Waitlist | Join the waitlist. The answer is always the same, so nobody can test an email |
-| Admin | Manage coupons, adjust a user's credits, see free-credit totals, and handle the waitlist. For one user: see their app connections, linked chats and automations; disconnect or recheck an app, unlink a chat, pause, resume or delete an automation, each with a reason. See each app in numbers |
+| Admin | Manage coupons, adjust a user's credits, see free-credit totals, and handle the waitlist. For one user: see their app connections, linked chats and automations; disconnect or recheck an app, unlink a chat, pause, resume or delete an automation, each with a reason. See each app in numbers. See one user's agent and container, stop or wake it, reset its settings, and list or cancel the user's approvals and crew jobs |
 
 The live stream pushes new messages, message status, conversation changes, approvals, the agent's state, progress lines and credit changes. Long lists come in pages of 30 by default, and 100 at most. Every error has the same shape: a code, a message, and sometimes details. Some addresses are not for the web app. Webhooks are for outside services. `/oauth/callback` is the way back from an app's sign-in, for a provider to send the browser to. `/mcp` and `/git` are for containers only. `/metrics` is for monitoring. Admins also have a page that shows the job queues.
 

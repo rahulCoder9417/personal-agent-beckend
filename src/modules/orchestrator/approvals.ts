@@ -296,3 +296,76 @@ export async function expireApprovals(): Promise<number> {
   for (const r of rows) await publish(r.userId, 'approval.resolved', toApiApproval(r));
   return rows.length;
 }
+
+// --- admin tools ---------------------------------------------------------------------------------
+
+/** Admin tools: one approval by its id, whoever's it is (the route is admin-only). */
+export async function approvalForAdmin(id: string): Promise<Approval | undefined> {
+  const [row] = await db().select().from(approvals).where(eq(approvals.id, id));
+  return row ? effective(row) : undefined;
+}
+
+/** Admin tools: one user's approvals, newest first, every state unless `status` is given. */
+export async function listApprovalsForAdmin(
+  userId: string,
+  opts: { status?: Approval['status']; cursor?: string; limit: number },
+) {
+  if (opts.status) return listApprovals(userId, { ...opts, status: opts.status });
+  const where = [eq(approvals.userId, userId)];
+  if (opts.cursor) where.push(lt(approvals.id, opts.cursor));
+  const rows = (
+    await db()
+      .select()
+      .from(approvals)
+      .where(and(...where))
+      .orderBy(desc(approvals.id))
+      .limit(opts.limit + 1)
+  ).map(effective);
+  const page = rows.slice(0, opts.limit);
+  return { items: page, nextCursor: rows.length > opts.limit ? page[page.length - 1]!.id : null };
+}
+
+/**
+ * Admin tools: ends a waiting approval the way the 24-hour expiry does. It becomes `expired` (now),
+ * the agent is not woken and nothing can run with it. Audited with the admin's id and reason.
+ * 404 if there is no such approval; 409 if it is no longer waiting.
+ */
+export async function cancelApproval(
+  id: string,
+  by: { adminId: string; reason: string },
+): Promise<Approval> {
+  const now = new Date();
+  const row = await db().transaction(async (tx) => {
+    const [cancelled] = await tx
+      .update(approvals)
+      .set({ status: 'expired', expiresAt: now, decidedVia: 'admin' })
+      .where(
+        and(eq(approvals.id, id), eq(approvals.status, 'pending'), gt(approvals.expiresAt, now)),
+      )
+      .returning();
+    if (!cancelled) return undefined;
+    await audit(
+      {
+        userId: cancelled.userId,
+        actor: 'admin',
+        action: 'approval_cancelled',
+        summary: `Cancelled by Textcrew support: ${cancelled.summary}`,
+        details: {
+          approvalId: id,
+          action: cancelled.action,
+          adminId: by.adminId,
+          reason: by.reason,
+        },
+      },
+      tx,
+    );
+    return cancelled;
+  });
+  if (!row) {
+    const existing = await approvalForAdmin(id);
+    if (!existing) throw notFound('Approval not found');
+    throw conflict(`Approval is already ${existing.status}`);
+  }
+  await publish(row.userId, 'approval.resolved', toApiApproval(row));
+  return row;
+}

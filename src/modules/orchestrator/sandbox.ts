@@ -84,13 +84,18 @@ const STATE_NAMES: Record<SandboxState, AgentState> = {
   [SandboxState.BROKEN]: 'broken',
 };
 
+/** The vm-manager's state in the api's words. */
+export function agentStateOf(state: SandboxState): AgentState {
+  return STATE_NAMES[state] ?? 'none';
+}
+
 export async function getAgentStatus(
   userId: string,
 ): Promise<{ state: AgentState; lastActiveAt: Date | null }> {
   try {
     const s = await vm().getSandbox({ userId });
     return {
-      state: STATE_NAMES[s.state] ?? 'none',
+      state: agentStateOf(s.state),
       lastActiveAt: s.lastActiveAtUnixMs ? new Date(Number(s.lastActiveAtUnixMs)) : null,
     };
   } catch (err) {

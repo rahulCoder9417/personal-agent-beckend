@@ -31,6 +31,16 @@ export const users = pgTable('users', {
     .default('user'),
   /** Set on a chargeback (HLD 7.6). */
   flagged: boolean().notNull().default(false),
+  /**
+   * `suspended`: an admin put the account on hold (backend-report.md, "Admin tools"). Every
+   * signed-in call is refused, chat messages are saved but not answered, and the container is not
+   * woken until an admin lifts it.
+   */
+  status: text({ enum: ['active', 'suspended'] })
+    .notNull()
+    .default('active'),
+  /** When the current suspension started. Null while active. */
+  suspendedAt: ts(),
   createdAt: ts().notNull().defaultNow(),
   deletedAt: ts(),
 });

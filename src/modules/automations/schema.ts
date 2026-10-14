@@ -39,7 +39,8 @@ export const automations = pgTable(
      */
     conversationId: text(),
     enabled: boolean().notNull().default(true),
-    pausedReason: text({ enum: ['out_of_credits', 'failures', 'user'] }),
+    /** `admin`: paused while an admin suspended the account; back when it is unsuspended. */
+    pausedReason: text({ enum: ['out_of_credits', 'failures', 'user', 'admin'] }),
     failCount: integer().notNull().default(0),
     nextRunAt: timestamp({ withTimezone: true }),
     lastRunAt: timestamp({ withTimezone: true }),

@@ -5,7 +5,7 @@ import { logger } from '../../shared/logger.ts';
 import { redis } from '../../shared/redis.ts';
 import { alert } from '../admin/alerts.ts';
 import { audit } from '../admin/audit.ts';
-import { getActiveUser } from '../auth/users.ts';
+import { getActiveUser, isSuspended } from '../auth/users.ts';
 import { conversationFor, isAutomationsChat } from '../channels/conversations.ts';
 import { signedFileUrl } from '../channels/files.ts';
 import { setMessageStatus } from '../channels/messages.ts';
@@ -58,7 +58,8 @@ export interface TurnInput {
 export type RouteDecision =
   { kind: 'task'; apps?: string[] } | { kind: 'simple'; reply: string } | { kind: 'spam' };
 
-export type TurnOutcome = 'done' | 'out_of_credits' | 'simple' | 'spam' | 'error';
+/** `suspended`: an admin suspended the account; nothing ran and nothing was said. */
+export type TurnOutcome = 'done' | 'out_of_credits' | 'simple' | 'spam' | 'error' | 'suspended';
 
 /**
  * What the turn gives the route hook besides the message: a way to start waking the container while
@@ -378,10 +379,11 @@ interface Woken {
   woke: Awaited<ReturnType<ReturnType<typeof vm>['wakeSandbox']>>;
 }
 
-/** Makes sure the container exists and wakes it. Null: the user is gone. */
+/** Makes sure the container exists and wakes it. Null: the user is gone, or suspended. */
 async function wakeContainer(userId: string, timer: TurnTimer): Promise<Woken | null> {
   const user = await getActiveUser(userId);
-  if (!user) return null;
+  // A suspended account's container is never woken (an admin's decision).
+  if (!user || user.status === 'suspended') return null;
   await ensureSandbox(userId);
   timer.mark('wake_started');
   let woke;
@@ -404,6 +406,14 @@ async function wakeContainer(userId: string, timer: TurnTimer): Promise<Woken | 
 async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcome> {
   const { userId } = given;
   const log = logger().child({ userId, deliveryId: given.deliveryId });
+  // An admin suspended the account: the message stays saved, nothing runs, nothing is said (the
+  // chat path sends its own short notice), and the container is not woken. Covers what was queued
+  // before the suspension too: a web message, an automation's run, a crew job.
+  if (await isSuspended(userId)) {
+    timer.route = 'suspended';
+    if (given.inboundMessageId) await setMessageStatus(given.inboundMessageId, 'delivered');
+    return 'suspended';
+  }
   // The turn's conversation: the message's own (or the Automations chat), else the chat's active
   // one. Everything the turn saves and everything the agent is given comes from this conversation.
   const conversation = await conversationFor(userId, given.sessionKey, given.conversationId, {
@@ -455,7 +465,8 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
   if (!timer.has('woken'))
     await publish(userId, 'agent.status', { state: 'waking', lastActiveAt: null });
   const awake = await wake();
-  if (!awake) return 'error';
+  // Suspended while the route was decided: the same as suspended before it.
+  if (!awake) return (await isSuspended(userId)) ? 'suspended' : 'error';
   const { woke } = awake;
   const settings = await reading;
   // The container runs the agent the user's settings say (Hermes or Claude Code).

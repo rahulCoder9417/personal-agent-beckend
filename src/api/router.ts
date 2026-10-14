@@ -5,7 +5,7 @@ import { getCookie } from 'hono/cookie';
 import { verifySessionToken } from '../modules/auth/session.ts';
 import { resolveSessionUser } from '../modules/auth/provision.ts';
 import type { AppError } from '../shared/errors.ts';
-import { badRequest, forbidden, unauthorized } from '../shared/errors.ts';
+import { accountSuspended, badRequest, forbidden, unauthorized } from '../shared/errors.ts';
 import {
   bodyValidator,
   formatErrors,
@@ -56,6 +56,8 @@ export function requireUser(
     const clerkId = await verifySessionToken(token);
     const user = await resolveSessionUser(clerkId);
     if (!user) throw unauthorized('Account not found');
+    // Suspended by an admin: refused everywhere a user signs in, the live stream too.
+    if (user.status === 'suspended') throw accountSuspended();
     c.set('user', user);
     await next();
   };

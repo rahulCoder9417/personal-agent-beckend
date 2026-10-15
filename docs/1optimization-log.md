@@ -48,6 +48,52 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 15 October 2026: a scope check in the ops script, before asking Google to review our sign-in app
+
+- **Where it is:** on the branch `feat/composio-own-google-app`, waiting for review. Not on `main`, not on the test server.
+- **Why:** a scope is one permission a sign-in screen asks for, such as "see and edit your calendar events". Google sorts scopes into four classes, and the class decides what Google wants before real users can allow our own Google sign-in app:
+
+  | Class | What Google wants | Example |
+  |---|---|---|
+  | Basic | Nothing beyond the brand check | Your name and email |
+  | Non-sensitive | Nothing beyond the brand check | `drive.file`: only files the app made or the user picked |
+  | Sensitive | Google's review: a demo video and a reason for each scope | Calendar, Docs, Sheets |
+  | Restricted | Google's review and a yearly outside security check (CASA), about US$675–855 a year | Reading Gmail, all of Drive |
+
+  Our server sets no scopes. Each app uses Composio's default set, and Composio does not publish it. So before you ask Google for a review, we need to know exactly which scopes each app asks for.
+- **What the user notices:** nothing. It is a command for us.
+- **Backend:**
+  - **A new command, `scopes`,** in `scripts/dev-user.ts`. Example: `scopes --app googlecalendar`. It prints, one line each:
+    - the setup the app uses (or would use for a given user, `--user` or `--email`), and whether it is Composio's shared sign-in or our own sign-in app;
+    - the scopes that setup names, or "Composio's default set" when it names none;
+    - the scopes Composio's sign-in for the app always asks for;
+    - Composio's recommendation for the app's actions: the narrowest set and the smallest set. `--tools` limits it to some actions. Composio marks this part as "beta", so it may say "not available";
+    - for a Google app, each scope's class at Google and what that class needs, then the hardest class of them all.
+  - **It only reads.** It makes no setup at Composio and starts no connection.
+  - **It prints no secret.** A setup at Composio keeps our sign-in app's client id and secret next to its scopes. The command reads the scope fields only, never the others.
+  - **Google's classes are a small table in our code,** from Google's own scope pages for Gmail, Drive, Docs and Sheets, read on 15 October. Google's Calendar page gives no classes; Google names reading calendar events as its own example of a sensitive scope. A scope that isn't in the table is printed as "look it up at Google", never guessed.
+- **Cost and speed:** none. Each run asks Composio up to four questions about setups and apps. None of them runs an action in an app.
+- **Contracts:** none. `openapi.yaml` and `vm.proto` did not change.
+- **Database:** none.
+- **How it was checked:**
+  - New tests (13), in `test/composio-scopes.test.ts`, all against a stand-in for Composio, never the live key:
+    - only the scope fields of a setup are read: a setup holding a client id and secret gives back its scopes and nothing else;
+    - scopes written as a list, or as text with commas or spaces, are read;
+    - the scopes Composio's sign-in always asks for are taken from its sign-in method;
+    - Google's classes: Gmail reading and Drive are restricted, sending mail alone is sensitive, Calendar, Docs and Sheets are sensitive, `drive.file` is non-sensitive, an unknown scope is not guessed;
+    - the command for our own Calendar app and a trial user prints exactly the expected lines, and makes and starts nothing;
+    - for Gmail on Composio's shared sign-in it prints "Composio's default set" and ends with "restricted";
+    - `--tools` asks about just those actions;
+    - an app with no setup says what would happen and makes none;
+    - Composio being down is reported, not a crash;
+    - an app that isn't Google gets no Google classes;
+    - an unknown app is refused.
+  - Lint and the type check pass. The full backend run: 877 of 877 tests pass.
+  - Not run against the live Composio key: the founder decides when. It is safe to run on the server: it only reads.
+- **Still open:** run it once on the server for each Google app before our own Google sign-in app is set up: `cd /opt/textcrew && ./dc --profile app exec -T api node --import tsx scripts/dev-user.ts scopes --app googlecalendar`.
+- **Docs updated:** see the docs entry for this branch, above.
+- **Commits:** `59672a0`.
+
 ### 15 October 2026: a trial switch, so only some users connect through our own Google sign-in app
 
 - **Where it is:** on the branch `feat/composio-own-google-app`, waiting for review. Not on `main`, not on the test server.

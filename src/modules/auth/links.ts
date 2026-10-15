@@ -288,8 +288,9 @@ export function maskDisplayId(link: ChannelLink): string {
 }
 
 /**
- * A chat id or phone number, masked, for admins: a Telegram chat keeps its last 4 digits, a phone
- * number its country code and last 4 digits. A short or odd id shows nothing of itself.
+ * A chat id or phone number, masked, for admins and for the user's own list of linked chats: a
+ * Telegram chat keeps its last 4 digits, a phone number its country code and last 4 digits. A
+ * short or odd id shows nothing of itself.
  */
 export function maskChatId(link: Pick<ChannelLink, 'channel' | 'externalId'>): string {
   if (link.channel === 'telegram')

@@ -1,4 +1,10 @@
-import { createLinkCode, listLinks, maskDisplayId, unlinkChat } from '../../modules/auth/links.ts';
+import {
+  createLinkCode,
+  listLinks,
+  maskChatId,
+  maskDisplayId,
+  unlinkChat,
+} from '../../modules/auth/links.ts';
 import { config, isChannelEnabled } from '../../shared/config.ts';
 import { badRequest, channelDisabled, notFound } from '../../shared/errors.ts';
 import { enforce } from '../../shared/rate-limit.ts';
@@ -16,6 +22,10 @@ export const channelRoutes = [
           channel: l.channel,
           displayId: maskDisplayId(l),
           linkedAt: l.createdAt.toISOString(),
+          // The same as an admin sees for the chat; never the full chat id.
+          maskedChatId: maskChatId(l),
+          lastInboundAt: l.lastInboundAt ? l.lastInboundAt.toISOString() : null,
+          blocked: l.blocked,
           ...(l.channel === 'whatsapp'
             ? {
                 within24hWindow: Boolean(

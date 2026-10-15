@@ -852,7 +852,7 @@ The web app follows four rules:
 | Event | What the web app does |
 |---|---|
 | `message.draft` | Shows the latest text of the turn in its conversation, in place of "Tex is working…". An empty text brings "Tex is working…" back |
-| `message.created` from the agent | The message takes the draft's place. A later draft of the same turn is dropped. An approval card does not count: the agent may still be writing after it |
+| `message.created` from the agent | The message takes the draft's place. A later draft of the same turn is dropped. An approval card does not count: the agent may still be writing after it. What the turn showed before the card folds into the card |
 | `agent.status` other than busy, or the incoming message `delivered` or `failed` | The turn is over: the draft goes |
 | The stream reconnects | The draft goes. If the turn still runs, its next piece brings the whole text back |
 
@@ -1056,15 +1056,15 @@ The platform decides by these words in the action's name. There are two exceptio
 
 ### The life of an approval
 
-1. The agent calls `request_approval` with a short summary, the action's name and its exact inputs.
+1. The agent calls `request_approval` with a short summary, the action's name and its exact inputs. The tool asks for the summary as what the agent will do, starting with the verb: "Send the notes to priya@example.com".
 2. The api saves it in the table `approvals` as `pending`. It expires after 24 hours.
-3. The api sends "Approval needed: ..." to the chat the request came from. Telegram shows two buttons, Approve and Reject.
-4. The tool answers "pending" at once. The agent ends its turn and says it is waiting. It never waits inside a turn.
+3. The api sends Tex's question to the chat the request came from. It is made from the summary, so it is there at once and costs nothing: no model is asked. "I'd like to " goes before the summary, its first word in small letters, and the way to answer goes after it: "I'd like to send the notes to priya@example.com. Approve or Deny below." In web chat the message carries the approval, and the web app shows the Approve and Deny card right under it. Telegram and WhatsApp show two buttons, Approve and Deny. iMessage has no buttons, so the line "Reply YES to approve or NO to deny." is added instead of "Approve or Deny below.". A summary that does not start with a common verb ("send", "delete", "pay", "create" and about 50 more) is kept as written: "I'd like your OK for this: ...".
+4. The tool answers "pending" at once, with the question the user now sees. It tells the agent to end its turn and not to repeat the question or say it is waiting: the user already sees both. The agent never waits inside a turn. In the web app the turn has paused: the "working" sign stops and a line under the card says "Waiting for your OK".
 5. The user taps a button, types "yes" or "no", or decides in the web app. A typed answer goes to the newest waiting approval in that chat.
-6. The api records the answer in the activity log. A job then wakes the agent with a new message: "The user APPROVED ..." or "The user REJECTED ...". It goes to the conversation the approval was asked in, not to the one that is open now.
-7. After a yes, the agent calls `run_app_action` with the approval's id. The action runs.
+6. The api records the answer in the activity log ("Approved: ..." or "Denied: ..."). A job then wakes the agent with a new message: "The user APPROVED ..." or "The user REJECTED ... Don't do it. Tell them in one short sentence that you won't." It goes to the conversation the approval was asked in, not to the one that is open now. In the web app Tex shows as working again from the tap until it answers.
+7. After a yes, the agent calls `run_app_action` with the approval's id. The action runs, and the agent says how it went.
 
-**Example.** Rahul texts "email Priya the notes". He gets "Approval needed: Send the notes to priya@example.com". He taps Approve. The agent wakes up and sends the email. 1 credit is charged.
+**Example.** Rahul texts "email Priya the notes". He gets "I'd like to send the notes to priya@example.com. Approve or Deny below.", with the two buttons. He taps Approve. The agent wakes up, sends the email and says so. 1 credit is charged.
 
 ### Single use and exact match
 
@@ -1079,7 +1079,8 @@ The platform decides by these words in the action's name. There are two exceptio
 
 ### What can go wrong
 
-- **Rejected.** The agent is woken and told not to do it. That approval can never run an action.
+- **Denied.** The agent is woken, told not to do it and to say so in one sentence. That approval can never run an action. (Its state in the API is still called `rejected`.)
+- **The agent writes after asking anyway.** Its text arrives as a message after the question. Nothing breaks; the user reads the same thing twice.
 - **Never answered.** After 24 hours an hourly job marks it `expired`. The agent is not woken. Nothing runs.
 - **A late tap on an old button.** The user gets "That approval was already answered or has expired."
 - **A risky action with no approval.** Refused, with a message that tells the agent to ask first.
@@ -1413,7 +1414,7 @@ The list of repositories comes from Composio's GitHub action for the signed-in a
 
 Approving, requesting changes, merging, closing and pushing to the default branch are never covered. Byte's report goes into the description of the pull request it opens, which needs no yes today. Opening an issue needs none either.
 
-**From chat.** Tex has the tool `start_crew_job`, with the same brief. The job runs as its own turn right after the current one, and Tex tells the user it is queued. Asked again for the same brief while that job still waits or works (within 10 minutes), it starts no second one. A job from chat that would post Patch's review on a pull request needs the user's yes first, through an ordinary approval for that exact brief: "Approval needed: Patch reviews acme/web#42 and posts the review". The platform cannot tell whether the user really asked for it, or whether a page or an email told Tex to.
+**From chat.** Tex has the tool `start_crew_job`, with the same brief. The job runs as its own turn right after the current one, and Tex tells the user it is queued. Asked again for the same brief while that job still waits or works (within 10 minutes), it starts no second one. A job from chat that would post Patch's review on a pull request needs the user's yes first, through an ordinary approval for that exact brief: "I'd like your OK for this: Patch reviews acme/web#42 and posts the review. Approve or Deny below." The platform cannot tell whether the user really asked for it, or whether a page or an email told Tex to.
 
 **Clean-up in the container** is done by the Bridge itself, not only by the instructions (section 34).
 

@@ -184,8 +184,8 @@ Example: the user texts "email Priya the notes".
 2. Later the agent wants to act, for example send an email.
 3. The agent calls our tool for app actions. The api, not the container, calls Composio. So the keys for apps never enter a container.
 4. If the action is risky, the tool refuses and tells the agent to ask first. Risky means: sending to another person, deleting, or paying.
-5. The agent asks. The user sees "Approval needed" with Approve and Reject buttons.
-6. The user's answer arrives as a new message. The agent then runs the action, exactly as it was approved.
+5. The agent asks. Tex says what it wants to do, in a message made from the request's own summary, with Approve and Deny buttons: "I'd like to send an email to priya@example.com with subject "Notes". Approve or Deny below." The turn ends there. In the web app the "working" sign stops and the chat says "Waiting for your OK".
+6. The user's answer arrives as a new message. After Approve the agent runs the action, exactly as it was approved, and says how it went. After Deny it says it won't do it. In the web app Tex shows as working again while it does this.
 7. An action that changes something costs 1 credit. Reading and searching are free.
 
 An approval works once, and only for the exact action and details the user saw.

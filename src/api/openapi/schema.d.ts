@@ -39,6 +39,10 @@ export interface paths {
          * Update profile settings
          * @description A `timezone` (an IANA name such as `Asia/Kolkata`, 400 for an unknown one) also makes
          *     `timezoneSet` true.
+         *
+         *     `onboardingCompleted` and `gettingStartedDismissed` are the web app's first-run marks (see
+         *     `Me`). `true` stamps the time now, or keeps the time already there; `false` clears it. Only
+         *     the signed-in user's own marks change.
          */
         patch: operations["updateMe"];
         trace?: never;
@@ -1543,6 +1547,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/timings/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How long the api's own requests took, per route (admin)
+         * @description Response times of the api's HTTP requests (not turns: see `/v1/admin/timings/summary`).
+         *     Each request's time is counted in Redis, in a time bucket, per route and status class:
+         *     per 5 minutes (kept 2 hours) and per hour (kept 8 days). Nothing is written to the
+         *     database per request.
+         *
+         *     `window` is the last hour (read from 5-minute slots), the last 24 hours or the last 7
+         *     days (hourly slots). The current slot is included, so the window reaches back up to one
+         *     slot further; `since` is the start of the oldest slot read.
+         *
+         *     A route is the method and the route pattern, never the address with ids, e.g.
+         *     `GET /v1/conversations/:conversationId`; `GET (no route)` holds unknown addresses and
+         *     requests refused before routing. The health check and `/metrics` are not counted.
+         *     Percentiles are estimated from the buckets and are accurate to one bucket (at most about
+         *     a third of the value, usually much closer); `maxMs` is exact. The time is until the
+         *     answer starts: for the live stream, until the stream opens. `overall` is every request
+         *     together. Routes are sorted by p95, slowest first. Never a user, an address or a query.
+         */
+        get: operations["adminRequestTimes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/config": {
         parameters: {
             query?: never;
@@ -1947,6 +1986,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/users/{userId}/onboarding/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Show a user the welcome steps and the "Getting started" checklist again (admin)
+         * @description Clears the user's two first-run marks, `onboardingCompletedAt` and
+         *     `gettingStartedDismissedAt` (see `Me`). The web app then shows the welcome steps on the
+         *     user's next visit, and the "Getting started" checklist while any of its steps is left.
+         *     Nothing else changes. Allowed on any account that is not deleted, an admin's own too. When
+         *     both marks are already empty, nothing changes and no log row is written (`changed: false`).
+         */
+        post: operations["adminResetUserOnboarding"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/users/{userId}": {
         parameters: {
             query?: never;
@@ -2183,10 +2246,39 @@ export interface components {
             };
             /** Format: date-time */
             createdAt: string;
+            /**
+             * Format: date-time
+             * @description When the user finished or skipped the web app's welcome steps. Null means not yet, so
+             *     the web app shows them. Every account starts with null, and so did the accounts made
+             *     before this field existed: they see the welcome steps once too. Set with
+             *     `PATCH /v1/me` `onboardingCompleted: true`; cleared with `false` (to see them again,
+             *     from Settings) or by an admin.
+             */
+            onboardingCompletedAt: string | null;
+            /**
+             * Format: date-time
+             * @description When the user closed the "Getting started" checklist. Null means it may still show.
+             *     The web app also hides it by itself once every step is done, worked out from the
+             *     account's real data; the backend does not track the steps. Set with `PATCH /v1/me`
+             *     `gettingStartedDismissed: true`; cleared with `false` or by an admin.
+             */
+            gettingStartedDismissedAt: string | null;
         };
         MeUpdate: {
             name?: string;
             timezone?: string;
+            /**
+             * @description `true`: the welcome steps are done (finished or skipped). Sets `onboardingCompletedAt`
+             *     to now; if it is already set, the first time is kept. `false`: clears it, so the web
+             *     app shows the welcome steps again.
+             */
+            onboardingCompleted?: boolean;
+            /**
+             * @description `true`: the user closed the "Getting started" checklist. Sets
+             *     `gettingStartedDismissedAt` to now; if it is already set, the first time is kept.
+             *     `false`: clears it, so the checklist may show again.
+             */
+            gettingStartedDismissed?: boolean;
         };
         ChannelLink: {
             id: string;
@@ -3400,6 +3492,32 @@ export interface components {
                 name: string;
                 ms: number;
             }[];
+        };
+        /**
+         * @description Response times of one route (or of every request, in `overall`) over the window, in
+         *     milliseconds. All zero when no request was counted.
+         */
+        AdminRouteTimes: {
+            /**
+             * @description Method and route pattern; `all` in `overall`
+             * @example GET /v1/conversations
+             * @example POST /mcp
+             * @example GET (no route)
+             * @example all
+             */
+            route: string;
+            /** @description Requests counted */
+            count: number;
+            /** @description Answers with a 4xx status */
+            clientErrors: number;
+            /** @description Answers with a 5xx status */
+            serverErrors: number;
+            /** @description Half the requests took at most this */
+            p50Ms: number;
+            p95Ms: number;
+            p99Ms: number;
+            /** @description The slowest request (exact) */
+            maxMs: number;
         };
         AdminActivityEntry: {
             id: string;
@@ -6223,6 +6341,46 @@ export interface operations {
             403: components["responses"]["Forbidden"];
         };
     };
+    adminRequestTimes: {
+        parameters: {
+            query?: {
+                window?: "1h" | "24h" | "7d";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        window: "1h" | "24h" | "7d";
+                        /**
+                         * Format: date-time
+                         * @description Start of the oldest slot read
+                         */
+                        since: string;
+                        /**
+                         * Format: date-time
+                         * @description When the answer was made
+                         */
+                        until: string;
+                        overall: components["schemas"]["AdminRouteTimes"];
+                        routes: components["schemas"]["AdminRouteTimes"][];
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
     adminGetConfig: {
         parameters: {
             query?: never;
@@ -6950,6 +7108,44 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+        };
+    };
+    adminResetUserOnboarding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Both marks are empty now */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        userId: string;
+                        onboardingCompletedAt: null;
+                        gettingStartedDismissedAt: null;
+                        /** @description False when both marks were already empty. */
+                        changed: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     adminGetUser: {

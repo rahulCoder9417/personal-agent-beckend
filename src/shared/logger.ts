@@ -1,5 +1,6 @@
 import pino from 'pino';
 import { config } from './config.ts';
+import { currentRequestId } from './request-context.ts';
 
 // No secrets in logs (CLAUDE.md): redact anything that looks like a credential.
 const redact = [
@@ -29,6 +30,11 @@ export function buildLogger(dest?: pino.DestinationStream, level?: string): pino
     level: level ?? config().LOG_LEVEL,
     redact: { paths: redact, censor: '[redacted]' },
     base: { service: process.env.SERVICE_NAME ?? 'backend' },
+    // Inside an api request, every line carries the request's id (a field the line sets wins).
+    mixin: () => {
+      const requestId = currentRequestId();
+      return requestId ? { requestId } : {};
+    },
   };
   return dest ? pino(options, dest) : pino(options);
 }

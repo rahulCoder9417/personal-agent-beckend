@@ -1,7 +1,16 @@
 import type { User } from '../modules/auth/users.ts';
 import type { components, operations } from './openapi/schema.d.ts';
 
-export type AppEnv = { Variables: { user: User; ip: string } };
+export type AppEnv = {
+  Variables: {
+    user: User;
+    ip: string;
+    /** This request's id (also the `X-Request-Id` answer header). Set before every route. */
+    requestId: string;
+    /** The user a container token belongs to (/mcp, /git), for the request log. */
+    containerUserId: string;
+  };
+};
 export type Schemas = components['schemas'];
 export type Operations = operations;
 export type OperationId = keyof operations;

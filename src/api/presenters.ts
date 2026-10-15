@@ -16,5 +16,7 @@ export function toMe(user: User, credits: BalanceSummary): Schemas['Me'] {
     role: user.role,
     credits: { balance: credits.balance, nextExpiry: iso(credits.nextExpiry) },
     createdAt: user.createdAt.toISOString(),
+    onboardingCompletedAt: iso(user.onboardingCompletedAt),
+    gettingStartedDismissedAt: iso(user.gettingStartedDismissedAt),
   };
 }

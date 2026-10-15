@@ -157,6 +157,8 @@ Picture: GoDraw, page 1, "The big picture".
 
 A message from a chat that is not linked gets only one reply: "this chat is not linked". Nothing else happens.
 
+**The first visit.** Right after sign-up the web app shows a few welcome steps, then a "Getting started" checklist on its home page. Whether the user finished or skipped the welcome steps, and whether they closed the checklist, is kept on the account, so it shows once and not again on another device. The users who signed up before 15 October 2026 see it once too. The user can see the welcome steps again from Settings, and an admin can show them again for one user. Details: `backend-report.md`, sections 6 and 31.
+
 ### 5.2 One message, from start to end
 
 Picture: GoDraw, page 2, "One message".

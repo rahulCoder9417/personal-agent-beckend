@@ -1,12 +1,11 @@
 import { Hono } from 'hono';
-import { requestId } from 'hono/request-id';
 import { wireModules } from '../wiring.ts';
 import { AppError } from '../shared/errors.ts';
 import { logger } from '../shared/logger.ts';
 import { mountAdminBoard } from './admin-board.ts';
 import { mountGit } from './git.ts';
 import { mountMcp } from './mcp.ts';
-import { accessLog, clientIpMiddleware, ipRateLimit } from './middleware.ts';
+import { clientIpMiddleware, ipRateLimit, requestLog } from './middleware.ts';
 import { renderMetrics } from '../modules/admin/metrics.ts';
 import { config } from '../shared/config.ts';
 import { safeEqual } from '../shared/crypto.ts';
@@ -68,15 +67,18 @@ export const allRoutes: RouteDef[] = [
 export function createApp(): Hono<AppEnv> {
   wireModules();
   const app = new Hono<AppEnv>();
-  app.use(requestId());
-  app.use(accessLog);
+  app.use(requestLog);
   app.use(clientIpMiddleware);
   app.use(ipRateLimit);
 
   app.onError((err, c) => {
     if (err instanceof AppError) return errorResponse(c, err);
+    // The line carries the request id (logger mixin); the answer gives it so a report can quote it.
     logger().error({ err: err.message, stack: err.stack, path: c.req.path }, 'unhandled error');
-    return errorResponse(c, new AppError(500, 'internal', 'Internal error'));
+    return errorResponse(
+      c,
+      new AppError(500, 'internal', 'Internal error', { requestId: c.get('requestId') }),
+    );
   });
   app.notFound((c) => errorResponse(c, new AppError(404, 'not_found', 'Not found')));
 

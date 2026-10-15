@@ -212,13 +212,13 @@ This section follows one request from the web app through the api, check by chec
 ### The steps
 
 1. Caddy receives the request over HTTPS and forwards it to the api.
-2. The api gives the request an id. The answer carries the same id in the `X-Request-Id` header.
+2. The api gives the request an id. The answer carries the same id in the `X-Request-Id` header. If the caller sent its own `X-Request-Id`, the api keeps it, but only when it is up to 64 letters, digits, `_` or `-`; otherwise it makes a new one, such as `req_01m4z1tdg2p20p83w3f87072p1`.
 3. The api reads the caller's IP address and counts the request against the IP limit. With `TRUST_PROXY` on, it uses the address Caddy wrote, which a caller cannot fake.
 4. The api finds the route. Each route's address, method and rules come from the API contract, one file that lists every address the api answers.
 5. If the route needs a signed-in user, the api checks the session (below). Admin routes also need the role `admin`.
 6. The api checks the address, the query and the body against the contract.
 7. The route's own code runs. Every database query is filtered by the user's id.
-8. The api writes one log line.
+8. The api writes one log line and counts the request's time (below).
 
 ### The sign-in check
 
@@ -242,15 +242,48 @@ Every error looks the same: an `error` object with a `code`, a `message` and som
 | 404 | `not_found` | Unknown address or item |
 | 409 | `conflict` | The action does not fit the current state |
 | 429 | `rate_limited` | Too many requests. `Retry-After` says how long to wait |
-| 500 | `internal` | An unexpected error. The details stay in the log |
+| 500 | `internal` | An unexpected error. The details stay in the log. The answer gives the request id as `details.requestId`, so a user can quote it and the admin can find the log lines |
 
 ### Rate limits
 
 A rate limit is a cap on how often something may be done. The counters live in Redis and start again when their time window ends. Any request: 600 a minute per IP address (`RATE_LIMIT_PER_IP_PER_MIN`). Web chat messages: 30 a minute per user. New web chats: 30 an hour per user. New link codes: 10 an hour per user. Tool calls from one user's container: 240 a minute.
 
+### The request log
+
+Each request writes one line when its answer is ready. It holds:
+
+- the request id;
+- the method and the route, as written in the contract, such as `/v1/conversations/:conversationId`. When no route answered (an unknown address, or a request stopped by the per-address limit) the route is empty;
+- the address that was asked for, without the part after the question mark. A very long address is cut at 200 characters;
+- the status and the time taken, in milliseconds;
+- the user, when known: the signed-in user, or for `/mcp` and `/git` the user the container token belongs to;
+- the caller's IP address. Behind Caddy it is the address Caddy wrote, as for the rate limits.
+
+The level follows the status. A 5xx is an error line, a 4xx a warning, the rest plain information. The health check and `/metrics`, which machines ask every few seconds, are written only at the debug level, which the server does not show.
+
+Every other line written while the request runs carries the same request id. So when a route fails, the "unhandled error" line and the request's own line can be found together.
+
+The time is until the answer starts. For the live stream it is the time until the stream opens, not how long it stays open.
+
+Example line, with made-up values:
+
+`{"level":30,"time":1792058400123,"service":"api","requestId":"req_01m5a2b3c4d5e6f7g8h9j0k1m2","method":"GET","route":"/v1/conversations","path":"/v1/conversations","status":200,"ms":284,"userId":"usr_01m3sk0g2wwgm7wj60822scjtp","ip":"203.0.113.9","msg":"request"}`
+
 ### Logging without secrets
 
-Each request writes one line: method, route, status, time taken and request id. The health check is not logged. The log never holds request bodies or sign-in headers. Fields named like password, token, secret, API key, authorization or code are replaced with "[redacted]".
+The request log never holds a request body, a header or the part of the address after the question mark. So sign-in tokens, cookies, webhook signatures, container tokens and one-time codes never reach it, wherever they travel. Tests send planted secrets in each of these places and check that none shows up. In any log line, fields named like password, token, secret, API key, authorization or code are also replaced with "[redacted]".
+
+### Response times
+
+Each request's time is also counted per route, so the admins can see which routes are slow (section 31, "Response times"). The count is kept in Redis, never in the database: a database write per request would cost a trip to Neon, about 260 ms, and would grow without end.
+
+How it is counted:
+
+- The route is the method and the route as written in the contract, such as `GET /v1/conversations`, never the address with its ids. Requests no route answered share one line, `GET (no route)`.
+- The time goes into a bucket, such as "up to 250 ms". From 4 ms to 30 s each bucket is at most a third larger than the one before. The count is kept per route, per status class (2xx, 3xx, 4xx, 5xx) and per bucket. The slowest time of each route is kept exactly.
+- There are two sets of counts: one per 5 minutes, kept 2 hours, and one per hour, kept 8 days. Redis removes them by itself after that.
+- Counting never makes a request wait and never makes it fail. The api sends the count and goes on. If Redis does not take it, the time is dropped and a debug line says so.
+- The health check and `/metrics` are not counted.
 
 ## 5. Webhooks
 
@@ -309,6 +342,23 @@ This section follows a new person from sign-up to an account with credits and a 
 - **Clerk reports a change.** The email, its verified state and the role are updated. An admin is a user whose role is set to admin in Clerk. The admin tool that changes a role sets it in Clerk first and on our row at once, so this webhook then agrees (section 31).
 - **Clerk reports a deletion.** The account is marked deleted and a delete job runs. It removes the container and its data, the LiteLLM key, app connections, automations, linked chats, conversations, messages, files and memories. It also stops the subscription from renewing.
 - **An admin deletes the account.** The admin tool deletes the user in Clerk, marks the account deleted and adds the same delete job. Clerk's deletion webhook then finds nothing left to do (section 31).
+
+### The first visit to the web app
+
+The web app greets a new user with a few welcome steps, then shows a "Getting started" checklist on its home page. The backend keeps two marks on the user's row in `users`, so this happens once for the account, on any device and any browser.
+
+| Mark | Empty means | Set when |
+|---|---|---|
+| `onboardingCompletedAt` | The welcome steps were not finished or skipped yet, so the web app shows them | The user finishes or skips them |
+| `gettingStartedDismissedAt` | The checklist may still show | The user closes it |
+
+- Both are in `GET /v1/me`. The web app sets one with `PATCH /v1/me`, sending `onboardingCompleted: true` or `gettingStartedDismissed: true`. The time is now; if the mark is already set, the first time is kept.
+- Sending `false` clears a mark. Settings uses this to show the welcome steps again.
+- The backend does not track the checklist's steps. The web app works them out from the account's real data and hides the checklist by itself once every step is done.
+- Every account starts with both marks empty. So do the accounts made before the marks existed (15 October 2026): the database update added the two columns and filled nothing in. The users we already have see the welcome steps once on their next visit, like a new user.
+- An admin can clear both marks for one user (section 31).
+
+Example: Priya signs up on her laptop and skips the welcome steps. The next day she opens the app on her phone and lands straight on the home page, because the mark is on her account, not in the browser.
 
 ### What can go wrong
 
@@ -2004,7 +2054,7 @@ Example: a user has a connected Claude plan and a saved OpenAI key. With Claude 
 
 ## 31. Admin tools
 
-Admin tools are for the founder and trusted staff. They hand out free credits, correct balances, show what failed and show how the running system is doing. They act on accounts: the role, a suspension, a deletion, signing a user out. They also let support look at one user's agent and container and put it right.
+Admin tools are for the founder and trusted staff. They hand out free credits, correct balances, show what failed and show how the running system is doing. They act on accounts: the role, a suspension, a deletion, signing a user out, showing the welcome steps again. They also let support look at one user's agent and container and put it right.
 
 Only a user with the role admin may use them. The role is set in Clerk, the sign-in service, in the user's public metadata. The backend copies it when Clerk sends the user's data. Anyone else gets "Admins only".
 
@@ -2027,6 +2077,7 @@ The admin panel is where admins use these tools: a web app of its own, apart fro
 | Suspend, unsuspend | Puts an account on hold, or lifts the hold | `/v1/admin/users/{id}/suspend`, `/unsuspend` |
 | Delete an account | Deletes the account, as the user's own deletion does | `/v1/admin/users/{id}` |
 | Sign out everywhere | Ends every sign-in session of the user | `/v1/admin/users/{id}/sessions/revoke` |
+| Show the welcome steps again | Clears the user's two first-run marks, so the web app shows the welcome steps and the "Getting started" checklist again | `/v1/admin/users/{id}/onboarding/reset` |
 | One user's apps | Lists each connection; disconnects one, or asks Composio about it again | `/v1/admin/users/{id}/apps` |
 | One user's chats | Lists the linked chats, with the chat id masked; unlinks one | `/v1/admin/users/{id}/channels` |
 | One user's automations | Lists every automation; pauses, resumes or deletes any one | `/v1/admin/users/{id}/automations`, `/v1/admin/automations/{id}` |
@@ -2038,6 +2089,7 @@ The admin panel is where admins use these tools: a web app of its own, apart fro
 | Remove a job | Removes a failed or finished job, with a reason | `/v1/admin/jobs/{queue}/{jobId}` |
 | Audit log | Every user's activity log, with filters | `/v1/admin/audit` |
 | Turn timings | Where turns spent their time over the last days | `/v1/admin/timings/summary` |
+| Response times | How long the api's requests took per route: p50, p95, p99 and the slowest | `/v1/admin/timings/requests` |
 | Settings | The settings that shape behaviour, read-only | `/v1/admin/config` |
 | Health | Whether each service the backend needs answers | `/v1/admin/health` |
 | One user's agent | Shows the container, the engine, the AI and today's usage | `/v1/admin/users/{id}/agent` |
@@ -2175,6 +2227,22 @@ It also counts the turns per route, engine and outcome, and lists the 20 slowest
 
 The median is the middle value, read between the two middle ones when the count is even. Example: four turns waited 100, 200, 300 and 400 ms in the queue. The median is 250 ms and the 90th percentile 370 ms.
 
+### Response times
+
+This page shows how long the api's own requests took, per route (section 4, "Response times", says how they are counted). It does not cover turns: those are in the turn timings above.
+
+The admin picks the last hour, the last 24 hours (the default) or the last 7 days. The last hour is read from the 5-minute counts, the others from the hourly ones. The current 5 minutes or hour is included, so the window can reach up to one more back; the answer says where it starts.
+
+For each route, and for all requests together, it gives:
+
+- how many requests there were, and how many answered with a 4xx and with a 5xx;
+- p50, p95 and p99: the time that half, 95 in 100 and 99 in 100 requests stayed under;
+- the slowest request, exactly.
+
+The routes are sorted by p95, slowest first. The percentiles are worked out from the buckets, so they are accurate to one bucket: off by at most a third, usually much less. The page never shows a user, an address with its ids, or a query.
+
+Example: over the last 24 hours, `GET /v1/conversations` had 1,240 requests, 2 of them 5xx, p50 180 ms, p95 640 ms, p99 1,100 ms and the slowest 2,300 ms. Half the lists came back in under 0.2 seconds, and 1 in 20 took more than 0.6 seconds.
+
 ### Settings
 
 The settings page shows the settings that shape what the backend does: the channels that are on, the crew, the browser, the waking during routing, the models, the apps the server may set up at Composio, the plan products, the limits and the addresses. An address is shown without any user name or password in it.
@@ -2197,8 +2265,8 @@ Example: Composio's key was replaced and the old one is still in the settings. T
 
 - **A reason is required.** Each call carries a short reason. A blank one is refused.
 - **Each is in the activity log.** One row for the user, with the admin's id and the reason. The user's own activity list shows only a plain line, such as "An admin suspended this account". The reason stays out of it.
-- **Not on yourself, not on an admin.** An admin cannot remove their own admin role, suspend themselves or delete themselves. Another admin can be suspended or deleted only after their admin role is taken away. These answer "conflict" and change nothing.
-- **Twice is safe.** Setting the role a user already has, suspending a suspended account, or lifting a suspension that is not there changes nothing and writes no second row.
+- **Not on yourself, not on an admin.** An admin cannot remove their own admin role, suspend themselves or delete themselves. Another admin can be suspended or deleted only after their admin role is taken away. These answer "conflict" and change nothing. Showing the welcome steps again is the exception: it is harmless, so it works on any account, an admin's own too.
+- **Twice is safe.** Setting the role a user already has, suspending a suspended account, lifting a suspension that is not there, or showing the welcome steps again to a user whose two marks are already empty changes nothing and writes no second row.
 
 ### Changing the role
 
@@ -2242,6 +2310,16 @@ The activity-log row keeps the admin's id, the deleted user's id and the reason.
 ### Signing a user out everywhere
 
 The backend asks Clerk to end every active session of the user. The answer says how many were ended. A session token the browser already holds still works until it expires, about one minute, because the api checks tokens without asking Clerk each time. After that the user must sign in again. This does not suspend the account.
+
+### Showing the welcome steps again
+
+The admin sends a reason. The backend clears the user's two first-run marks (section 6, "The first visit to the web app"). On the user's next visit the web app shows the welcome steps, then the "Getting started" checklist while any of its steps is left. Nothing else changes: not the plan, the credits, the chats or the apps.
+
+- The activity log gets one row: "An admin set this account to show the welcome steps again". Its details keep the admin's id, the reason and the two times that were cleared. The user's own activity list shows only that line.
+- When both marks are already empty, nothing changes and no row is written. The answer says `changed: false`.
+- A deleted account answers "not found".
+
+Example: Ravi skipped the welcome steps and later asks support for a tour of the app. The founder shows him the welcome steps again with the reason "asked for the tour". His next visit starts with them.
 
 ### The overview
 
@@ -2660,7 +2738,9 @@ This section says how the running system is watched, backed up and brought back 
 
 ### Logs, metrics and alerts
 
-The api and the worker write one log line per request and per job. Fields that look like a secret are replaced by "[redacted]": passwords, tokens, keys, sign-in codes, login headers and cookies. Request contents are never logged.
+The api and the worker write one log line per request and per job. The request line has the request id, the route, the address without its query, the status, the time, the user and the IP (section 4). Every line written during a request carries its id. Fields that look like a secret are replaced by "[redacted]": passwords, tokens, keys, sign-in codes, login headers and cookies. Request contents, headers and queries are never logged. `aws-setup.md` section 13 shows how to read them on the server.
+
+Each request's time is also counted in Redis per route, for the admins' response-time page (section 31).
 
 The api serves numbers at `/metrics`: requests by path and result, and for each queue the jobs waiting, running, delayed, failed and finished. The page needs the secret in `METRICS_TOKEN`. Without that setting it answers "not found".
 
@@ -2773,7 +2853,7 @@ There are three databases: the backend's, the vm-manager's and LiteLLM's. Each p
 
 | Module | Table | What it holds |
 |---|---|---|
-| auth | `users` | One row per person: email, name, time zone and whether anyone set it, plan, role, and whether an admin suspended the account (and since when) |
+| auth | `users` | One row per person: email, name, time zone and whether anyone set it, plan, role, whether an admin suspended the account (and since when), and the web app's two first-run marks: when the welcome steps were done and when the "Getting started" checklist was closed (section 6) |
 | auth | `link_codes` | One-time codes to link a chat app, stored as hashes, with an expiry |
 | auth | `channel_links` | Which chat belongs to which user |
 | auth | `waitlist_entries` | People waiting for access, with request details for abuse checks |
@@ -2816,7 +2896,7 @@ This section says what the web app can do through the api, group by group. Almos
 
 | Group | What it lets the app do |
 |---|---|
-| Profile | Read the user's name, plan and credit summary, and whether a time zone was ever set. Change the name and time zone. The app sets the time zone from the browser once, while nobody has set one |
+| Profile | Read the user's name, plan and credit summary, whether a time zone was ever set, and the two first-run marks (welcome steps done, checklist closed). Change the name and time zone, and set or clear the marks. The app sets the time zone from the browser once, while nobody has set one |
 | Channels and linking | See linked chat apps and which channels are on. Get a one-time code to link Telegram. Unlink a chat |
 | Chat and the live stream | List the conversations, with the Automations chat apart if asked. Start a new web conversation, open an earlier one, rename or delete one (the Automations chat keeps its name and cannot be deleted). Read the messages of one conversation, or of all. Send a message into the active web conversation or into one the app names. Upload a file up to 10 MB. Keep a live stream open |
 | Approvals | List approvals, the waiting ones by default. Approve or reject one |
@@ -2834,7 +2914,7 @@ This section says what the web app can do through the api, group by group. Almos
 | Coupons | Redeem a coupon code |
 | Activity | Read the log of what the agent did |
 | Waitlist | Join the waitlist. The answer is always the same, so nobody can test an email |
-| Admin | See the platform's numbers at a glance. List and search users, and open one user's details (counts and metadata, never their messages). Set a user's plan by hand. Manage coupons, adjust a user's credits, see free-credit totals, and handle the waitlist. For one user: see their app connections, linked chats and automations; disconnect or recheck an app, unlink a chat, pause, resume or delete an automation, each with a reason. See each app in numbers. See one user's agent and container, stop or wake it, reset its settings, and list or cancel the user's approvals and crew jobs. See the jobs in each queue, run a failed one once more or remove a failed or finished one, with a reason. Read the audit log of every user. See where turns spend their time. Read the settings in use (secrets only as set or not) and check that each service answers. Change a user's role, suspend an account or lift the suspension, delete an account, and sign a user out everywhere |
+| Admin | See the platform's numbers at a glance. List and search users, and open one user's details (counts and metadata, never their messages). Set a user's plan by hand. Manage coupons, adjust a user's credits, see free-credit totals, and handle the waitlist. For one user: see their app connections, linked chats and automations; disconnect or recheck an app, unlink a chat, pause, resume or delete an automation, each with a reason. See each app in numbers. See one user's agent and container, stop or wake it, reset its settings, and list or cancel the user's approvals and crew jobs. See the jobs in each queue, run a failed one once more or remove a failed or finished one, with a reason. Read the audit log of every user. See where turns spend their time. Read the settings in use (secrets only as set or not) and check that each service answers. Change a user's role, suspend an account or lift the suspension, delete an account, sign a user out everywhere, and show a user the welcome steps again |
 
 The live stream pushes new messages, message status, conversation changes, approvals, the agent's state, progress lines and credit changes. Long lists come in pages of 30 by default, and 100 at most. Every error has the same shape: a code, a message, and sometimes details. While an admin has suspended an account, every signed-in call of that user answers 403 with the code `account_suspended`. Some addresses are not for the web app. Webhooks are for outside services. `/oauth/callback` is the way back from an app's sign-in, for a provider to send the browser to. `/mcp` and `/git` are for containers only. `/metrics` is for monitoring. Admins also have a page that shows the job queues. The admin panel, a web app of its own, uses only the admin calls and "who is signed in" (section 31).
 

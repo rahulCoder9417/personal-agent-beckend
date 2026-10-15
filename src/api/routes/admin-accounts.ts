@@ -1,6 +1,7 @@
 import {
   changeRole,
   deleteAccount,
+  resetOnboarding,
   signOutEverywhere,
   suspendAccount,
   unsuspendAccount,
@@ -65,6 +66,22 @@ export const adminAccountRoutes = [
       reason: body.reason,
     });
     return c.json({ revoked }, 200);
+  }),
+
+  route('adminResetUserOnboarding', async (c, { params, body }) => {
+    const { user, changed } = await resetOnboarding(params.userId, {
+      adminId: c.get('user').id,
+      reason: body.reason,
+    });
+    return c.json(
+      {
+        userId: user.id,
+        onboardingCompletedAt: null,
+        gettingStartedDismissedAt: null,
+        changed,
+      },
+      200,
+    );
   }),
 
   route('adminDeleteUser', async (c, { params, body }) => {

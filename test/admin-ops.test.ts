@@ -59,6 +59,7 @@ const ADMIN_OPS: Array<{ op: string; path: string; method?: string; body?: unkno
   },
   { op: 'adminListAudit', path: '/v1/admin/audit' },
   { op: 'adminTimingsSummary', path: '/v1/admin/timings/summary' },
+  { op: 'adminRequestTimes', path: '/v1/admin/timings/requests' },
   { op: 'adminGetConfig', path: '/v1/admin/config' },
   { op: 'adminGetHealth', path: '/v1/admin/health' },
 ];

@@ -40,10 +40,11 @@ const text = (status: number, message: string, headers: Record<string, string> =
 export function mountGit(app: Hono<AppEnv>): void {
   const handle =
     (run: (userId: string, repo: GitRepo, c: Context) => Promise<Response>) =>
-    async (c: Context) => {
+    async (c: Context<AppEnv>) => {
       const token = containerToken(c);
       const userId = token ? await userIdForMcpToken(token) : null;
       if (!userId) return text(401, 'Unauthorized');
+      c.set('containerUserId', userId);
       if (await isSuspended(userId)) return text(403, 'This account is suspended');
       const rl = await hit({ key: `git:user:${userId}`, max: 300, windowSeconds: 60 });
       if (!rl.allowed) return text(429, 'Rate limited', { 'Retry-After': String(rl.retryAfter) });

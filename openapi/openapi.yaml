@@ -19,7 +19,11 @@ info:
     - Auth: Clerk session JWT as `Authorization: Bearer <token>` on every `/v1` route.
     - Lists use cursor pagination (`cursor`, `limit`); responses carry `nextCursor` (null at the end).
     - Money is in US cents; credits are integers (1 credit = $0.01 of price).
-    - Errors always use the `Error` schema.
+    - Errors always use the `Error` schema. A 500 `internal` error gives the request id as
+      `details.requestId`, so a report can quote it.
+    - Every answer carries an `X-Request-Id` header: the id the server logs this request under.
+      A caller may send its own `X-Request-Id` (up to 64 letters, digits, `_` or `-`); it is kept,
+      otherwise the server makes one. Not repeated under each route.
     - Any signed-in route can answer 403 `account_suspended` while an admin has suspended the
       account (see `POST /v1/admin/users/{userId}/suspend`), and 429 `rate_limited` from the
       per-address limit. Neither is repeated under each route.
@@ -89,6 +93,10 @@ paths:
       description: |
         A `timezone` (an IANA name such as `Asia/Kolkata`, 400 for an unknown one) also makes
         `timezoneSet` true.
+
+        `onboardingCompleted` and `gettingStartedDismissed` are the web app's first-run marks (see
+        `Me`). `true` stamps the time now, or keeps the time already there; `false` clears it. Only
+        the signed-in user's own marks change.
       requestBody:
         required: true
         content:
@@ -2440,6 +2448,53 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /v1/admin/timings/requests:
+    get:
+      operationId: adminRequestTimes
+      tags: [admin]
+      summary: How long the api's own requests took, per route (admin)
+      description: |
+        Response times of the api's HTTP requests (not turns: see `/v1/admin/timings/summary`).
+        Each request's time is counted in Redis, in a time bucket, per route and status class:
+        per 5 minutes (kept 2 hours) and per hour (kept 8 days). Nothing is written to the
+        database per request.
+
+        `window` is the last hour (read from 5-minute slots), the last 24 hours or the last 7
+        days (hourly slots). The current slot is included, so the window reaches back up to one
+        slot further; `since` is the start of the oldest slot read.
+
+        A route is the method and the route pattern, never the address with ids, e.g.
+        `GET /v1/conversations/:conversationId`; `GET (no route)` holds unknown addresses and
+        requests refused before routing. The health check and `/metrics` are not counted.
+        Percentiles are estimated from the buckets and are accurate to one bucket (at most about
+        a third of the value, usually much closer); `maxMs` is exact. The time is until the
+        answer starts: for the live stream, until the stream opens. `overall` is every request
+        together. Routes are sorted by p95, slowest first. Never a user, an address or a query.
+      parameters:
+        - name: window
+          in: query
+          required: false
+          schema: { type: string, enum: ["1h", "24h", "7d"], default: "24h" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [window, since, until, overall, routes]
+                properties:
+                  window: { type: string, enum: ["1h", "24h", "7d"] }
+                  since: { type: string, format: date-time, description: Start of the oldest slot read }
+                  until: { type: string, format: date-time, description: When the answer was made }
+                  overall: { $ref: "#/components/schemas/AdminRouteTimes" }
+                  routes:
+                    type: array
+                    items: { $ref: "#/components/schemas/AdminRouteTimes" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   /v1/admin/config:
     get:
       operationId: adminGetConfig
@@ -2959,11 +3014,12 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
-  # ---------------------------------------------------------------- admin: accounts (role, suspend, delete, sign out)
+  # ---------------------------------------------------------------- admin: accounts (role, suspend, delete, sign out, onboarding)
   # Every call here needs a `reason` and writes one activity-log row for the user with the admin's
   # id and that reason (the reason stays in the row's details; the user's own activity list shows
   # only a neutral summary). An admin can't act on their own account this way, and an admin must
-  # lose the admin role before they can be suspended or deleted.
+  # lose the admin role before they can be suspended or deleted. Showing the welcome steps again
+  # (`onboarding/reset`) is harmless, so it is allowed on any account, an admin's own too.
   /v1/admin/users/{userId}/role:
     put:
       operationId: adminSetUserRole
@@ -3179,6 +3235,52 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/admin/users/{userId}/onboarding/reset:
+    post:
+      operationId: adminResetUserOnboarding
+      tags: [admin]
+      summary: Show a user the welcome steps and the "Getting started" checklist again (admin)
+      description: |
+        Clears the user's two first-run marks, `onboardingCompletedAt` and
+        `gettingStartedDismissedAt` (see `Me`). The web app then shows the welcome steps on the
+        user's next visit, and the "Getting started" checklist while any of its steps is left.
+        Nothing else changes. Allowed on any account that is not deleted, an admin's own too. When
+        both marks are already empty, nothing changes and no log row is written (`changed: false`).
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              additionalProperties: false
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500, pattern: "\\S" }
+      responses:
+        "200":
+          description: Both marks are empty now
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [userId, onboardingCompletedAt, gettingStartedDismissedAt, changed]
+                properties:
+                  userId: { type: string }
+                  onboardingCompletedAt: { type: "null" }
+                  gettingStartedDismissedAt: { type: "null" }
+                  changed:
+                    type: boolean
+                    description: False when both marks were already empty.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /v1/admin/users/{userId}:
     get:
@@ -3575,7 +3677,19 @@ components:
 
     Me:
       type: object
-      required: [id, email, emailVerified, name, timezone, timezoneSet, plan, role, credits, createdAt]
+      required:
+        - id
+        - email
+        - emailVerified
+        - name
+        - timezone
+        - timezoneSet
+        - plan
+        - role
+        - credits
+        - createdAt
+        - onboardingCompletedAt
+        - gettingStartedDismissedAt
       properties:
         id: { type: string }
         email: { type: string, format: email }
@@ -3598,12 +3712,41 @@ components:
             balance: { type: integer }
             nextExpiry: { type: [string, "null"], format: date-time }
         createdAt: { type: string, format: date-time }
+        onboardingCompletedAt:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            When the user finished or skipped the web app's welcome steps. Null means not yet, so
+            the web app shows them. Every account starts with null, and so did the accounts made
+            before this field existed: they see the welcome steps once too. Set with
+            `PATCH /v1/me` `onboardingCompleted: true`; cleared with `false` (to see them again,
+            from Settings) or by an admin.
+        gettingStartedDismissedAt:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            When the user closed the "Getting started" checklist. Null means it may still show.
+            The web app also hides it by itself once every step is done, worked out from the
+            account's real data; the backend does not track the steps. Set with `PATCH /v1/me`
+            `gettingStartedDismissed: true`; cleared with `false` or by an admin.
 
     MeUpdate:
       type: object
       properties:
         name: { type: string, maxLength: 80 }
         timezone: { type: string }
+        onboardingCompleted:
+          type: boolean
+          description: |
+            `true`: the welcome steps are done (finished or skipped). Sets `onboardingCompletedAt`
+            to now; if it is already set, the first time is kept. `false`: clears it, so the web
+            app shows the welcome steps again.
+        gettingStartedDismissed:
+          type: boolean
+          description: |
+            `true`: the user closed the "Getting started" checklist. Sets
+            `gettingStartedDismissedAt` to now; if it is already set, the first time is kept.
+            `false`: clears it, so the checklist may show again.
 
     ChannelLink:
       type: object
@@ -4790,6 +4933,25 @@ components:
             properties:
               name: { type: string, examples: [queue, route, wake, work] }
               ms: { type: integer }
+
+    AdminRouteTimes:
+      type: object
+      description: |
+        Response times of one route (or of every request, in `overall`) over the window, in
+        milliseconds. All zero when no request was counted.
+      required: [route, count, clientErrors, serverErrors, p50Ms, p95Ms, p99Ms, maxMs]
+      properties:
+        route:
+          type: string
+          description: Method and route pattern; `all` in `overall`
+          examples: ["GET /v1/conversations", "POST /mcp", "GET (no route)", all]
+        count: { type: integer, description: Requests counted }
+        clientErrors: { type: integer, description: Answers with a 4xx status }
+        serverErrors: { type: integer, description: Answers with a 5xx status }
+        p50Ms: { type: integer, description: Half the requests took at most this }
+        p95Ms: { type: integer }
+        p99Ms: { type: integer }
+        maxMs: { type: integer, description: "The slowest request (exact)" }
 
     AdminActivityEntry:
       type: object

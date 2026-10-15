@@ -18,6 +18,12 @@ export const meRoutes = [
     const updated = await updateProfile(user.id, {
       ...(body.name !== undefined ? { name: body.name } : {}),
       ...(body.timezone !== undefined ? { timezone: body.timezone } : {}),
+      ...(body.onboardingCompleted !== undefined
+        ? { onboardingCompleted: body.onboardingCompleted }
+        : {}),
+      ...(body.gettingStartedDismissed !== undefined
+        ? { gettingStartedDismissed: body.gettingStartedDismissed }
+        : {}),
     });
     return c.json(toMe(updated, await getBalanceSummary(user.id)), 200);
   }),

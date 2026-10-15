@@ -9,13 +9,14 @@ import {
   retryJob,
 } from '../../modules/admin/jobs.ts';
 import { redactDetails, scrubText } from '../../modules/admin/redact.ts';
+import { requestTimesSummary } from '../../modules/admin/request-times.ts';
 import { timingsSummary } from '../../modules/orchestrator/timings-summary.ts';
 import { badRequest } from '../../shared/errors.ts';
 import { route } from '../router.ts';
 
 // Admin only: the router adds requireAdmin for every operation tagged `admin` in the spec.
-// Operations: the job queues, the audit log, turn timings, the settings and the health of the
-// services. No secret is ever in an answer (see modules/admin/redact.ts and config-view.ts).
+// Operations: the job queues, the audit log, turn timings, the api's response times, the settings
+// and the health of the services. No secret is ever in an answer (see modules/admin/redact.ts and config-view.ts).
 
 /** Every admin action needs a reason, which goes to the audit log. */
 function reasonOf(raw: string): string {
@@ -85,6 +86,10 @@ export const adminOpsRoutes = [
 
   route('adminTimingsSummary', async (c, { query }) =>
     c.json(await timingsSummary(query.days ?? 7), 200),
+  ),
+
+  route('adminRequestTimes', async (c, { query }) =>
+    c.json(await requestTimesSummary(query.window ?? '24h'), 200),
   ),
 
   route('adminGetConfig', async (c) => c.json(await configView(), 200)),

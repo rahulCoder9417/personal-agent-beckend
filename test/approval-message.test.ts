@@ -15,7 +15,7 @@ import { handleWebMessage, sendWebMessage } from '../src/modules/orchestrator/pr
 import { DeliverKind } from '../proto-gen/vm/v1/vm_pb.ts';
 import { db } from '../src/shared/db/client.ts';
 import { wireModules } from '../src/wiring.ts';
-import { installFakeVm, type McpResult } from './fakes.ts';
+import { installFakeComposio, installFakeVm, type McpResult } from './fakes.ts';
 import { chatUser, waitFor } from './helpers.ts';
 
 describe('the question Tex asks', () => {
@@ -65,9 +65,11 @@ beforeAll(() => wireModules());
 afterAll(async () => {
   await closeQueues();
 });
-beforeEach(() => {
+beforeEach(async () => {
   vm = installFakeVm();
   vm.state.live = true;
+  // request_approval checks an app action's inputs against Composio's description of it.
+  await installFakeComposio();
 });
 
 const SUMMARY = 'Send an email to priya@acme.com with subject "Test"';

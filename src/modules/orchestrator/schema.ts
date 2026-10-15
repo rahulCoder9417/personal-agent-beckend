@@ -19,10 +19,17 @@ export const approvals = pgTable(
     summary: text().notNull(),
     app: text(),
     action: text(),
-    /** The exact arguments that were approved (run_app_action must match them). */
+    /**
+     * The exact arguments that were approved. For an app action they were checked against the
+     * action's inputs when asked, and run_app_action runs exactly these.
+     */
     arguments: jsonb().$type<Record<string, unknown>>(),
     details: jsonb().$type<Record<string, unknown>>(),
-    status: text({ enum: ['pending', 'approved', 'rejected', 'expired'] })
+    /**
+     * `replaced`: the agent asked again for the same action with corrected arguments, naming this
+     * one (request_approval's replaces_approval_id). It can no longer be answered or run.
+     */
+    status: text({ enum: ['pending', 'approved', 'rejected', 'expired', 'replaced'] })
       .notNull()
       .default('pending'),
     sessionKey: text().notNull(),

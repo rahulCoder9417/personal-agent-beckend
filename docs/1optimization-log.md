@@ -48,6 +48,37 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 15 October 2026: a trial switch, so only some users connect through our own Google sign-in app
+
+- **Where it is:** on the branch `feat/composio-own-google-app`, waiting for review. Not on `main`, not on the test server.
+- **Why:** when someone connects a Google app, Google's screen says "continue to Composio". To make it say Textcrew, each Google app needs our own sign-in app at Google. Google must review that app first. While it does, at most 100 people can ever use it, and each of them sees a "Google hasn't verified this app" warning. Until now an app had one setup for everyone, and there is only one server. So there was no way to let you and a few testers try our own sign-in app while everyone else stays on Composio's.
+- **What the user notices:** nothing, until the two new settings are filled in. Then:
+  - a user named in the trial list connects that app through our own sign-in app. Google's screen names Textcrew, and there is no Composio page on the way;
+  - everyone else connects as before;
+  - an app with only a trial setup shows a **Connect** button to trial users and "Not available yet" to everyone else.
+- **Backend:**
+  - **Two new settings.** `COMPOSIO_TRIAL_AUTH_CONFIGS` names a second setup per app, written like `COMPOSIO_AUTH_CONFIGS`, for example `{"googlecalendar":"ac_…"}`. `COMPOSIO_TRIAL_USERS` names who gets it: user ids, or email addresses, separated by commas.
+  - **An email counts only once it is verified.** Otherwise anyone could sign up with your address and be let in.
+  - **For a trial user, the trial setup comes first,** before every other setup of that app. Plan limits still apply first: a Free user gets no Pro app this way.
+  - **Both settings are checked when the api and the worker start.** A damaged value stops the start and says what is wrong: not JSON, not an app name, an id that doesn't start with `ac_`, or something that is neither a user id nor an email. The older `COMPOSIO_AUTH_CONFIGS` quietly turns every app off when damaged; this one cannot.
+  - **The ops script's `apps` command** shows a trial user's setup as coming from `COMPOSIO_TRIAL_AUTH_CONFIGS`.
+- **Cost and speed:** with no trial users, nothing changes. With some, one quick read of the user (from the short-lived copy) when the app list is shown or an app is connected, and only when the list holds an email.
+- **Contracts:** none. `openapi.yaml` and `vm.proto` did not change.
+- **Database:** none.
+- **How it was checked:**
+  - New tests (9), in `test/composio-trial.test.ts`:
+    - the two settings are read, and every kind of damaged value stops the start with its reason;
+    - a user named by verified email or by id is a trial user; an unverified email or anyone else is not;
+    - a trial user connects straight to the provider with the trial setup, while another user gets the usual shared setup;
+    - for a trial user, the trial setup wins over `COMPOSIO_AUTH_CONFIGS`, and other apps are untouched;
+    - an app with only a trial setup can be connected by trial users only, and nothing is made at Composio;
+    - plan limits still come first.
+  - Lint and the type check pass. The full backend run: 864 of 864 tests pass. One run before that had a single failure in `test/turn-billing.test.ts`, a test this change doesn't touch; it passed three times on its own, and the full run again after that.
+  - Not yet run on the server.
+- **Still open:** filling in the two settings is yours, once our own Google sign-in app exists. `composio.md`, section 9, has the steps.
+- **Docs updated:** see the docs entry for this branch, above.
+- **Commits:** `af46692`.
+
 ### 15 October 2026: sign-in moves to Clerk's production setup, with Textcrew's own Google sign-in
 
 - **Where it is:** live on the test server and the web app since 15 October.

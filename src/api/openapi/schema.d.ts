@@ -2258,10 +2258,9 @@ export interface components {
             /**
              * Format: date-time
              * @description When the user closed the "Getting started" checklist. Null means it may still show.
-             *     The web app also hides it by itself once every step is done, worked out from the real
-             *     data (a linked chat, a connected app, and so on); the backend does not track the
-             *     steps. Set with `PATCH /v1/me` `gettingStartedDismissed: true`; cleared with `false`
-             *     or by an admin.
+             *     The web app also hides it by itself once every step is done, worked out from the
+             *     account's real data; the backend does not track the steps. Set with `PATCH /v1/me`
+             *     `gettingStartedDismissed: true`; cleared with `false` or by an admin.
              */
             gettingStartedDismissedAt: string | null;
         };

@@ -343,6 +343,23 @@ This section follows a new person from sign-up to an account with credits and a 
 - **Clerk reports a deletion.** The account is marked deleted and a delete job runs. It removes the container and its data, the LiteLLM key, app connections, automations, linked chats, conversations, messages, files and memories. It also stops the subscription from renewing.
 - **An admin deletes the account.** The admin tool deletes the user in Clerk, marks the account deleted and adds the same delete job. Clerk's deletion webhook then finds nothing left to do (section 31).
 
+### The first visit to the web app
+
+The web app greets a new user with a few welcome steps, then shows a "Getting started" checklist on its home page. The backend keeps two marks on the user's row in `users`, so this happens once for the account, on any device and any browser.
+
+| Mark | Empty means | Set when |
+|---|---|---|
+| `onboardingCompletedAt` | The welcome steps were not finished or skipped yet, so the web app shows them | The user finishes or skips them |
+| `gettingStartedDismissedAt` | The checklist may still show | The user closes it |
+
+- Both are in `GET /v1/me`. The web app sets one with `PATCH /v1/me`, sending `onboardingCompleted: true` or `gettingStartedDismissed: true`. The time is now; if the mark is already set, the first time is kept.
+- Sending `false` clears a mark. Settings uses this to show the welcome steps again.
+- The backend does not track the checklist's steps. The web app works them out from the account's real data and hides the checklist by itself once every step is done.
+- Every account starts with both marks empty. So do the accounts made before the marks existed (15 October 2026): the database update added the two columns and filled nothing in. The users we already have see the welcome steps once on their next visit, like a new user.
+- An admin can clear both marks for one user (section 31).
+
+Example: Priya signs up on her laptop and skips the welcome steps. The next day she opens the app on her phone and lands straight on the home page, because the mark is on her account, not in the browser.
+
 ### What can go wrong
 
 - **LiteLLM or the vm-manager is down.** The onboarding job fails and is retried. Steps that are already done are skipped.
@@ -2037,7 +2054,7 @@ Example: a user has a connected Claude plan and a saved OpenAI key. With Claude 
 
 ## 31. Admin tools
 
-Admin tools are for the founder and trusted staff. They hand out free credits, correct balances, show what failed and show how the running system is doing. They act on accounts: the role, a suspension, a deletion, signing a user out. They also let support look at one user's agent and container and put it right.
+Admin tools are for the founder and trusted staff. They hand out free credits, correct balances, show what failed and show how the running system is doing. They act on accounts: the role, a suspension, a deletion, signing a user out, showing the welcome steps again. They also let support look at one user's agent and container and put it right.
 
 Only a user with the role admin may use them. The role is set in Clerk, the sign-in service, in the user's public metadata. The backend copies it when Clerk sends the user's data. Anyone else gets "Admins only".
 
@@ -2060,6 +2077,7 @@ The admin panel is where admins use these tools: a web app of its own, apart fro
 | Suspend, unsuspend | Puts an account on hold, or lifts the hold | `/v1/admin/users/{id}/suspend`, `/unsuspend` |
 | Delete an account | Deletes the account, as the user's own deletion does | `/v1/admin/users/{id}` |
 | Sign out everywhere | Ends every sign-in session of the user | `/v1/admin/users/{id}/sessions/revoke` |
+| Show the welcome steps again | Clears the user's two first-run marks, so the web app shows the welcome steps and the "Getting started" checklist again | `/v1/admin/users/{id}/onboarding/reset` |
 | One user's apps | Lists each connection; disconnects one, or asks Composio about it again | `/v1/admin/users/{id}/apps` |
 | One user's chats | Lists the linked chats, with the chat id masked; unlinks one | `/v1/admin/users/{id}/channels` |
 | One user's automations | Lists every automation; pauses, resumes or deletes any one | `/v1/admin/users/{id}/automations`, `/v1/admin/automations/{id}` |
@@ -2247,8 +2265,8 @@ Example: Composio's key was replaced and the old one is still in the settings. T
 
 - **A reason is required.** Each call carries a short reason. A blank one is refused.
 - **Each is in the activity log.** One row for the user, with the admin's id and the reason. The user's own activity list shows only a plain line, such as "An admin suspended this account". The reason stays out of it.
-- **Not on yourself, not on an admin.** An admin cannot remove their own admin role, suspend themselves or delete themselves. Another admin can be suspended or deleted only after their admin role is taken away. These answer "conflict" and change nothing.
-- **Twice is safe.** Setting the role a user already has, suspending a suspended account, or lifting a suspension that is not there changes nothing and writes no second row.
+- **Not on yourself, not on an admin.** An admin cannot remove their own admin role, suspend themselves or delete themselves. Another admin can be suspended or deleted only after their admin role is taken away. These answer "conflict" and change nothing. Showing the welcome steps again is the exception: it is harmless, so it works on any account, an admin's own too.
+- **Twice is safe.** Setting the role a user already has, suspending a suspended account, lifting a suspension that is not there, or showing the welcome steps again to a user whose two marks are already empty changes nothing and writes no second row.
 
 ### Changing the role
 
@@ -2292,6 +2310,16 @@ The activity-log row keeps the admin's id, the deleted user's id and the reason.
 ### Signing a user out everywhere
 
 The backend asks Clerk to end every active session of the user. The answer says how many were ended. A session token the browser already holds still works until it expires, about one minute, because the api checks tokens without asking Clerk each time. After that the user must sign in again. This does not suspend the account.
+
+### Showing the welcome steps again
+
+The admin sends a reason. The backend clears the user's two first-run marks (section 6, "The first visit to the web app"). On the user's next visit the web app shows the welcome steps, then the "Getting started" checklist while any of its steps is left. Nothing else changes: not the plan, the credits, the chats or the apps.
+
+- The activity log gets one row: "An admin set this account to show the welcome steps again". Its details keep the admin's id, the reason and the two times that were cleared. The user's own activity list shows only that line.
+- When both marks are already empty, nothing changes and no row is written. The answer says `changed: false`.
+- A deleted account answers "not found".
+
+Example: Ravi skipped the welcome steps and later asks support for a tour of the app. The founder shows him the welcome steps again with the reason "asked for the tour". His next visit starts with them.
 
 ### The overview
 
@@ -2825,7 +2853,7 @@ There are three databases: the backend's, the vm-manager's and LiteLLM's. Each p
 
 | Module | Table | What it holds |
 |---|---|---|
-| auth | `users` | One row per person: email, name, time zone and whether anyone set it, plan, role, and whether an admin suspended the account (and since when) |
+| auth | `users` | One row per person: email, name, time zone and whether anyone set it, plan, role, whether an admin suspended the account (and since when), and the web app's two first-run marks: when the welcome steps were done and when the "Getting started" checklist was closed (section 6) |
 | auth | `link_codes` | One-time codes to link a chat app, stored as hashes, with an expiry |
 | auth | `channel_links` | Which chat belongs to which user |
 | auth | `waitlist_entries` | People waiting for access, with request details for abuse checks |
@@ -2868,7 +2896,7 @@ This section says what the web app can do through the api, group by group. Almos
 
 | Group | What it lets the app do |
 |---|---|
-| Profile | Read the user's name, plan and credit summary, and whether a time zone was ever set. Change the name and time zone. The app sets the time zone from the browser once, while nobody has set one |
+| Profile | Read the user's name, plan and credit summary, whether a time zone was ever set, and the two first-run marks (welcome steps done, checklist closed). Change the name and time zone, and set or clear the marks. The app sets the time zone from the browser once, while nobody has set one |
 | Channels and linking | See linked chat apps and which channels are on. Get a one-time code to link Telegram. Unlink a chat |
 | Chat and the live stream | List the conversations, with the Automations chat apart if asked. Start a new web conversation, open an earlier one, rename or delete one (the Automations chat keeps its name and cannot be deleted). Read the messages of one conversation, or of all. Send a message into the active web conversation or into one the app names. Upload a file up to 10 MB. Keep a live stream open |
 | Approvals | List approvals, the waiting ones by default. Approve or reject one |
@@ -2886,7 +2914,7 @@ This section says what the web app can do through the api, group by group. Almos
 | Coupons | Redeem a coupon code |
 | Activity | Read the log of what the agent did |
 | Waitlist | Join the waitlist. The answer is always the same, so nobody can test an email |
-| Admin | See the platform's numbers at a glance. List and search users, and open one user's details (counts and metadata, never their messages). Set a user's plan by hand. Manage coupons, adjust a user's credits, see free-credit totals, and handle the waitlist. For one user: see their app connections, linked chats and automations; disconnect or recheck an app, unlink a chat, pause, resume or delete an automation, each with a reason. See each app in numbers. See one user's agent and container, stop or wake it, reset its settings, and list or cancel the user's approvals and crew jobs. See the jobs in each queue, run a failed one once more or remove a failed or finished one, with a reason. Read the audit log of every user. See where turns spend their time. Read the settings in use (secrets only as set or not) and check that each service answers. Change a user's role, suspend an account or lift the suspension, delete an account, and sign a user out everywhere |
+| Admin | See the platform's numbers at a glance. List and search users, and open one user's details (counts and metadata, never their messages). Set a user's plan by hand. Manage coupons, adjust a user's credits, see free-credit totals, and handle the waitlist. For one user: see their app connections, linked chats and automations; disconnect or recheck an app, unlink a chat, pause, resume or delete an automation, each with a reason. See each app in numbers. See one user's agent and container, stop or wake it, reset its settings, and list or cancel the user's approvals and crew jobs. See the jobs in each queue, run a failed one once more or remove a failed or finished one, with a reason. Read the audit log of every user. See where turns spend their time. Read the settings in use (secrets only as set or not) and check that each service answers. Change a user's role, suspend an account or lift the suspension, delete an account, sign a user out everywhere, and show a user the welcome steps again |
 
 The live stream pushes new messages, message status, conversation changes, approvals, the agent's state, progress lines and credit changes. Long lists come in pages of 30 by default, and 100 at most. Every error has the same shape: a code, a message, and sometimes details. While an admin has suspended an account, every signed-in call of that user answers 403 with the code `account_suspended`. Some addresses are not for the web app. Webhooks are for outside services. `/oauth/callback` is the way back from an app's sign-in, for a provider to send the browser to. `/mcp` and `/git` are for containers only. `/metrics` is for monitoring. Admins also have a page that shows the job queues. The admin panel, a web app of its own, uses only the admin calls and "who is signed in" (section 31).
 

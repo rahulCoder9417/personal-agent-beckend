@@ -48,6 +48,32 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 15 October 2026: the web app's first-run marks (welcome steps and "Getting started")
+
+- **Where it is:** on `main`, not yet on the server. Its database update runs on Neon at the next deploy (`deploy.sh` runs the migrations before it starts the new api and worker).
+- **Why:** the web app is getting a first-time onboarding: a few welcome steps, then a "Getting started" checklist on its home page. You wanted whether a user has been through it kept in the database, not in the browser, and both users we already have to get the onboarding too.
+- **What the user notices:** nothing from the backend alone. Once the web app uses it, a new user sees the welcome steps once, on any device. The two users we already have see them on their next visit, exactly like a new user.
+- **Backend:**
+  - **Two marks on each account.** When the welcome steps were finished or skipped, and when the checklist was closed. Both are in `GET /v1/me`; empty means "not yet", so the web app shows the welcome steps, or may show the checklist.
+  - **Setting and clearing them.** `PATCH /v1/me` takes two new yes-or-no fields. Yes stamps the time now; if the mark is already set, the first time is kept. No clears it, so Settings can show the welcome steps again. Only the signed-in user's own row changes.
+  - **The checklist's steps are not tracked here.** The web app works them out from the account's real data and hides the checklist by itself once all are done.
+  - **A new admin tool: show the welcome steps again.** Admins only, with a reason, like the other account tools. It clears both marks for one user and writes one activity-log row with the admin's id, the reason and the two times it cleared. When both are already empty it changes nothing and writes no row. Unlike the other account tools it also works on an admin's own account, because it is harmless.
+  - The marks live on the `users` table, which the auth module owns. The admin tool changes them through the auth module's own function, the same one `PATCH /v1/me` uses.
+- **Cost and speed:** two more columns on a row that is read anyway: `GET /v1/me` makes no extra query, and `PATCH /v1/me` is still one update. No new job, no Redis. Not measured.
+- **Contracts:** `openapi.yaml` changed. `Me` gains `onboardingCompletedAt` and `gettingStartedDismissedAt` (always present, empty or a time). `MeUpdate` gains `onboardingCompleted` and `gettingStartedDismissed` (optional, true or false). New: `POST /v1/admin/users/{userId}/onboarding/reset` (`adminResetUserOnboarding`). The web app has to follow to use them: it needs the new contract copied in. Until then it works as before, since the new fields are only extra. `vm.proto` did not change.
+- **Database:** two new columns on `users`: `onboarding_completed_at` and `getting_started_dismissed_at`, both a time that may be empty (database update `0023_onboarding_marks`). No backfill, on purpose: every existing row stays empty, so the users who signed up before this change see the onboarding on their next visit, exactly like new users. The update's own comment says so.
+- **How it was checked:**
+  - New tests (11), in one new file: a new user has both marks empty; an account made before the change has both empty after the update (the test puts the table back as it was, adds an account the old way, then runs the update file itself, and checks the file has no default and no backfill); yes sets the time, a second yes keeps the first time, no clears it, yes after a clear gives a new time; each mark works on its own and leaving one out keeps it; one user's calls never touch another user's marks; a value that is not yes or no is refused. For the admin tool: 403 in the error shape for a user who is not an admin (also on their own account) and 401 without a session, with nothing changed and nothing logged; it clears both marks and writes one row, the user's own activity list shows the plain line without the reason, a second call writes nothing; one mark set is enough, and an admin may do it on their own account; a missing or blank reason is 400, an unknown or deleted account 404.
+  - Lint, the type check and the contract check pass. The full backend run: 798 of 800 tests pass. The 2 that failed are timing tests in parts this change does not touch: one crew-jobs test and one Jev routing test each saw one extra container stop or wake from another test's user while the whole run was busy. Run alone, both files pass (14 of 14 and 10 of 10). A first full run was spoiled by a full `/tmp` on the laptop (the test database could not be created for 16 files); the second run kept the test database's files on the main disk.
+  - Not yet run on the server.
+- **Still open:**
+  - The web app's screens (the welcome steps, the checklist, the Settings button) are the web app's own work.
+  - The admin panel has no button for the new admin tool yet.
+  - `pnpm openapi:sync` still copies the contract to `../user-frontend/ignore/`, a folder that no longer exists: the web app now lives in `user-frontend-web` and keeps its copies in `openapi/` and `ignore/`. It was not run and not changed. The web app's copy has to be updated by hand, or the script pointed at the new folder; your call.
+  - The admin's page for one user does not show the two marks. Easy to add if you want it.
+- **Docs updated:** `backend-report.md` section 6 (new part "The first visit to the web app"), section 31 (the opening lines, the table, the shared rules and a new part "Showing the welcome steps again"), section 40 (the `users` row) and section 41 (the Profile and Admin rows); `hld-mvp.md` section 5.1 (a paragraph on the first visit).
+- **Commits:** `618f470` (the marks on `/v1/me`), `d4ffb5a` (the admin tool), and the docs commit that adds this entry.
+
 ### 15 October 2026: request logs and response times per route
 
 - **Where it is:** on `main`, not yet on the server.

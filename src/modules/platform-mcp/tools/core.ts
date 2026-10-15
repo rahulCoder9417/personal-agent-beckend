@@ -3,6 +3,7 @@ import { isChannelEnabled } from '../../../shared/config.ts';
 import { recordCrewJobReport } from '../../automations/crew-jobs.ts';
 import { getActiveUser } from '../../auth/users.ts';
 import { ownsChat } from '../../auth/links.ts';
+import { getConversation } from '../../channels/conversations.ts';
 import { lastInboundSession } from '../../channels/messages.ts';
 import { queueOutbound } from '../../channels/outbound.ts';
 import { parseSessionKey } from '../../channels/types.ts';
@@ -23,6 +24,20 @@ export async function resolveSession(userId: string, sessionKey?: string): Promi
   return key;
 }
 
+/**
+ * What a message to `sessionKey` is saved with during a turn in that chat (`turnMessageFields`),
+ * and, with `read`, the row of the turn's conversation (null: it is gone), so saving the message
+ * does not read it again. Without `read`, `known` is left out and it is read there.
+ */
+async function turnFields(userId: string, sessionKey: string, read = true) {
+  const fields = await turnMessageFields(userId, sessionKey);
+  const known =
+    read && fields.conversationId
+      ? ((await getConversation(userId, fields.conversationId)) ?? null)
+      : undefined;
+  return { fields, known };
+}
+
 /** Other modules add fields (connected apps) to get_profile. */
 type ProfileExtender = (userId: string) => Promise<Record<string, unknown>>;
 const profileExtenders: ProfileExtender[] = [];
@@ -40,16 +55,29 @@ defineTool({
     session_key: z.string().optional(),
   },
   async run({ userId }, args) {
-    const sessionKey = await resolveSession(userId, args.session_key);
-    const msg = await queueOutbound({
-      userId,
-      sessionKey,
-      text: args.text,
-      // Sent during a turn in this chat: it belongs to the turn's conversation, with the turn's id.
-      ...(await turnMessageFields(userId, sessionKey)),
-    });
-    // During a crew job's turn this is the lead's final answer: the job's report.
-    await recordCrewJobReport(userId, sessionKey, args.text);
+    // Two reads at once, one round trip instead of two (the Bridge always names the chat): may
+    // the agent write to this chat, and the conversation of the turn in progress there. Both only
+    // read: nothing is saved before the chat is known to be the user's own.
+    const asked = args.session_key || undefined;
+    const [sessionKey, early] = await Promise.all([
+      resolveSession(userId, asked),
+      asked ? turnFields(userId, asked) : undefined,
+    ]);
+    // Sent during a turn in this chat: it belongs to the turn's conversation, with the turn's id.
+    const turn =
+      early && sessionKey === asked ? early : await turnFields(userId, sessionKey, false);
+    const [msg] = await Promise.all([
+      queueOutbound({
+        userId,
+        sessionKey,
+        text: args.text,
+        ...turn.fields,
+        ...(turn.known !== undefined ? { knownConversation: turn.known } : {}),
+      }),
+      // During a crew job's turn this is the lead's final answer: the job's report. Saved beside
+      // the message, as nothing in one depends on the other.
+      recordCrewJobReport(userId, sessionKey, args.text),
+    ]);
     return { message_id: msg.id, status: 'queued' };
   },
   summarize: (args) => `Sent a message (${args.text.length} chars)`,

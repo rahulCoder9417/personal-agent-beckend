@@ -5,6 +5,7 @@ import {
   activeConversation,
   cleanupEmptyConversations,
   deleteUserConversations,
+  findActiveConversation,
   noteMessage,
 } from './conversations.ts';
 import { messages, type MediaRef } from './schema.ts';
@@ -54,12 +55,17 @@ export async function saveInbound(input: {
   sessionKey: string;
   externalId?: string;
 }): Promise<MessageRow> {
-  const [existing] = await db()
-    .select()
-    .from(messages)
-    .where(and(eq(messages.eventId, input.eventId), eq(messages.direction, 'in')));
+  // Two reads at once (one round trip, not two): whether an earlier attempt saved it already, and
+  // the chat's active conversation. Both only read; a chat with no conversation yet gets one below.
+  const [[existing], active] = await Promise.all([
+    db()
+      .select()
+      .from(messages)
+      .where(and(eq(messages.eventId, input.eventId), eq(messages.direction, 'in'))),
+    findActiveConversation(input.userId, input.sessionKey),
+  ]);
   if (existing) return existing;
-  const conversation = await activeConversation(input.userId, input.sessionKey);
+  const conversation = active ?? (await activeConversation(input.userId, input.sessionKey));
   const [row] = await db()
     .insert(messages)
     .values({

@@ -80,8 +80,31 @@ export async function handleProcessMessage(job: Job): Promise<unknown> {
     await handleUnlinked(msg, eventId);
     return IGNORED;
   }
-  await touchInbound(link.id);
-  const userId = link.userId;
+  // The chat wrote: its last-inbound time, and its "blocked" mark is cleared. Nothing before the
+  // turn reads them, so the write runs beside the steps below: one round trip to the database
+  // fewer before the agent gets the message. The turn starts only once it is saved (an agent's
+  // reply checks the blocked mark), and every path waits for it, so a failed write still fails
+  // the job, which then runs again (every step is safe to re-run).
+  const touched = touchInbound(link.id);
+  touched.catch(() => {}); // awaited below, on every path
+  let result: unknown;
+  try {
+    result = await linkedMessage(msg, link.userId, eventId, touched);
+  } catch (err) {
+    await touched.catch(() => {});
+    throw err;
+  }
+  await touched;
+  return result;
+}
+
+/** A message from a linked chat: the special cases, else it is saved and goes to the agent. */
+async function linkedMessage(
+  msg: InboundMessage,
+  userId: string,
+  eventId: string,
+  touched: Promise<void>,
+): Promise<unknown> {
   const sessionKey = sessionKeyFor(msg.channel, msg.externalChatId);
   if (await isSuspended(userId)) {
     await holdWhileSuspended(msg, userId, sessionKey, eventId);
@@ -122,6 +145,7 @@ export async function handleProcessMessage(job: Job): Promise<unknown> {
     externalId: msg.externalMessageId,
   });
   if (saved.status !== 'queued') return null; // already handed to the agent by an earlier attempt
+  await touched;
   await runTurn({
     userId,
     deliveryId: eventId,

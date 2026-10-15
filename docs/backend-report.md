@@ -2378,6 +2378,8 @@ Each number is asked of the module that owns its table (section 2). When the vm-
 
 **The list** shows every account, newest first, in pages of 30, deleted and suspended ones too. Search looks for part of an email or a name, in any letter case, or a whole user id. A `%` or `_` typed in the search is a letter, not a wildcard. For each user: the email, the name, the time zone, the plan, the role, active, suspended or deleted, the chargeback mark, when they joined, when they last sent a message, the balance, the engine they chose, the kinds of chat linked (never a chat id or number) and how many app connections are active.
 
+The list and one user's page also show the two first-run marks, with the same meaning as in `GET /v1/me` (section 6): when the welcome steps were finished or skipped, and when the "Getting started" checklist was closed, each empty when not yet. "Showing the welcome steps again" above clears both.
+
 The balance is worked out from the grants, the same way as everywhere else (section 23). No balance number is stored for it.
 
 **One user's page** adds, in one call:

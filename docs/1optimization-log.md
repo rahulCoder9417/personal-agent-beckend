@@ -48,6 +48,20 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 15 October 2026: the admin's user view shows the two first-run marks
+
+- **Where it is:** on `main`, not yet on the server.
+- **Why:** the entry "the web app's first-run marks" below left this open: an admin could clear a user's welcome-steps and checklist marks, but could not see them.
+- **What the user notices:** nothing. An admin now sees, in the user list and on one user's page, when the user finished or skipped the welcome steps and when they closed the "Getting started" checklist, or that they have not yet.
+- **Backend:** the admin's user view adds the two marks, read from the user's row that the admin module already gets through the auth module's own functions. No new query.
+- **Cost and speed:** none; the row was read anyway. Not measured.
+- **Contracts:** `openapi.yaml` changed. `AdminUser` (used by `GET /v1/admin/users` and inside `GET /v1/admin/users/{userId}`) gains `onboardingCompletedAt` and `gettingStartedDismissedAt`, always present, empty or a time, with the same meaning as on `Me`. The admin panel has to copy in the new contract to show them; until then it works as before. `vm.proto` did not change.
+- **Database:** none.
+- **How it was checked:** two new tests. An admin sees both marks empty for a new user, in the list and on the user's page; the same time the user's own `/v1/me` shows once the user sets each mark; both empty again after the admin's reset. A user who is not an admin still gets 403 in the error shape, with no marks in it. One older admin test now expects the two empty marks. Lint, the type check and the contract check pass; the full backend run passed 848 of 848 tests. Not yet run on the server.
+- **Still open:** the admin panel's screens do not show the marks yet.
+- **Docs updated:** `backend-report.md` section 31, part "Users and one user's page" (one paragraph).
+- **Commits:** `fa98a9c` (the contract), `e5ff808` (the admin view and tests), and the docs commit that adds this entry.
+
 ### 15 October 2026: pages and replies wait for fewer trips to the database
 
 - **Where it is:** on `main`, not yet on the server. Its database update (`0024_messages_event_id`, one index) runs on Neon at the next deploy.

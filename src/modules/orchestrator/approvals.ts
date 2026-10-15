@@ -8,6 +8,7 @@ import { conversationOfApproval } from '../channels/messages.ts';
 import { queueOutbound } from '../channels/outbound.ts';
 import { publish } from '../channels/stream.ts';
 import type { InboundMessage } from '../channels/types.ts';
+import { whileTyping } from '../channels/typing.ts';
 import { ingestEvent } from '../events/intake.ts';
 import { IGNORED } from '../../worker/ignored.ts';
 import { APPROVE_TITLE, approvalAskText, channelOfSession, DENY_TITLE } from './approval-text.ts';
@@ -193,19 +194,22 @@ export async function handleProcessApproval(job: Job): Promise<unknown> {
   // The answer goes back to the conversation the question was asked in, not to whichever one is
   // active now: that is where the agent is waiting for it.
   const conversationId = await conversationOfApproval(userId, a.id);
-  await runTurn({
-    userId,
-    deliveryId: eventId,
-    kind: 'approval_answer',
-    sessionKey: a.sessionKey,
-    channel: parsedChannel,
-    ...(conversationId ? { conversationId } : {}),
-    text:
-      a.status === 'approved'
-        ? `The user APPROVED: ${a.summary}. Go ahead (call ${toolFor(a)} with approval_id "${a.id}").`
-        : `The user REJECTED: ${a.summary}. Don't do it. Tell them in one short sentence that you won't.`,
-    approval: { id: a.id, approved: a.status === 'approved' },
-  });
+  // The agent goes on in the chat the question was asked in: "typing…" there (Telegram) meanwhile.
+  await whileTyping(a.sessionKey, () =>
+    runTurn({
+      userId,
+      deliveryId: eventId,
+      kind: 'approval_answer',
+      sessionKey: a.sessionKey,
+      channel: parsedChannel,
+      ...(conversationId ? { conversationId } : {}),
+      text:
+        a.status === 'approved'
+          ? `The user APPROVED: ${a.summary}. Go ahead (call ${toolFor(a)} with approval_id "${a.id}").`
+          : `The user REJECTED: ${a.summary}. Don't do it. Tell them in one short sentence that you won't.`,
+      approval: { id: a.id, approved: a.status === 'approved' },
+    }),
+  );
   return null;
 }
 

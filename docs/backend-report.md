@@ -267,6 +267,14 @@ What this means, measured with every query made to wait 260 ms and every new con
 
 The last row comes from moving the billing of each turn out of the turn, into a job of its own that runs after the user's lock is free (section 25). Before, the turn charged its credits itself while it still held the lock: 12 trips of the 19 it made after the reply.
 
+**A Telegram message waits for fewer trips (15 October, evening).** Saving it, the turn's first reads, the agent's answer and its send each wait for fewer trips one after another (sections 9 and 10), and the chat shows "typing…" meanwhile. Measured the same way, from the moment Telegram calls the webhook, with the AI and the container taking no time:
+
+| | Before | After |
+|---|---|---|
+| The first "typing…" in the chat | none | 1.05 s |
+| The reply reaches Telegram | 5.04 s | 3.68 s |
+| The job ends | 6.09 s | 4.74 s |
+
 ### The error shape
 
 Every error looks the same: an `error` object with a `code`, a `message` and sometimes `details`.
@@ -584,7 +592,7 @@ This section follows one message through the whole system. Example: Rahul texts 
    - The text is "yes" or "no" and an approval waits in this chat: it is an approval answer.
    - The text is a coupon code: it is redeemed, and the reply shows the new balance.
 7. It downloads any files and turns voice into text.
-8. It saves the message in `messages`, once per event, in the chat's active conversation (section 8). The web app gets a live update.
+8. It saves the message in `messages`, once per event, in the chat's active conversation (section 8). The web app gets a live update. From step 7 on, the Telegram chat shows "typing…" (see "\"typing…\" in the chat" below).
 9. It checks the credits. At zero, Rahul gets an "out of credits" reply and the job ends. No container is woken.
 
 ### The routing decision
@@ -608,7 +616,8 @@ Three things run side by side, so a quick answer does not wait for each step in 
 
 - **The quick reply is written while Jev decides.** For a message of up to 200 characters, the worker asks the cheap model for its reply at the same moment it asks Jev. The reply is used only if Jev says "simple" and the model did not pass it on. Otherwise the request to the model is stopped and the reply is dropped. A longer message is rarely simple, so its quick reply is asked for only after Jev says "simple". Example: Rahul writes "hlo". Before, he waited for Jev, then for the model. Now he waits for whichever of the two is slower.
 - **The container starts waking while Jev decides.** As soon as the message is one Jev will judge, the worker starts the wake of steps 11 and 12. A task then waits for the slower of the routing and the wake, not for both. A message that turns out simple or spam leaves the container awake but idle, and the idle check stops it after 3 minutes. That awake time is charged as usual (section 24), about a third of a credit. The setting `WAKE_WHILE_ROUTING` switches this off.
-- **What the turn needs is read at once.** At the start of the turn the worker reads the conversation, whether the user has credits and the user's agent settings together, and reads the settings only once per turn. While the container wakes it reads what the agent has saved about the user and the recap of step 13 together. Only reads move earlier: each decision is still made at its place in the steps.
+- **What the turn needs is read at once.** At the start of the turn the worker reads the conversation, whether the user has credits, the user's agent settings and whether the user's container exists, all together, and reads the settings only once per turn. Once the message is known to be a task, it reads what the agent has saved about the user and which engine had the conversation (for the recap of step 13), so both come in while the container wakes. Only reads move earlier: each decision is still made at its place in the steps.
+- **A chat app's message is saved with fewer waits.** The chat's last-message time (which also clears its "blocked" mark, section 10) is written beside the next steps, not before them; the turn starts only once it is saved. Saving the message looks up "already saved?" and the chat's active conversation at once.
 
 A user whose Claude plan pays never reaches Jev: the turn goes straight to the wake.
 
@@ -629,6 +638,18 @@ A user whose Claude plan pays never reaches Jev: the turn goes straight to the w
 17. The Bridge is our small program in the container. It sends the final answer through the tool server's send tool. The tool saves the reply in the turn's conversation and adds an outbound job.
 18. After the turn, the worker adds a billing job for it to the system queue. That is a note in Redis: no trip to the database. Then it saves what Rahul's next message depends on: the message's last state and which engine now has the conversation. The event is marked `done` and the lock is given back. Rahul's next message can start now.
 19. The billing job runs on its own, a moment later. It counts what the turn used and charges Rahul's credits (section 25). The web app then gets the new balance.
+
+### "typing…" in the chat
+
+On Telegram the chat shows "typing…" under the bot's name while the agent works, so Rahul sees within about a second that his message is being handled.
+
+1. The worker sends it as soon as the message is known to be for the agent: after the special cases of step 6, before any file is downloaded.
+2. Telegram shows it for about 5 seconds, or until the bot's next message. So the worker sends it again every 4 seconds until the turn is over.
+3. Just before any message goes to the chat (section 10), the sender notes it in Redis. "typing…" then waits 6 seconds. The answer clears "typing…" in the app and the turn ends a moment later (1 to 2 seconds), so it never comes back under the answer. If the turn goes on after a message, it comes back.
+4. The agent's answer to an approval asked in a Telegram chat gets it too.
+5. It never holds up or fails a turn. A failed call is written to the log, and the next one is tried at the usual time.
+
+The setting `TELEGRAM_TYPING` turns it off (section 42). Web chat has its own signs (the agent shown as busy, the answer as it is written, section 12). WhatsApp and iMessage get no "typing…".
 
 ### What is recorded
 
@@ -683,14 +704,14 @@ Every outgoing message takes the same path, whoever wrote it: the agent, the che
 ### The path
 
 1. The message is saved in `messages` as outgoing, with the status `queued`. It goes into a conversation: the turn's own while a turn runs in that chat, else the chat's active one. A message written during a turn is saved with the turn's id, so the turn's reply can be found afterwards. The web app gets a live update.
-2. A `send-message` job is added to outbound. Its id holds the message id.
+2. A `send-message` job is added to outbound at once. Its id holds the message id. Then the conversation's last-message time is noted, for the order of the chat list. A failure there is only written to the log: the message is already on its way, and an error would make the agent send it again.
 3. The worker takes the job. If the message is no longer `queued`, it stops: the message was already sent.
 4. If the channel is switched off, the message becomes `failed` and the job ends.
 5. For a chat app, the worker first makes the text a plain message (see "Plain text for chat apps" below).
-6. The worker sends the text through the channel. On success the message becomes `sent`. The channel's own message id is saved with it.
+6. The worker sends the text through the channel. On success the message becomes `sent`. The channel's own message id is saved with it. Just before a Telegram send it notes the send, so "typing…" pauses in that chat (section 9).
 7. On failure the job is retried, 5 tries in total. After the last one the message becomes `failed`.
 
-The agent names the chat to answer in. Without a name, the reply goes to the chat the user last wrote from. An agent can write only to its own user's chats.
+The agent names the chat to answer in. Without a name, the reply goes to the chat the user last wrote from. An agent can write only to its own user's chats. The check that the chat is the user's and the read of the turn's conversation go to the database at the same time, so the agent's answer waits for one trip there instead of two.
 
 A copy of an automation's answer for Telegram takes the same path. It is marked with the message it copies, and is saved and sent once per message (section 18).
 
@@ -2571,7 +2592,7 @@ Each user has one container, named `pa-sbx-` plus the user id. Each user also ha
 4. It checks the limit on awake containers and reserves a place. The state is "waking".
 5. It makes the container again if the agent image is new, the container is missing, or the browser switch changed. The user's folder is kept.
 6. It starts the container and asks the Bridge "are you ready?" again and again, for up to 90 seconds.
-7. It writes this container's rule for the egress proxy, the only way out of a container. The state is "awake", and an awake period opens for credits.
+7. It writes this container's rule for the egress proxy, the only way out of a container. The state is "awake", and an awake period opens for credits. "Awake" and the time of last activity are written in one statement, one trip to the vm-manager's database.
 
 If the start or the ready check fails, the vm-manager makes the container again from the image and tries once more. If that fails too, the state is "broken". After a good wake, the backend checks the engine and the browser switch, and sends the right value if one differs.
 
@@ -2579,7 +2600,7 @@ Support can also wake a container from the admin tools (section 31). It is the s
 
 ### Delivering a message
 
-The backend sends `Deliver` with the message text, the chat it came from and a delivery id. The vm-manager counts the delivery as "in flight" and passes it to the Bridge. From then on nothing may stop the container. Events come back as a stream:
+The backend sends `Deliver` with the message text, the chat it came from and a delivery id. The vm-manager counts the delivery as "in flight" and passes it to the Bridge. From then on nothing may stop the container. The turn's start is written as activity at the same time, and the Bridge does not wait for that write: the delivery in flight already keeps the container awake, and the turn's end writes the activity again. Events come back as a stream:
 
 | Event | Meaning | What the backend does |
 |---|---|---|
@@ -3082,6 +3103,7 @@ This section lists the backend's settings by group. They are environment setting
 | Channels | `ENABLED_CHANNELS` | Which channels are on | Telegram and the web app |
 | | `TELEGRAM_BOT_TOKEN` | Sends messages as the bot | Nothing can be sent to Telegram |
 | | `TELEGRAM_WEBHOOK_SECRET` | Checks Telegram's webhooks | Every Telegram message is refused |
+| | `TELEGRAM_TYPING` | Shows "typing…" in a Telegram chat while the agent works on a message (section 9). `false` turns it off | On |
 | Apps | `COMPOSIO_API_KEY` | Connects apps and runs app actions | Apps cannot be connected or used |
 | | `COMPOSIO_WEBHOOK_SECRET` | Checks Composio's webhooks | App events do not arrive |
 | | `COMPOSIO_AUTH_CONFIGS` | Maps each app to its Composio setup. Our own sign-in app for an app goes here | An app without an entry can be connected only if the next setting allows it |

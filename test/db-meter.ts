@@ -16,6 +16,8 @@ export interface DbMeter {
 }
 
 const settings = { rttMs: 0, connectMs: 0 };
+/** Queries to refuse once each (failNextQuery). */
+const failing: RegExp[] = [];
 let current: DbMeter = { queries: 0, connects: 0, sql: [] };
 let startedAt = performance.now();
 let installed = false;
@@ -34,6 +36,19 @@ export function installDbMeter(): void {
   const proto = pg.Client.prototype as unknown as { query: AnyFn; connect: AnyFn };
   const query = proto.query;
   proto.query = function (this: unknown, ...args: unknown[]) {
+    const full =
+      typeof args[0] === 'string' ? args[0] : ((args[0] as { text?: string } | null)?.text ?? '');
+    const fail = failing.findIndex((p) => p.test(full));
+    if (fail >= 0) {
+      failing.splice(fail, 1);
+      const err = new Error('injected database failure');
+      const cb = typeof args[args.length - 1] === 'function' ? (args.pop() as AnyFn) : undefined;
+      if (cb) {
+        setImmediate(() => cb(err));
+        return undefined;
+      }
+      return Promise.reject(err);
+    }
     current.queries++;
     current.sql.push(`${Math.round(performance.now() - startedAt)}ms ${textOf(args[0])}`);
     if (!settings.rttMs) return query.apply(this, args);
@@ -67,6 +82,34 @@ export function setDbDelays(d: { rttMs?: number; connectMs?: number }): void {
 /** Round trips counted so far by the meter that is running (to count a part of its work). */
 export function queriesSoFar(): number {
   return current.queries;
+}
+
+/**
+ * The next query whose SQL matches `pattern` fails (once), as if the database had refused it.
+ * The query is not sent.
+ */
+export function failNextQuery(pattern: RegExp): void {
+  failing.push(pattern);
+}
+
+/**
+ * How many rounds of queries a piece of work waited for, one after another: the queries of a
+ * meter's `sql` sent within `gapMs` of the first one of their round ran at the same time and count
+ * once. Meaningful with a delay on every query (`setDbDelays`) of more than twice `gapMs`. Only
+ * the queries sent between `fromMs` and `toMs` (from the meter's start) count.
+ */
+export function roundsOf(sql: string[], gapMs: number, fromMs = 0, toMs = Infinity): number {
+  let rounds = 0;
+  let roundStart = -Infinity;
+  for (const line of sql) {
+    const at = Number(/^(\d+)ms /.exec(line)?.[1]);
+    if (!(at >= fromMs && at <= toMs)) continue;
+    if (at - roundStart > gapMs) {
+      rounds++;
+      roundStart = at;
+    }
+  }
+  return rounds;
 }
 
 /** Runs `fn` and returns what it cost: round trips, new connections and the time taken. */

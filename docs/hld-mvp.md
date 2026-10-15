@@ -171,7 +171,7 @@ Example: the user texts "email Priya the notes".
 4. The worker checks the user's credits. At zero, the user gets a short "out of credits" reply and the container is not started.
 5. The worker asks the vm-manager to wake the user's container. This takes a few seconds if it was asleep.
 6. The vm-manager hands the message to the Bridge inside the container. The Bridge gives it to the agent.
-7. The agent works. It may call tools, and Tex may hand parts to the crew. Short progress lines go to the chat. In web chat the reply also shows a few words at a time while the agent writes it; on Telegram it arrives in one piece.
+7. The agent works. It may call tools, and Tex may hand parts to the crew. In web chat short progress lines show, and the reply shows a few words at a time while the agent writes it. On Telegram the chat shows "typing…" from about a second after the message, until the reply arrives in one piece.
 8. The agent gives its final reply. The worker sends it to Telegram as a simple text message: it takes the formatting symbols out first. The saved reply keeps them, so the web app shows it with its formatting.
 9. The worker gives the user's lock back, so their next message can start at once. A separate job then counts what was used and charges credits. On the user's own Claude plan that job does not ask the AI gateway at all: the AI is not ours to charge. The time the container was awake still is.
 10. After 3 idle minutes the container stops. The user's files stay.

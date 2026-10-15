@@ -342,10 +342,27 @@ export interface SentTelegram {
   buttons?: Array<{ text: string; callback_data: string }>;
 }
 
+/** One call to the Bot API, with when it was made (`performance.now()`). */
+export interface TelegramCall {
+  method: string;
+  chatId: string;
+  /** `sendChatAction`'s action (`typing`). */
+  action?: string;
+  at: number;
+}
+
 export function installFakeTelegram() {
   const sent: SentTelegram[] = [];
+  /** Every call, in order: messages, chat actions ("typing…") and button answers. */
+  const calls: TelegramCall[] = [];
   let nextId = 1000;
   setTelegramApi(async (method, body) => {
+    calls.push({
+      method,
+      chatId: String(body.chat_id ?? ''),
+      ...(typeof body.action === 'string' ? { action: body.action } : {}),
+      at: performance.now(),
+    });
     if (method === 'sendMessage') {
       const kb = (
         body.reply_markup as
@@ -360,7 +377,7 @@ export function installFakeTelegram() {
     }
     return {};
   });
-  return { sent };
+  return { sent, calls };
 }
 
 let updateId = 1;

@@ -6,10 +6,11 @@ import { newId } from '../../shared/ids.ts';
 import { logger } from '../../shared/logger.ts';
 import { addJob } from '../events/queues.ts';
 import { sendToChat } from './adapters/index.ts';
-import { conversationFor, noteMessage } from './conversations.ts';
+import { conversationFor, noteMessage, type ConversationRow } from './conversations.ts';
 import { getMessageById, setMessageStatus, toApiMessage, type MessageRow } from './messages.ts';
 import { messages } from './schema.ts';
 import { publish } from './stream.ts';
+import { noteSendingToChat } from './typing.ts';
 import {
   parseSessionKey,
   RecipientBlockedError,
@@ -35,6 +36,11 @@ export interface OutboundInput {
    * a new Automations chat rather than the chat's active conversation.
    */
   inAutomationsChat?: boolean;
+  /**
+   * The row of `conversationId`, read already by the caller (undefined there: it is gone), so it
+   * is not read again. Left out: it is read here.
+   */
+  knownConversation?: ConversationRow | null;
   /** The turn it is written in (its delivery id): saved with it, so the turn's reply is found. */
   turnId?: string | null;
   /**
@@ -62,6 +68,7 @@ export async function queueOutbound(input: OutboundInput): Promise<MessageRow> {
   if (!parsed) throw new Error(`bad session key ${input.sessionKey}`);
   const conversation = await conversationFor(input.userId, input.sessionKey, input.conversationId, {
     automations: input.inAutomationsChat === true,
+    ...(input.knownConversation !== undefined ? { known: input.knownConversation } : {}),
   });
   const [row] = await db()
     .insert(messages)
@@ -91,8 +98,17 @@ export async function queueOutbound(input: OutboundInput): Promise<MessageRow> {
     return made!;
   }
   await publish(input.userId, 'message.created', toApiMessage(row));
-  await noteMessage(row);
+  // The send is queued first: it is what the user waits for. The conversation's last-message time
+  // (the order of the chat list) comes after it and never fails the message, which is saved and on
+  // its way already: a caller that saw an error here would send it again, and the user would get
+  // it twice.
   await sendJob(row, input);
+  await noteMessage(row).catch((err: unknown) =>
+    logger().warn(
+      { userId: input.userId, messageId: row.id, err: String(err) },
+      "conversation's last message time not updated",
+    ),
+  );
   return row;
 }
 
@@ -158,6 +174,8 @@ export async function handleSendMessage(job: Job): Promise<unknown> {
       ...(data.template ? { template: data.template } : {}),
     });
     // The saved message keeps the text as it was written; a chat app gets it as plain text.
+    // "typing…" in that chat pauses first, so it can't come back under this message.
+    await noteSendingToChat(target.channel, target.externalChatId ?? '');
     const result = await sendToChat(target.channel, target.externalChatId ?? '', content);
     await setMessageStatus(msg.id, 'sent', result.externalId);
   } catch (err) {
@@ -182,6 +200,7 @@ export async function handleSendRaw(job: Job): Promise<unknown> {
   };
   if (!isChannelEnabled(d.channel)) return null;
   try {
+    await noteSendingToChat(d.channel, d.externalChatId);
     await sendToChat(d.channel, d.externalChatId, { text: d.text });
   } catch (err) {
     if (err instanceof RecipientBlockedError) return null;

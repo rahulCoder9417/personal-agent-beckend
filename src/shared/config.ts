@@ -203,6 +203,14 @@ export const configSchema = z.object({
   TELEGRAM_WEBHOOK_SECRET: optional,
   TELEGRAM_BOT_USERNAME: optional,
   TELEGRAM_API_URL: z.string().url().default('https://api.telegram.org'),
+  /**
+   * Show "typing…" in a Telegram chat while the agent works on a message from it (the Bot API's
+   * sendChatAction, sent again every 4 seconds). Default on; `false` turns it off.
+   */
+  TELEGRAM_TYPING: z
+    .enum(['true', 'false', '1', '0'])
+    .optional()
+    .transform((v) => v !== 'false' && v !== '0'),
 
   WHATSAPP_ACCESS_TOKEN: optional,
   WHATSAPP_PHONE_NUMBER_ID: optional,

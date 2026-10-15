@@ -209,16 +209,23 @@ export async function activeConversation(
  * user has opened another one since), else the chat's active one. With `automations` (the one
  * named is the Automations chat), else the Automations chat: should it be missing, the run's
  * reply starts a new one rather than landing in the conversation the user has open.
+ *
+ * `known`: the caller has read the one named already (`getConversation`; undefined there means it
+ * is gone), so it is not read a second time. The same checks apply to it.
  */
 export async function conversationFor(
   userId: string,
   sessionKey: string,
   conversationId?: string | null,
-  opts: { automations?: boolean } = {},
+  opts: { automations?: boolean; known?: ConversationRow | null } = {},
 ): Promise<ConversationRow> {
   if (conversationId) {
-    const named = await getConversation(userId, conversationId);
-    if (named?.sessionKey === sessionKey) return named;
+    const named =
+      opts.known !== undefined
+        ? (opts.known ?? undefined)
+        : await getConversation(userId, conversationId);
+    if (named?.id === conversationId && named.userId === userId && named.sessionKey === sessionKey)
+      return named;
   }
   if (opts.automations && sessionKey === AUTOMATIONS_SESSION) return automationsChat(userId);
   return activeConversation(userId, sessionKey);

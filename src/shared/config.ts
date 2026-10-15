@@ -97,6 +97,13 @@ export const configSchema = z.object({
   PORT: z.coerce.number().int().default(8080),
 
   DATABASE_URL: z.string().url(),
+  /**
+   * Database connections each process keeps open even when idle. A page of the web app asks for
+   * several things at once, and opening a connection to Neon costs 1.5 to 2.5 s. 0: none kept.
+   */
+  DB_POOL_MIN: z.coerce.number().int().min(0).max(20).default(10),
+  /** How often the idle connections are checked with a tiny query (0: never). */
+  DB_PING_SECONDS: z.coerce.number().int().min(0).default(60),
   REDIS_URL: z.string().url(),
   /** Prefix for every BullMQ key (lets tests share one Redis). */
   QUEUE_PREFIX: z.string().default('pa'),

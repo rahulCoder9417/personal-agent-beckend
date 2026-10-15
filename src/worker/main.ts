@@ -2,7 +2,7 @@ import { reregisterAll } from '../modules/automations/automations.ts';
 import { registerBillingSchedules } from '../modules/billing/jobs.ts';
 import { requeuePendingEvents } from '../modules/events/intake.ts';
 import { closeQueues } from '../modules/events/queues.ts';
-import { closeDb } from '../shared/db/client.ts';
+import { closeDb, keepDbWarm } from '../shared/db/client.ts';
 import { logger } from '../shared/logger.ts';
 import { closeRedis } from '../shared/redis.ts';
 import { wireModules } from '../wiring.ts';
@@ -13,6 +13,8 @@ import { registerSystemSchedules } from './schedules.ts';
 process.env.SERVICE_NAME ??= 'worker';
 const log = logger();
 wireModules();
+// Database connections opened now and kept open, so a turn doesn't wait for new ones.
+void keepDbWarm();
 
 const workers = startWorkers(processors());
 // Redis lost: rebuild jobs from `events` (jobIds dedupe anything still queued).

@@ -2444,6 +2444,53 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /v1/admin/timings/requests:
+    get:
+      operationId: adminRequestTimes
+      tags: [admin]
+      summary: How long the api's own requests took, per route (admin)
+      description: |
+        Response times of the api's HTTP requests (not turns: see `/v1/admin/timings/summary`).
+        Each request's time is counted in Redis, in a time bucket, per route and status class:
+        per 5 minutes (kept 2 hours) and per hour (kept 8 days). Nothing is written to the
+        database per request.
+
+        `window` is the last hour (read from 5-minute slots), the last 24 hours or the last 7
+        days (hourly slots). The current slot is included, so the window reaches back up to one
+        slot further; `since` is the start of the oldest slot read.
+
+        A route is the method and the route pattern, never the address with ids, e.g.
+        `GET /v1/conversations/:conversationId`; `GET (no route)` holds unknown addresses and
+        requests refused before routing. The health check and `/metrics` are not counted.
+        Percentiles are estimated from the buckets and are accurate to one bucket (at most about
+        a third of the value, usually much closer); `maxMs` is exact. The time is until the
+        answer starts: for the live stream, until the stream opens. `overall` is every request
+        together. Routes are sorted by p95, slowest first. Never a user, an address or a query.
+      parameters:
+        - name: window
+          in: query
+          required: false
+          schema: { type: string, enum: ["1h", "24h", "7d"], default: "24h" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [window, since, until, overall, routes]
+                properties:
+                  window: { type: string, enum: ["1h", "24h", "7d"] }
+                  since: { type: string, format: date-time, description: Start of the oldest slot read }
+                  until: { type: string, format: date-time, description: When the answer was made }
+                  overall: { $ref: "#/components/schemas/AdminRouteTimes" }
+                  routes:
+                    type: array
+                    items: { $ref: "#/components/schemas/AdminRouteTimes" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   /v1/admin/config:
     get:
       operationId: adminGetConfig
@@ -4794,6 +4841,25 @@ components:
             properties:
               name: { type: string, examples: [queue, route, wake, work] }
               ms: { type: integer }
+
+    AdminRouteTimes:
+      type: object
+      description: |
+        Response times of one route (or of every request, in `overall`) over the window, in
+        milliseconds. All zero when no request was counted.
+      required: [route, count, clientErrors, serverErrors, p50Ms, p95Ms, p99Ms, maxMs]
+      properties:
+        route:
+          type: string
+          description: Method and route pattern; `all` in `overall`
+          examples: ["GET /v1/conversations", "POST /mcp", "GET (no route)", all]
+        count: { type: integer, description: Requests counted }
+        clientErrors: { type: integer, description: Answers with a 4xx status }
+        serverErrors: { type: integer, description: Answers with a 5xx status }
+        p50Ms: { type: integer, description: Half the requests took at most this }
+        p95Ms: { type: integer }
+        p99Ms: { type: integer }
+        maxMs: { type: integer, description: "The slowest request (exact)" }
 
     AdminActivityEntry:
       type: object

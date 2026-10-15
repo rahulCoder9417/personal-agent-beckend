@@ -1543,6 +1543,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/timings/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How long the api's own requests took, per route (admin)
+         * @description Response times of the api's HTTP requests (not turns: see `/v1/admin/timings/summary`).
+         *     Each request's time is counted in Redis, in a time bucket, per route and status class:
+         *     per 5 minutes (kept 2 hours) and per hour (kept 8 days). Nothing is written to the
+         *     database per request.
+         *
+         *     `window` is the last hour (read from 5-minute slots), the last 24 hours or the last 7
+         *     days (hourly slots). The current slot is included, so the window reaches back up to one
+         *     slot further; `since` is the start of the oldest slot read.
+         *
+         *     A route is the method and the route pattern, never the address with ids, e.g.
+         *     `GET /v1/conversations/:conversationId`; `GET (no route)` holds unknown addresses and
+         *     requests refused before routing. The health check and `/metrics` are not counted.
+         *     Percentiles are estimated from the buckets and are accurate to one bucket (at most about
+         *     a third of the value, usually much closer); `maxMs` is exact. The time is until the
+         *     answer starts: for the live stream, until the stream opens. `overall` is every request
+         *     together. Routes are sorted by p95, slowest first. Never a user, an address or a query.
+         */
+        get: operations["adminRequestTimes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/config": {
         parameters: {
             query?: never;
@@ -3400,6 +3435,32 @@ export interface components {
                 name: string;
                 ms: number;
             }[];
+        };
+        /**
+         * @description Response times of one route (or of every request, in `overall`) over the window, in
+         *     milliseconds. All zero when no request was counted.
+         */
+        AdminRouteTimes: {
+            /**
+             * @description Method and route pattern; `all` in `overall`
+             * @example GET /v1/conversations
+             * @example POST /mcp
+             * @example GET (no route)
+             * @example all
+             */
+            route: string;
+            /** @description Requests counted */
+            count: number;
+            /** @description Answers with a 4xx status */
+            clientErrors: number;
+            /** @description Answers with a 5xx status */
+            serverErrors: number;
+            /** @description Half the requests took at most this */
+            p50Ms: number;
+            p95Ms: number;
+            p99Ms: number;
+            /** @description The slowest request (exact) */
+            maxMs: number;
         };
         AdminActivityEntry: {
             id: string;
@@ -6215,6 +6276,46 @@ export interface operations {
                             wake: string | null;
                             outcome: string;
                         }[];
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminRequestTimes: {
+        parameters: {
+            query?: {
+                window?: "1h" | "24h" | "7d";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        window: "1h" | "24h" | "7d";
+                        /**
+                         * Format: date-time
+                         * @description Start of the oldest slot read
+                         */
+                        since: string;
+                        /**
+                         * Format: date-time
+                         * @description When the answer was made
+                         */
+                        until: string;
+                        overall: components["schemas"]["AdminRouteTimes"];
+                        routes: components["schemas"]["AdminRouteTimes"][];
                     };
                 };
             };

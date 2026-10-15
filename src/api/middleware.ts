@@ -1,6 +1,7 @@
 import type { Context, MiddlewareHandler } from 'hono';
 import { routePath } from 'hono/route';
 import { inc } from '../modules/admin/metrics.ts';
+import { recordRequestTime } from '../modules/admin/request-times.ts';
 import { config } from '../shared/config.ts';
 import { rateLimited } from '../shared/errors.ts';
 import { newId } from '../shared/ids.ts';
@@ -35,7 +36,7 @@ export const REQUEST_ID_HEADER = 'X-Request-Id';
 /** A caller's own request id is kept only if it is short and plain: letters, digits, `_` and `-`. */
 const SAFE_REQUEST_ID = /^[\w-]{1,64}$/;
 
-/** Routes polled by machines (Docker's health check, Prometheus): their lines are debug only. */
+/** Routes polled by machines (Docker's health check, Prometheus): debug lines, times not counted. */
 const QUIET_ROUTES = new Set(['/healthz', '/metrics']);
 
 /** Longest path written to the log; a longer one is cut (a scanner can send any length). */
@@ -62,7 +63,8 @@ export function routeOf(c: Context): string | null {
  * the answer has it in `X-Request-Id`), and logs method, route pattern, path, status, time taken,
  * the signed-in user and the client IP. Never a body, a header or the query string (where tokens
  * and one-time codes travel). 5xx is logged as an error, 4xx as a warning; `/healthz` and
- * `/metrics` only at debug. Also counts the request for `/metrics`.
+ * `/metrics` only at debug. Also counts the request for `/metrics`, and its time per route for the
+ * admins' response-time view (in Redis, without waiting: see modules/admin/request-times.ts).
  */
 export const requestLog: MiddlewareHandler<AppEnv> = async (c, next) => {
   const start = performance.now();
@@ -76,7 +78,9 @@ export const requestLog: MiddlewareHandler<AppEnv> = async (c, next) => {
   const ms = Math.round(performance.now() - start);
   const route = routeOf(c);
   const status = c.res.status;
+  const quiet = route !== null && QUIET_ROUTES.has(route);
   inc('http_requests_total', { method: c.req.method, route: route ?? 'none', status });
+  if (!quiet) void recordRequestTime({ method: c.req.method, route, status, ms });
 
   const userId = c.get('user')?.id ?? c.get('containerUserId');
   const path = c.req.path; // the address only: the query string is never logged
@@ -90,13 +94,6 @@ export const requestLog: MiddlewareHandler<AppEnv> = async (c, next) => {
     ...(userId ? { userId } : {}),
     ip: c.get('ip'),
   };
-  const level =
-    route && QUIET_ROUTES.has(route)
-      ? 'debug'
-      : status >= 500
-        ? 'error'
-        : status >= 400
-          ? 'warn'
-          : 'info';
+  const level = quiet ? 'debug' : status >= 500 ? 'error' : status >= 400 ? 'warn' : 'info';
   logger()[level](line, 'request');
 };

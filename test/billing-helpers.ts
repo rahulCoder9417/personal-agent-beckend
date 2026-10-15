@@ -4,8 +4,10 @@ import { eq } from 'drizzle-orm';
 import type { Job } from 'bullmq';
 import { channelLinks } from '../src/modules/auth/schema.ts';
 import { creditGrants, creditLedger } from '../src/modules/billing/schema.ts';
+import { unbilledTurns } from '../src/modules/billing/turn-billing.ts';
 import { db } from '../src/shared/db/client.ts';
 import { newId } from '../src/shared/ids.ts';
+import { waitFor } from './helpers.ts';
 
 export async function linkChat(userId: string): Promise<void> {
   await db()
@@ -37,3 +39,8 @@ export async function ledgerMatchesGrants(userId: string): Promise<boolean> {
 export const fakeJob = (data: Record<string, unknown>) => ({ data }) as unknown as Job;
 
 export const DAY = 24 * 3600 * 1000;
+
+/** Waits until the billing jobs of the user's turns have run (they run after the turn). */
+export async function turnsBilled(userId: string): Promise<void> {
+  await waitFor(async () => Object.keys(await unbilledTurns(userId)).length === 0);
+}

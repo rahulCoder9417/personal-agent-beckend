@@ -64,6 +64,11 @@ export function setDbDelays(d: { rttMs?: number; connectMs?: number }): void {
   settings.connectMs = d.connectMs ?? 0;
 }
 
+/** Round trips counted so far by the meter that is running (to count a part of its work). */
+export function queriesSoFar(): number {
+  return current.queries;
+}
+
 /** Runs `fn` and returns what it cost: round trips, new connections and the time taken. */
 export async function meter<T>(fn: () => Promise<T>): Promise<DbMeter & { ms: number; result: T }> {
   const before = current;

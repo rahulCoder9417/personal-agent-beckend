@@ -22,8 +22,9 @@ export interface RunnerOptions {
   busyDelayMs?: number;
   /**
    * ... but only this long while the job has waited less than `quickRetryForMs` since it was
-   * queued: the turn before it is often just finishing (its usage sync), so a message sent right
-   * after an answer does not lose up to 2 s.
+   * queued: the turn before it is often just finishing (saving its last state after the answer;
+   * its billing runs later, as a job of its own), so a message sent right after an answer does
+   * not lose up to 2 s.
    */
   busyQuickDelayMs?: number;
   quickRetryForMs?: number;

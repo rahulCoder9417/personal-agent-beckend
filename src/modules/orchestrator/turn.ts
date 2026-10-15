@@ -78,20 +78,38 @@ export interface RouteContext {
   settings?: Promise<AgentSettingsView>;
 }
 
+/** The turn that just ended, as billing needs it. */
+export interface EndedTurn {
+  /** The turn's delivery id (its event id). */
+  id: string;
+  /** The engine the turn ran on. Null: no container ran it (a quick reply). */
+  engine: RuntimeName | null;
+}
+
 /** Filled in by other modules (billing, Jev routing). Defaults keep a turn working without them. */
 export interface TurnHooks {
   hasCredits(userId: string): Promise<boolean>;
+  /**
+   * Just before the turn's credit check: bring the balance up to date when earlier turns still
+   * wait for their billing (billing). Usually a quick look and nothing else. Never fails.
+   */
+  settleBeforeTurn(userId: string): Promise<void>;
   route(input: TurnInput, ctx?: RouteContext): Promise<RouteDecision>;
-  afterTurn(userId: string, outcome: TurnOutcome): Promise<void>;
+  /**
+   * The turn has its outcome: queue its billing (billing). Quick, and before the user's lock is
+   * given back; the billing itself runs as a job of its own, after the lock is free.
+   */
+  afterTurn(userId: string, outcome: TurnOutcome, turn: EndedTurn): Promise<void>;
   /** The turn failed on our side: queue its refund (billing). Quick; never does the refund here. */
   onPlatformFault(
     userId: string,
-    turn: { startedAt: Date; endedAt: Date; idempotencyKey: string },
+    turn: { startedAt: Date; endedAt: Date; idempotencyKey: string; engine: RuntimeName },
   ): Promise<void>;
 }
 
 let hooks: TurnHooks = {
   hasCredits: async () => true,
+  settleBeforeTurn: async () => {},
   route: async () => ({ kind: 'task' }),
   afterTurn: async () => {},
   onPlatformFault: async () => {},
@@ -419,8 +437,13 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
   }
   // Read now, beside the conversation, what the turn needs next: whether the user has credits and
   // their agent settings (the route and the wake both need them). Each is a round trip to the
-  // database; at once they cost one. Only reads: nothing is decided before its usual place.
-  const hasCreditsRead = hooks.hasCredits(userId);
+  // database; at once they cost one. Only reads: nothing is decided before its usual place. The
+  // balance is first brought up to date if earlier turns still wait for their billing (usually
+  // not: a look in Redis and nothing else).
+  const hasCreditsRead = hooks
+    .settleBeforeTurn(userId)
+    .catch(() => {})
+    .then(() => hooks.hasCredits(userId));
   hasCreditsRead.catch(() => {});
   const settingsRead = getAgentSettings(userId);
   settingsRead.catch(() => {});
@@ -465,8 +488,8 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
   if (decision.kind === 'simple') {
     await queueOutbound({ userId, ...said, text: decision.reply });
     timer.mark('answered');
+    await hooks.afterTurn(userId, 'simple', { id: input.deliveryId, engine: null });
     if (input.inboundMessageId) await setMessageStatus(input.inboundMessageId, 'delivered');
-    await hooks.afterTurn(userId, 'simple');
     return 'simple';
   }
 
@@ -508,21 +531,28 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
   });
   const outcome = await deliverTurn(
     input,
-    { text, apps: decision.apps, metadata, log },
+    { text, apps: decision.apps, metadata, engine, log },
     timer,
   ).finally(() => Promise.all([clearTurnEngine(userId), clearTurnConversation(userId)]));
 
   if (!outcome) throw new RetryableTurnError('deliver stream ended without turn_done');
-  // This engine now has the conversation up to here. A failed turn is not recorded: it gets the
-  // recap again.
-  if (outcome === 'done')
-    await recordEngineTurn(userId, conversation, engine).catch((err: unknown) =>
-      log.warn({ err: String(err) }, 'engine of the turn not recorded'),
-    );
-  if (input.inboundMessageId)
-    await setMessageStatus(input.inboundMessageId, outcome === 'done' ? 'delivered' : 'failed');
+  // The reply is out. The billing is queued first (Redis only), so it exists whatever happens
+  // next; it runs as a job of its own once the lock is free. What the next message depends on is
+  // saved before the lock goes: this engine now has the conversation up to here (a failed turn
+  // is not recorded: it gets the recap again), and the message's last state. The two writes don't
+  // depend on each other, so they go at once.
+  await hooks.afterTurn(userId, outcome, { id: input.deliveryId, engine });
+  await Promise.all([
+    outcome === 'done'
+      ? recordEngineTurn(userId, conversation, engine).catch((err: unknown) =>
+          log.warn({ err: String(err) }, 'engine of the turn not recorded'),
+        )
+      : undefined,
+    input.inboundMessageId
+      ? setMessageStatus(input.inboundMessageId, outcome === 'done' ? 'delivered' : 'failed')
+      : undefined,
+  ]);
   await publish(userId, 'agent.status', { state: 'awake', lastActiveAt: new Date().toISOString() });
-  await hooks.afterTurn(userId, outcome);
   return outcome;
 }
 
@@ -532,7 +562,7 @@ export const PLATFORM_FAULT_TEXT =
 /** Never fails the turn. If even adding the refund job fails, an alert says which turn it was. */
 async function refundFailedTurn(
   userId: string,
-  turn: { startedAt: Date; endedAt: Date; idempotencyKey: string },
+  turn: { startedAt: Date; endedAt: Date; idempotencyKey: string; engine: RuntimeName },
 ): Promise<void> {
   try {
     await hooks.onPlatformFault(userId, turn);
@@ -557,6 +587,8 @@ async function deliverTurn(
     text: string;
     apps: string[] | undefined;
     metadata: Record<string, unknown>;
+    /** The engine the turn runs on (its refund needs it). */
+    engine: RuntimeName;
     log: ReturnType<typeof logger>;
   },
   timer: TurnTimer,
@@ -627,6 +659,7 @@ async function deliverTurn(
             startedAt,
             endedAt,
             idempotencyKey: `fault:${input.deliveryId}`,
+            engine: turn.engine,
           });
         } else {
           await queueOutbound({

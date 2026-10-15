@@ -20,12 +20,14 @@ import {
   onboardBilling,
   onCreditsAdded,
   onPlanChanged,
+  onTurnBilled,
   planHasWebSearch,
   planLimits,
+  queueTurnBilling,
   queueTurnRefund,
   redeemFromChat,
+  settleUnbilledTurns,
   switchAiRoutingQuietly,
-  syncUsageForUser,
 } from './modules/billing/index.ts';
 import { queueOutbound, setBlockedHandler } from './modules/channels/outbound.ts';
 import { wireChannels } from './modules/channels/register.ts';
@@ -50,7 +52,6 @@ import { setSandboxConfigProvider } from './modules/orchestrator/sandbox.ts';
 import { connectAiText, setTurnHooks } from './modules/orchestrator/turn.ts';
 import { setAppActionCharger } from './modules/platform-mcp/tools/apps.ts';
 import { setPaidToolCharger, setWebSearchPlanCheck } from './modules/platform-mcp/tools/web.ts';
-import { logger } from './shared/logger.ts';
 
 let wired = false;
 
@@ -86,18 +87,22 @@ export function wireModules(): void {
     },
   });
 
-  // Credits (HLD 7.4, 7.5): check before a turn, quick sync after it, never charge our failures.
-  // A turn that failed on our side only adds the refund job: the user is told without waiting.
+  // Credits (HLD 7.4, 7.5): check before a turn, bill it after, never charge our failures. The
+  // turn only adds its billing job and its refund job: the user's lock is given back without
+  // waiting for either. A turn on the user's Claude plan never asks LiteLLM: Claude Code's AI
+  // doesn't go through it. Before the check, earlier turns still waiting for their billing are
+  // billed first when there are more than one.
+  const aiThroughLiteLLM = (engine: string | null) => engine !== 'claude_code';
   setTurnHooks({
     hasCredits,
-    afterTurn: async (userId) => {
-      await syncUsageForUser(userId).catch((err: unknown) =>
-        logger().warn({ userId, err: String(err) }, 'after-turn sync failed'),
-      );
-      await publishCredits(userId).catch(() => {});
-    },
-    onPlatformFault: queueTurnRefund,
+    settleBeforeTurn: settleUnbilledTurns,
+    afterTurn: (userId, _outcome, turn) =>
+      queueTurnBilling(userId, { turnId: turn.id, ai: aiThroughLiteLLM(turn.engine) }),
+    onPlatformFault: (userId, { engine, ...turn }) =>
+      queueTurnRefund(userId, { ...turn, ai: aiThroughLiteLLM(engine) }),
   });
+  // Once a turn is billed, the web app gets the new balance.
+  onTurnBilled((userId) => publishCredits(userId).catch(() => {}));
 
   // 1 credit for each successful app action that changes something (HLD 7.2).
   setAppActionCharger(async (userId, input) => (await chargeAppAction(userId, input)).charged);

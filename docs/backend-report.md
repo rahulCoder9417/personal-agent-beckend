@@ -173,7 +173,7 @@ The api only adds jobs, and the worker runs them. This keeps the api fast. It sa
 | inbound | User messages, approval answers, fired automations, app events | 20 |
 | outbound | Replies to send, delivery receipts | 20 |
 | scheduled | Timers of reminders and automations | 5 |
-| system | Sign-up, account deletion, payments, usage sync, refunds of failed turns, cleanup, backup | 5 |
+| system | Sign-up, account deletion, payments, usage sync, the billing of each turn, refunds of failed turns, cleanup, backup | 5 |
 
 There are four so slow work never blocks fast work. A long agent turn in inbound does not hold back a reply in outbound. Some system jobs repeat on their own. Usage sync and the health check run every 5 minutes. Credit expiry and approval expiry run every hour. Cleanup and backup run once a day.
 
@@ -193,7 +193,9 @@ A job that fails is tried again, 5 tries in total. The waits are 5 seconds, 30 s
 
 Only one inbound job per user runs at a time. Two turns at once would mix up the conversation. Before an inbound job starts, the worker takes a lock for that user in Redis. If the lock is taken, the job goes back in line for a quarter of a second, and after it has waited 10 seconds, for 2 seconds at a time. When the job ends, the worker gives the lock back.
 
-Why the short wait first: the lock is often held only by the end of the turn before, its usage sync, after the answer is already out. A message sent right after an answer then starts within a quarter of a second of the lock coming free, not up to 2 seconds later. A long turn still sees the next message look again only every 2 seconds.
+Why the short wait first: the lock is often held only by the end of the turn before, the few things it saves after the answer is already out. A message sent right after an answer then starts within a quarter of a second of the lock coming free, not up to 2 seconds later. A long turn still sees the next message look again only every 2 seconds.
+
+The lock covers only what the next message depends on: the turn itself, its messages and the state of its conversation. The billing of a turn is not part of it. Since 15 October 2026 it runs as a job of its own in the system queue, after the lock is given back (section 25).
 
 So one user's messages are handled one by one, in order. The lock ends on its own after 16 minutes, a little longer than the longest turn. Paying users go first in the inbound queue: Max, then Pro, then Free.
 
@@ -259,6 +261,9 @@ What this means, measured with every query made to wait 260 ms and every new con
 | The chat page after a few quiet minutes | 3.3 to 5.4 s | 0.54 s |
 | Sending a message, until the api answers | 2.9 s | 1.8 s |
 | Sending a message, until the reply shows (not counting the AI's own time) | 6.1 s | 3.2 s |
+| After the reply, until the user's next message can start | 5.0 s | 1.6 s |
+
+The last row comes from moving the billing of each turn out of the turn, into a job of its own that runs after the user's lock is free (section 25). Before, the turn charged its credits itself while it still held the lock: 12 trips of the 19 it made after the reply.
 
 ### The error shape
 
@@ -606,7 +611,8 @@ A user whose Claude plan pays never reaches Jev: the turn goes straight to the w
     - **Other error.** Rahul gets "I couldn't finish that" with the reason.
 16. In the container, the agent does the work. It calls the tool server at `/mcp` to use Gmail.
 17. The Bridge is our small program in the container. It sends the final answer through the tool server's send tool. The tool saves the reply in the turn's conversation and adds an outbound job.
-18. After the turn, the worker syncs Rahul's usage, which charges his credits. The web app gets the new balance. The event is marked `done` and the lock is given back.
+18. After the turn, the worker adds a billing job for it to the system queue. That is a note in Redis: no trip to the database. Then it saves what Rahul's next message depends on: the message's last state and which engine now has the conversation. The event is marked `done` and the lock is given back. Rahul's next message can start now.
+19. The billing job runs on its own, a moment later. It counts what the turn used and charges Rahul's credits (section 25). The web app then gets the new balance.
 
 ### What is recorded
 
@@ -631,7 +637,7 @@ Every turn writes one row in `turn_timings` when it ends, whatever the outcome. 
 | send answer | The engine done to the answer sent | `send_message` saves the answer and it reaches the user |
 | wrap up | The answer sent to the turn's end | The Bridge and the vm-manager end the turn |
 
-The stages up to "accepted" are measured by the worker. The ones after it come from the Bridge, which reports them with the turn's last event (section 34); they are placed after the moment the worker heard "accepted". After the answer, the worker still syncs the usage; that time is shown apart, because the user already has the answer.
+The stages up to "accepted" are measured by the worker. The ones after it come from the Bridge, which reports them with the turn's last event (section 34); they are placed after the moment the worker heard "accepted". After the answer, the worker still saves the turn's last state before it gives the lock back; that time is shown apart, because the user already has the answer. The billing is not in it: it runs afterwards, as a job of its own.
 
 To see them on the server:
 
@@ -799,7 +805,7 @@ The web app shows new messages and the agent's state without a reload. It keeps 
 | `approval.resolved` | An approval is answered or runs out |
 | `agent.status` | The container is waking, busy or awake |
 | `agent.progress` | The agent reports a progress line |
-| `credits.updated` | A turn ends, or credits are added or run out |
+| `credits.updated` | A turn's billing job has run (a moment after the turn), or credits are added or run out |
 | `automation.updated` | An automation changes |
 | `conversation.updated` | A conversation starts, gets a message, is renamed, or becomes or stops being the active one |
 | `conversation.deleted` | A conversation is deleted. The event holds only its id |
@@ -1625,7 +1631,7 @@ A charge is made in one of two ways. The usage sync charges AI, awake time and b
 
 ### The usage sync
 
-The usage sync is a job in the worker, the process that does the slow work. It runs every 5 minutes for every user who has a LiteLLM key, and every user gets one at sign-up. It also runs right after each turn, for that one user. For one user it does this:
+The usage sync is a job in the worker, the process that does the slow work. It runs every 5 minutes for every user who has a LiteLLM key, and every user gets one at sign-up. It also runs after each turn, for that one user, as the turn's billing job (next part). For one user it does this:
 
 1. It takes the user's credit lock.
 2. It finds the period to charge: from the end of the last charged period until now.
@@ -1635,6 +1641,32 @@ The usage sync is a job in the worker, the process that does the slow work. It r
 6. It turns the numbers into credits (next sub-section). If the user's LiteLLM key pointed at their own API key, the AI credits are 0.
 7. It writes one row in `usage_periods` for this period, makes one charge for the total, and saves LiteLLM's new total. These three are one database transaction: all of them are saved, or none.
 8. It brings the user's LiteLLM key up to date: the budget, and whether it points at the user's own key (section 30). This also fixes a switch that failed earlier. If the balance is zero or below, it pauses the user's automations. An automation is a job the agent runs on a schedule or on an event.
+
+After a turn on the user's Claude plan, steps 4 and 8 are left out: LiteLLM is not asked at all (next part).
+
+### The billing of a turn
+
+A turn does not charge its own credits. Once the reply is out, the worker adds a job named `bill-turn` to the system queue, saves the turn's last state and gives the user's lock back. The user's next message can start at once. The job runs a moment later, on its own: it is the usage sync above, for that one user. Then the web app gets the new balance.
+
+- **One job per turn.** The job's id is built from the turn's event, so adding it twice queues it once.
+- **Safe to run twice.** Usage is charged by period, not by turn. A second run finds its period charged and covers only what came after it.
+- **Tried again when it fails.** If the vm-manager or LiteLLM does not answer, the job fails and is tried again, 5 tries in all, like every job. After the last one an alert is raised. The usage is then charged by the next 5-minute sync.
+- **Never lost.** The job is added before the lock is given back. If the worker stops after the reply and before the job runs, or Redis loses the job, the 5-minute sync charges the same usage. Nothing is lost and nothing is charged twice.
+- **If the job cannot even be added**, because Redis is down, the worker charges the turn itself, as it did before 15 October.
+
+What the job asks depends on who pays for the AI (section 30):
+
+| Who pays for the AI | What the turn can cost | What the job asks |
+|---|---|---|
+| Textcrew AI | AI, awake time, browser time | LiteLLM (the AI so far) and the vm-manager (the seconds) |
+| The user's own API key | Awake time, browser time. The AI is free | LiteLLM, to keep its running total and the key's budget, and the vm-manager |
+| The user's Claude plan | Awake time, browser time. The AI is free | Only the vm-manager |
+
+App actions and web searches are not in this job: they are charged at the moment they run (below), for every user.
+
+On the user's Claude plan, Claude Code does not use LiteLLM, so the turn has no AI on our side to charge. The job does not ask LiteLLM for anything, and it leaves the LiteLLM key's budget to the 5-minute sync. The refund of a failed Claude-plan turn does not ask LiteLLM either. Leaving LiteLLM out can never lose an AI charge: AI is charged as the difference from the total saved last time, so any AI on the key is charged by the next sync that asks.
+
+Example: Rahul, on Textcrew AI, asks "email Priya the notes". The reply arrives, and about a second and a half later his lock is free. He sends "and cc Asha", and that turn starts at once. Meanwhile the first turn's billing job charges 9 credits, "Usage: AI 8, awake time 1". His balance in the web app drops by 9 a moment after the first reply. On his Claude plan the same turn would cost only the awake time, 1 credit, and LiteLLM would not be asked.
 
 ### Whole blocks and carried-over remainders
 
@@ -1653,7 +1685,7 @@ Full example: a Pro user on Textcrew AI sends a message. The AI costs $0.031, wh
 ### Why a re-run cannot charge twice
 
 - `usage_periods` allows one row per user and period start. A second sync for the same period cannot write its row, so it stops. The charge's idempotency key is built from the same two things.
-- The 5-minute sync and the after-turn sync both take the user's lock. The second one starts where the first one ended.
+- The 5-minute sync, the billing job of each turn and the billing before a turn (section 26) all take the user's credit lock. The second one starts where the first one ended.
 - AI is charged as the difference from the saved LiteLLM total. The same cost is never counted again.
 
 ### Charges made at the moment
@@ -1674,7 +1706,7 @@ Any grant can pay for an app action, also a marked one. A web search is charged 
 2. The worker tells the user at once: "Sorry, something went wrong on our side and I couldn't finish that. You weren't charged for it. Please try again." The message is marked `failed`. Neither step waits for the refund.
 3. The worker adds a refund job, `refund-turn`, to the system queue. There is one job per turn: its id is built from the event. It runs 30 seconds later, so LiteLLM has written the turn's calls to its log by then.
 4. The job runs a sync first, so the turn's usage is charged.
-5. It works out what the turn cost. AI comes from LiteLLM's spend log for the turn's time. Awake and browser time come from the vm-manager.
+5. It works out what the turn cost. AI comes from LiteLLM's spend log for the turn's time. Awake and browser time come from the vm-manager. A turn on the user's Claude plan has no AI to give back, and LiteLLM is not asked.
 6. It gives that back to the grants it came from, and never more than was charged. It also gives back the app-action and paid-tool credits charged during the turn. All of it is one database transaction with idempotency keys, so it is given once, however often the job runs.
 7. If a step fails, nothing is given and the job is tried again: 5 tries over about 13 minutes. On the last try, if LiteLLM still cannot say what the AI cost, the job gives back everything else. The AI is then not refunded, and the log says so. If the last try fails anyway, an alert is raised.
 
@@ -1691,6 +1723,7 @@ The older `/spend/logs` is not used. It takes dates only, and it answers 500 to 
 ### What can go wrong
 
 - **The vm-manager or LiteLLM does not answer during a sync, or the worker crashes in the middle.** Nothing is written for that user. The next sync covers the longer period. Other users are not affected.
+- **A turn's billing job fails on every try.** An alert is raised. The next 5-minute sync charges the usage. Until then the user's balance shows a little too much.
 - **LiteLLM's spend log cannot be read when a failed turn is refunded.** The user has already been told. The refund job is tried again. On its last try it gives back everything except the AI.
 - **The refund job cannot even be added**, for example because Redis is down. The user is still told, and the message still ends. An alert names the turn, so it can be refunded by hand.
 - **The budget update in LiteLLM fails.** It is logged. The next sync sets it.
@@ -1708,6 +1741,13 @@ When a message arrives or an automation fires, the worker first checks that the 
 - **In web chat** the message is refused at once with the error `out_of_credits`, and the web app shows its own text.
 
 On Telegram, a coupon code sent as a message is still redeemed at zero credits. That check comes before the credit check.
+
+**The turn before may not be billed yet.** A turn's credits are charged by its billing job, a moment after the turn (section 25). So the check can come before the last turn's charge is in. One turn that waits for its billing is allowed: that is the usual case, a second message sent right after a reply. Two are not. If two earlier turns still wait for their billing when a turn starts, the worker bills them itself first, then checks the balance. So a user is never more than one turn ahead of their charges, also when the system queue is slow or stopped. What that one turn cost beyond the balance becomes a small debt (section 23), as awake time already could.
+
+- In web chat the api's own check does not see an unbilled turn. When it lets a message through that the worker then refuses, the out-of-credits reply comes in the chat.
+- The look at the waiting turns is one read in Redis: it adds no trip to the database to a turn.
+
+Example: Asha has 1 credit, and each of her turns keeps the container awake 10 minutes, which is 1 credit. Her first message runs. Her second, sent right after, runs too: the first turn is not billed yet, and the balance still shows 1. Before her third message the worker bills the first two turns itself: 2 credits. Her balance is -1, and she gets the out-of-credits reply. The two billing jobs run later and charge nothing more.
 
 ### A turn that is already running
 
@@ -2006,7 +2046,7 @@ Where the sign-in lives: only in the user's own volume, the container's disk tha
 - **The switch between the two engines.** The setting `runtime` holds the user's choice: Hermes or Claude Code. Claude Code can be chosen only with a connected plan. The api tells the vm-manager at once, and the container needs no restart. If the vm-manager is down, the switch is sent again after the next wake.
 - **Disconnecting** signs Claude Code out in the container and sets the engine back to Hermes.
 - **A lost sign-in:** when a Claude Code turn fails and the sign-in is gone, the connection is cleared. The next turn runs on Hermes. The user is told to reconnect.
-- **No AI charge:** Claude Code does not call LiteLLM, so there is no AI cost to charge.
+- **No AI charge:** Claude Code does not call LiteLLM, so there is no AI cost to charge. The billing after such a turn does not ask LiteLLM at all (section 25).
 - **No quick replies:** every message goes to Claude Code.
 
 ### The Claude model and the thinking effort
@@ -2439,7 +2479,7 @@ The backend never talks to Docker, the program that runs containers, and never t
 | `DeleteSandbox` | Removes the container and the user's folder | When an account is deleted |
 | `GetSandbox` | Reports one container's state | For the agent status in the web app, and for checks |
 | `ListSandboxes` | Lists all containers | Nightly backup, and the health check every 5 minutes |
-| `GetUsage` | Reports awake seconds and browser seconds per user | Every 5 minutes, and after each turn |
+| `GetUsage` | Reports awake seconds and browser seconds per user | Every 5 minutes, and in each turn's billing job |
 | `SetEgressAllowlist` | Replaces the user's allowed domains and own MCP servers (tool servers the user adds) | When the user changes their own MCP servers |
 | `SnapshotVolume` | Packs the user's folder into one archive file | Nightly backup, once per user |
 | `SetAgentRuntime` | Chooses the engine: Hermes or Claude Code | When the user's AI settings change |
@@ -2448,7 +2488,7 @@ The backend never talks to Docker, the program that runs containers, and never t
 | `CompleteClaudeLogin` | Passes the user's code to the waiting sign-in | The user pastes the code from Anthropic's page |
 | `ClaudeLogout` | Signs Claude Code out in the container | The user disconnects their Claude plan |
 
-Example: a user texts "What is on my calendar?". The backend sends `WakeSandbox`, then `Deliver`. Each tool call the agent makes sends a `Touch`. After the turn, the backend sends `GetUsage` to charge the awake time.
+Example: a user texts "What is on my calendar?". The backend sends `WakeSandbox`, then `Deliver`. Each tool call the agent makes sends a `Touch`. After the turn, its billing job sends `GetUsage` to charge the awake time.
 
 ## 33. The life of a container
 
@@ -3067,7 +3107,7 @@ These were found by reading the code while this report was written. Each is desc
 
 - **A Telegram user who answers a run's copy on Telegram.** The copy says to follow up in the Automations chat. If the user replies on Telegram instead ("do it"), the agent there does not have the run in mind: the copy is kept out of that chat's context on purpose (section 18). The agent may ask what is meant.
 - **The user's own API key has not run against a real provider.** It is built: every model call of the user goes to their provider with their key, through LiteLLM. It was checked only with a stand-in provider, because there is no key with balance (section 30).
-- **The AI of a failed turn's last seconds may stay charged.** LiteLLM writes a key's total in batches, every 10 to 15 seconds. The sync right after the turn can miss the newest cost. A later sync charges it, in a period that starts after the turn. The refund gives back only what was charged in periods that overlap the turn, so that part is not given back. This was not seen on the server: no AI goes through LiteLLM there yet (section 25).
+- **The AI of a failed turn's last seconds may stay charged.** LiteLLM writes a key's total in batches, every 10 to 15 seconds. The billing job right after the turn can miss the newest cost. A later sync charges it, in a period that starts after the turn. The refund gives back only what was charged in periods that overlap the turn, so that part is not given back. This was not seen on the server: no AI goes through LiteLLM there yet (section 25).
 - **When LiteLLM cannot say what a failed turn's AI cost on any of 5 tries, the AI is not refunded,** although the user was told they were not charged. Awake time, browser time, app actions and paid tools are still given back (section 25).
 - **A turn that breaks after the agent took the message is not run again.** The message is then `processing`. A retried job sees that it is no longer `queued` and stops, and the event is marked `done`. So the user gets no reply, and the message stays `processing`. This is what made the failed refund of 8 October silent (sections 9 and 25).
 - **LiteLLM no longer reports a key's spend per model** (checked on version 1.104.2). So on Pro and Max all Textcrew AI counts as "other models", and credits with the "cheap model only" mark never pay for it, even on the cheap model (sections 23 and 25).

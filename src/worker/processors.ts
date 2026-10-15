@@ -7,6 +7,7 @@ import {
   handleRefundTurn,
   handleSyncUsage,
 } from '../modules/billing/jobs.ts';
+import { handleBillTurn } from '../modules/billing/turn-billing.ts';
 import {
   handleAutomationTurn,
   handleComposioTrigger,
@@ -60,6 +61,7 @@ export function processors(): Processors {
       'health-check': handleHealthCheck,
       'polar-event': handlePolarEvent,
       'sync-usage': handleSyncUsage,
+      'bill-turn': handleBillTurn,
       'refund-turn': handleRefundTurn,
       'expire-credits': handleExpireCredits,
     },

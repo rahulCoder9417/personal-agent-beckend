@@ -2,8 +2,8 @@
 // user per sync, keyed by (user, period start), so re-running never double-charges.
 //
 // Per user, the next period starts where the last charged one ended. The whole sync for a user
-// runs in one transaction under the user's credit lock, so the 5-minute job and an after-turn
-// sync can't charge the same window twice.
+// runs in one transaction under the user's credit lock, so the 5-minute job and the billing job
+// after a turn (turn-billing.ts) can't charge the same window twice.
 import { and, desc, eq, gte, isNull, lt, gt, sql, asc } from 'drizzle-orm';
 import { decryptSecret } from '../../shared/crypto.ts';
 import { db } from '../../shared/db/client.ts';
@@ -44,7 +44,22 @@ const usageKey = (userId: string, periodStart: Date) =>
 const blocks = (before: number, add: number, per: number) =>
   Math.floor((before + add) / per) - Math.floor(before / per);
 
-export async function syncUsageForUser(userId: string, now = new Date()): Promise<SyncResult> {
+export interface SyncOptions {
+  /**
+   * `false`: LiteLLM is not asked at all. The AI since the last sync stays uncharged until a sync
+   * that asks for it (the 5-minute one): AI is charged as the difference from the total saved,
+   * so leaving it out never loses it. The key's budget is also left to that sync. Used after a
+   * turn on the user's Claude plan, whose AI never goes through LiteLLM.
+   */
+  ai?: boolean;
+}
+
+export async function syncUsageForUser(
+  userId: string,
+  now = new Date(),
+  opts: SyncOptions = {},
+): Promise<SyncResult> {
+  const readAi = opts.ai !== false;
   let spendUsd: number | undefined;
   const out = await db().transaction(async (tx) => {
     await lockUserCredits(tx, userId);
@@ -77,7 +92,7 @@ export async function syncUsageForUser(userId: string, now = new Date()): Promis
     let aiMicro = 0;
     let otherMicro = 0;
     let synced: { total: number; models: Record<string, number> } | undefined;
-    if (keyRow) {
+    if (keyRow && readAi) {
       const spend = await litellm().getKeySpend(decryptSecret(keyRow.keyEncrypted));
       spendUsd = spend.spend;
       const models = Object.fromEntries(
@@ -164,10 +179,13 @@ export async function syncUsageForUser(userId: string, now = new Date()): Promis
 
   // Enforce (HLD 7.5): budget = balance; at zero the budget is 0 and listeners are told. Also
   // when nothing was charged: this is where a LiteLLM update that failed earlier is applied.
-  try {
-    await syncLiteLLMKey(userId, spendUsd === undefined ? {} : { spendUsd });
-  } catch (err) {
-    logger().warn({ userId, err: (err as Error).message }, 'LiteLLM key update failed');
+  // Without the AI, LiteLLM is left alone: its budget needs the key's spend, which only it knows.
+  if (readAi) {
+    try {
+      await syncLiteLLMKey(userId, spendUsd === undefined ? {} : { spendUsd });
+    } catch (err) {
+      logger().warn({ userId, err: (err as Error).message }, 'LiteLLM key update failed');
+    }
   }
   if (!out)
     return { charged: 0, periodStart: null, periodEnd: null, balance: await getBalance(userId) };
@@ -240,18 +258,22 @@ export async function syncAllUsage(
  * given back in one transaction, so a run that fails gives nothing and the next one starts over.
  *
  * Throws if LiteLLM's spend log can't be read, unless `withoutAiIfUnknown` (the job's last try):
- * then everything but the AI is given back, once, and `aiSkipped` says so.
+ * then everything but the AI is given back, once, and `aiSkipped` says so. `ai: false` (a turn on
+ * the user's Claude plan, whose AI never goes through LiteLLM): LiteLLM is not asked at all.
  */
 export async function reverseTurn(
   userId: string,
   turn: { startedAt: Date; endedAt: Date; idempotencyKey: string },
-  opts: { withoutAiIfUnknown?: boolean } = {},
+  opts: { withoutAiIfUnknown?: boolean; ai?: boolean } = {},
 ): Promise<{ restored: number; aiSkipped?: true }> {
-  await syncUsageForUser(userId);
-  const [keyRow] = await db()
-    .select()
-    .from(litellmKeys)
-    .where(and(eq(litellmKeys.userId, userId), isNull(litellmKeys.revokedAt)));
+  const readAi = opts.ai !== false;
+  await syncUsageForUser(userId, new Date(), { ai: readAi });
+  const [keyRow] = readAi
+    ? await db()
+        .select()
+        .from(litellmKeys)
+        .where(and(eq(litellmKeys.userId, userId), isNull(litellmKeys.revokedAt)))
+    : [];
   let ai = 0;
   let aiSkipped = false;
   if (keyRow && !routesToOwnKey(keyRow)) {
@@ -309,7 +331,7 @@ export async function reverseTurn(
     });
     return usage.restored + appActions + paidTools;
   });
-  if (restored > 0) await afterCreditsAdded(userId);
+  if (restored > 0) await afterCreditsAdded(userId, { litellm: readAi });
   return aiSkipped ? { restored, aiSkipped: true } : { restored };
 }
 

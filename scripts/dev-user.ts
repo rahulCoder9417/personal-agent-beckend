@@ -315,7 +315,7 @@ function timingLines(row: TurnTimingRow): string[] {
   const finished = row.stages.finished;
   const after =
     finished !== undefined && row.stages.turn_done !== undefined
-      ? `; after the answer, usage sync and the rest ${seconds(finished - row.stages.turn_done)}`
+      ? `; after the answer, saving its last state ${seconds(finished - row.stages.turn_done)}`
       : '';
   return [
     `turn ${row.deliveryId} at ${row.startedAt.toISOString()} (${row.channel} ${row.kind}): ${what}`,

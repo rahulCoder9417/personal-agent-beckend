@@ -173,7 +173,7 @@ Example: the user texts "email Priya the notes".
 6. The vm-manager hands the message to the Bridge inside the container. The Bridge gives it to the agent.
 7. The agent works. It may call tools, and Tex may hand parts to the crew. Short progress lines go to the chat. In web chat the reply also shows a few words at a time while the agent writes it; on Telegram it arrives in one piece.
 8. The agent gives its final reply. The worker sends it to Telegram as a simple text message: it takes the formatting symbols out first. The saved reply keeps them, so the web app shows it with its formatting.
-9. The worker counts what was used and charges credits.
+9. The worker gives the user's lock back, so their next message can start at once. A separate job then counts what was used and charges credits. On the user's own Claude plan that job does not ask the AI gateway at all: the AI is not ours to charge. The time the container was awake still is.
 10. After 3 idle minutes the container stops. The user's files stay.
 
 **Why the api and the worker are separate:** Telegram expects an answer within seconds. So the api only saves the message and answers. The slow work happens afterwards in the worker. If the worker crashes, the job is still in the queue and runs again.

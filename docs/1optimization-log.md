@@ -48,6 +48,37 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 15 October 2026: request logs and response times per route
+
+- **Where it is:** on `main`, not yet on the server.
+- **Why:** you asked whether the backend keeps request logs, and for the p50, p95 and p99 response times of each endpoint. A request log existed, but a thin one: each request wrote one line with the method, the route, the status, the time and a request id, all at the same level. It had no address, no user and no IP. A request that failed with a 500 was an ordinary line, not an error. Other lines written during the same request had no id to match them with. And the answers that `/mcp`, `/git` and file downloads build themselves went out without the request id. There was no way to see how slow each route is.
+- **What the user notices:** nothing. A 500 answer now also gives the request id (`details.requestId`), so a user who reports an error can quote it.
+- **Backend:**
+  - **The request log.** Still one line per request, written when the answer is ready, now with: the request id, the method, the route as written in the contract, the address without the part after the question mark, the status, the time in milliseconds, the user (the signed-in user, or the container token's user on `/mcp` and `/git`), and the caller's IP as Caddy reports it. A 5xx is an error line, a 4xx a warning, the rest plain information. The health check and `/metrics` are written only at the debug level, which the server does not show.
+  - **The request id.** A caller may send its own `X-Request-Id`; it is kept only when it is up to 64 letters, digits, `_` or `-`, otherwise the api makes one, such as `req_01m5a2b3c4d5e6f7g8h9j0k1m2`. Every answer carries it, now also the ones `/mcp`, `/git` and file downloads build themselves. Every log line written while the request runs carries it too, so the "unhandled error" line and the request's own line can be found together.
+  - **No secrets.** The request log never holds a body, a header or the part of the address after the question mark. Sign-in tokens, cookies, webhook signatures, container tokens and one-time codes travel in those places, so none of them can reach it. Webhooks are untouched: the log does not read the body, and signatures still verify.
+  - **Response times.** Each request's time is also counted in Redis, never in the database. It goes into a time bucket ("up to 250 ms"), per route, per status class (2xx to 5xx) and per time slot: 5-minute slots kept 2 hours and hourly slots kept 8 days. The slowest time of each route is kept exactly. Counting never makes a request wait or fail: the api sends the count and goes on, and drops it when Redis is down. The health check and `/metrics` are not counted.
+  - **A new admin endpoint,** `GET /v1/admin/timings/requests`, admins only. For the last hour, the last 24 hours (the default) or the last 7 days, it gives each route and all requests together: the number of requests, how many answered 4xx and 5xx, p50, p95, p99 and the slowest. Slowest p95 first. The percentiles are worked out from the buckets, so they are accurate to one bucket: off by at most a third, usually much less. It never shows a user, an address with its ids, or a query.
+  - The existing turn-timings summary works from database rows and their exact values; these times are counted in buckets instead, so its percentile maths could not be reused as it is. The new page uses the same names (count, p50Ms, and so on), and the tests check its estimates against that exact maths.
+- **Cost and speed:**
+  - Each request sends one batch of commands to Redis, which runs on the same server, and does not wait for it. No delay to the answer was seen in the tests; not measured on the server.
+  - Redis memory: each slot holds at most a few hundred counters at beta traffic, and Redis removes old slots by itself. A few MB at most; not measured.
+  - No database writes at all, so nothing goes to Neon.
+  - The log has the same number of lines as before, each a little longer.
+- **Contracts:** `openapi.yaml` changed. New: `GET /v1/admin/timings/requests` (`adminRequestTimes`) and the `AdminRouteTimes` schema. The conventions at the top now say that every answer carries `X-Request-Id` and that a 500 gives `details.requestId`. Nothing has to follow: the web app and the admin panel work as before. `vm.proto` did not change.
+- **Database:** none. The counts live in Redis, under keys that start with `pa:reqtimes:`.
+- **How it was checked:**
+  - New tests for the request log (14): the fields of the line, the route pattern and the address without the query, the IP behind Caddy, a long address cut, a caller's request id kept or replaced, the id on answers from `/mcp`, `/git` and file downloads (this one failed before the fix, which showed the missing header), the levels (a 500 as an error with the id in its answer and on the "unhandled error" line, a 4xx as a warning, the health check at debug), and planted secrets in the sign-in header, cookies, the query, the body and webhook headers, none of which reached the log. A signed Clerk webhook and a Telegram webhook still pass their checks.
+  - New tests for the response times (13): the percentile maths against exact values for an even spread and a skewed mix, never above the slowest request, the buckets' sizes (this test found a too-large step between 20 and 30 seconds, now fixed), counting per slot and the three windows, the keys' expiry, the endpoint (401 without a session, 403 in the error shape for a user who is not an admin, 400 for an unknown window, the real requests counted by route pattern and never by address or user), and a Redis failure that leaves the request unharmed.
+  - Lint, the type check and the contract check pass. The full backend run: 789 of 789 tests pass. Before the change, one run had 1 failure in the crew-jobs tests (a timing test, unrelated); it passed in the full run after the change.
+  - Not yet run on the server.
+- **Still open:**
+  - The admin panel has no page for the response times yet. It needs the new contract, a call to the new endpoint, and a table with a window switch.
+  - A searchable request log in the admin panel was not built. Reading the logs on the server is in `aws-setup.md`, section 13. If you want one, it is a separate decision.
+  - The time counted is until the answer starts. For the live stream that is until the stream opens, not how long it stays open.
+- **Docs updated:** `backend-report.md` section 4 (the steps, the error table, new parts "The request log" and "Response times", and "Logging without secrets"), section 31 (the admin table and a new part "Response times") and section 37 ("Logs, metrics and alerts"); `aws-setup.md` section 13 (commands to read the request log). `hld-mvp.md` does not describe logging, so it did not change.
+- **Commits:** `3ba29dd` (the request log), `444c29a` (the response times), and the docs commit that adds this entry.
+
 ### 14 October 2026: the databases move from the server to Neon
 
 - **Where it is:** on `main` since 14 October, and on the test server since 14 October: the server's three databases now live on Neon.

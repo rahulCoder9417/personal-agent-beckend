@@ -212,13 +212,13 @@ This section follows one request from the web app through the api, check by chec
 ### The steps
 
 1. Caddy receives the request over HTTPS and forwards it to the api.
-2. The api gives the request an id. The answer carries the same id in the `X-Request-Id` header.
+2. The api gives the request an id. The answer carries the same id in the `X-Request-Id` header. If the caller sent its own `X-Request-Id`, the api keeps it, but only when it is up to 64 letters, digits, `_` or `-`; otherwise it makes a new one, such as `req_01m4z1tdg2p20p83w3f87072p1`.
 3. The api reads the caller's IP address and counts the request against the IP limit. With `TRUST_PROXY` on, it uses the address Caddy wrote, which a caller cannot fake.
 4. The api finds the route. Each route's address, method and rules come from the API contract, one file that lists every address the api answers.
 5. If the route needs a signed-in user, the api checks the session (below). Admin routes also need the role `admin`.
 6. The api checks the address, the query and the body against the contract.
 7. The route's own code runs. Every database query is filtered by the user's id.
-8. The api writes one log line.
+8. The api writes one log line and counts the request's time (below).
 
 ### The sign-in check
 
@@ -242,15 +242,48 @@ Every error looks the same: an `error` object with a `code`, a `message` and som
 | 404 | `not_found` | Unknown address or item |
 | 409 | `conflict` | The action does not fit the current state |
 | 429 | `rate_limited` | Too many requests. `Retry-After` says how long to wait |
-| 500 | `internal` | An unexpected error. The details stay in the log |
+| 500 | `internal` | An unexpected error. The details stay in the log. The answer gives the request id as `details.requestId`, so a user can quote it and the admin can find the log lines |
 
 ### Rate limits
 
 A rate limit is a cap on how often something may be done. The counters live in Redis and start again when their time window ends. Any request: 600 a minute per IP address (`RATE_LIMIT_PER_IP_PER_MIN`). Web chat messages: 30 a minute per user. New web chats: 30 an hour per user. New link codes: 10 an hour per user. Tool calls from one user's container: 240 a minute.
 
+### The request log
+
+Each request writes one line when its answer is ready. It holds:
+
+- the request id;
+- the method and the route, as written in the contract, such as `/v1/conversations/:conversationId`. When no route answered (an unknown address, or a request stopped by the per-address limit) the route is empty;
+- the address that was asked for, without the part after the question mark. A very long address is cut at 200 characters;
+- the status and the time taken, in milliseconds;
+- the user, when known: the signed-in user, or for `/mcp` and `/git` the user the container token belongs to;
+- the caller's IP address. Behind Caddy it is the address Caddy wrote, as for the rate limits.
+
+The level follows the status. A 5xx is an error line, a 4xx a warning, the rest plain information. The health check and `/metrics`, which machines ask every few seconds, are written only at the debug level, which the server does not show.
+
+Every other line written while the request runs carries the same request id. So when a route fails, the "unhandled error" line and the request's own line can be found together.
+
+The time is until the answer starts. For the live stream it is the time until the stream opens, not how long it stays open.
+
+Example line, with made-up values:
+
+`{"level":30,"time":1792058400123,"service":"api","requestId":"req_01m5a2b3c4d5e6f7g8h9j0k1m2","method":"GET","route":"/v1/conversations","path":"/v1/conversations","status":200,"ms":284,"userId":"usr_01m3sk0g2wwgm7wj60822scjtp","ip":"203.0.113.9","msg":"request"}`
+
 ### Logging without secrets
 
-Each request writes one line: method, route, status, time taken and request id. The health check is not logged. The log never holds request bodies or sign-in headers. Fields named like password, token, secret, API key, authorization or code are replaced with "[redacted]".
+The request log never holds a request body, a header or the part of the address after the question mark. So sign-in tokens, cookies, webhook signatures, container tokens and one-time codes never reach it, wherever they travel. Tests send planted secrets in each of these places and check that none shows up. In any log line, fields named like password, token, secret, API key, authorization or code are also replaced with "[redacted]".
+
+### Response times
+
+Each request's time is also counted per route, so the admins can see which routes are slow (section 31, "Response times"). The count is kept in Redis, never in the database: a database write per request would cost a trip to Neon, about 260 ms, and would grow without end.
+
+How it is counted:
+
+- The route is the method and the route as written in the contract, such as `GET /v1/conversations`, never the address with its ids. Requests no route answered share one line, `GET (no route)`.
+- The time goes into a bucket, such as "up to 250 ms". From 4 ms to 30 s each bucket is at most a third larger than the one before. The count is kept per route, per status class (2xx, 3xx, 4xx, 5xx) and per bucket. The slowest time of each route is kept exactly.
+- There are two sets of counts: one per 5 minutes, kept 2 hours, and one per hour, kept 8 days. Redis removes them by itself after that.
+- Counting never makes a request wait and never makes it fail. The api sends the count and goes on. If Redis does not take it, the time is dropped and a debug line says so.
+- The health check and `/metrics` are not counted.
 
 ## 5. Webhooks
 
@@ -2038,6 +2071,7 @@ The admin panel is where admins use these tools: a web app of its own, apart fro
 | Remove a job | Removes a failed or finished job, with a reason | `/v1/admin/jobs/{queue}/{jobId}` |
 | Audit log | Every user's activity log, with filters | `/v1/admin/audit` |
 | Turn timings | Where turns spent their time over the last days | `/v1/admin/timings/summary` |
+| Response times | How long the api's requests took per route: p50, p95, p99 and the slowest | `/v1/admin/timings/requests` |
 | Settings | The settings that shape behaviour, read-only | `/v1/admin/config` |
 | Health | Whether each service the backend needs answers | `/v1/admin/health` |
 | One user's agent | Shows the container, the engine, the AI and today's usage | `/v1/admin/users/{id}/agent` |
@@ -2174,6 +2208,22 @@ The stages are the queue, preparing the message, the route, the quick reply, the
 It also counts the turns per route, engine and outcome, and lists the 20 slowest turns: the user, when, the total and the biggest stage.
 
 The median is the middle value, read between the two middle ones when the count is even. Example: four turns waited 100, 200, 300 and 400 ms in the queue. The median is 250 ms and the 90th percentile 370 ms.
+
+### Response times
+
+This page shows how long the api's own requests took, per route (section 4, "Response times", says how they are counted). It does not cover turns: those are in the turn timings above.
+
+The admin picks the last hour, the last 24 hours (the default) or the last 7 days. The last hour is read from the 5-minute counts, the others from the hourly ones. The current 5 minutes or hour is included, so the window can reach up to one more back; the answer says where it starts.
+
+For each route, and for all requests together, it gives:
+
+- how many requests there were, and how many answered with a 4xx and with a 5xx;
+- p50, p95 and p99: the time that half, 95 in 100 and 99 in 100 requests stayed under;
+- the slowest request, exactly.
+
+The routes are sorted by p95, slowest first. The percentiles are worked out from the buckets, so they are accurate to one bucket: off by at most a third, usually much less. The page never shows a user, an address with its ids, or a query.
+
+Example: over the last 24 hours, `GET /v1/conversations` had 1,240 requests, 2 of them 5xx, p50 180 ms, p95 640 ms, p99 1,100 ms and the slowest 2,300 ms. Half the lists came back in under 0.2 seconds, and 1 in 20 took more than 0.6 seconds.
 
 ### Settings
 
@@ -2660,7 +2710,9 @@ This section says how the running system is watched, backed up and brought back 
 
 ### Logs, metrics and alerts
 
-The api and the worker write one log line per request and per job. Fields that look like a secret are replaced by "[redacted]": passwords, tokens, keys, sign-in codes, login headers and cookies. Request contents are never logged.
+The api and the worker write one log line per request and per job. The request line has the request id, the route, the address without its query, the status, the time, the user and the IP (section 4). Every line written during a request carries its id. Fields that look like a secret are replaced by "[redacted]": passwords, tokens, keys, sign-in codes, login headers and cookies. Request contents, headers and queries are never logged. `aws-setup.md` section 13 shows how to read them on the server.
+
+Each request's time is also counted in Redis per route, for the admins' response-time page (section 31).
 
 The api serves numbers at `/metrics`: requests by path and result, and for each queue the jobs waiting, running, delayed, failed and finished. The page needs the secret in `METRICS_TOKEN`. Without that setting it answers "not found".
 

@@ -358,6 +358,12 @@ On the server, from `/opt/textcrew`:
 ./dc --profile app logs -f vm-manager          # follow the container manager
 sudo docker ps --filter name=pa-sbx            # awake user containers
 
+# The request log: one line per api request (backend-report.md, section 4). The id of one request
+# is in its answer's X-Request-Id header, and in `details.requestId` of a 500 answer
+./dc --profile app logs --since 1h api | grep '"msg":"request"'   # every request of the last hour
+./dc --profile app logs --since 1h api | grep '"level":50'        # errors only: a 5xx, or a failure in a route
+./dc --profile app logs --since 24h api | grep req_01m5a2b3c4d5e6  # every line of one request, by its id
+
 # The test user (create, link-code, claude-login, claude-complete, connect-app, status, browser,
 # send, messages, activity, approve, pr-review, memories)
 ./dc --profile app exec -T api node --import tsx scripts/dev-user.ts status --user usr_01m3sk0g2wwgm7wj60822scjtp

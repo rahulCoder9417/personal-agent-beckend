@@ -94,6 +94,9 @@ describe('Phase 3: Telegram end to end', () => {
     await sendTelegram(telegramUpdate(chatId, 'hello there'));
     const reply = await waitFor(async () => tg.sent.find((m) => m.chatId === String(chatId)));
     expect(reply.text).toContain("isn't linked");
+    // It sends the user to the web app's Integrations page for a code.
+    expect(reply.text).toContain('Open Integrations at http://web.test/integrations ');
+    expect(reply.text).not.toContain('Settings');
     expect(vmFake.deliveries).toHaveLength(0);
     expect(await db().select().from(messages).where(eq(messages.text, 'hello there'))).toHaveLength(
       0,
@@ -300,7 +303,9 @@ describe('Phase 3: Telegram end to end', () => {
     await sendTelegram(telegramUpdate(chatId, lc.code));
     const reply = await waitFor(async () => repliesTo(chatId)[0]);
     expect(reply.text).toContain('This chat is linked to another Textcrew account');
-    expect(reply.text).toContain('Settings → Channels');
+    expect(reply.text).toContain('sign in to that account at http://web.test/integrations ');
+    expect(reply.text).toContain('unlink the chat in Integrations');
+    expect(reply.text).not.toContain('Settings');
     expect(reply.text).not.toContain('your account');
     for (const secret of [owner.id, owner.email, other.id, other.email])
       expect(reply.text).not.toContain(secret);

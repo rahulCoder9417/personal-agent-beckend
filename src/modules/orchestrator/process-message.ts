@@ -58,8 +58,13 @@ export function setInboundHooks(h: Partial<InboundHooks>): void {
   inboundHooks = { ...inboundHooks, ...h };
 }
 
+/** The web app's Integrations page, where the user links and unlinks chats (the Chat apps tab). */
+export function integrationsPageUrl(): string {
+  return `${config().WEB_APP_URL.replace(/\/+$/, '')}/integrations`;
+}
+
 export function linkInstructionsText(): string {
-  return `Hi! This chat isn't linked to an account yet. Open ${config().WEB_APP_URL}, go to Settings → Channels, and send me the code you get there.`;
+  return `Hi! This chat isn't linked to an account yet. Open Integrations at ${integrationsPageUrl()} and send me the code you get there.`;
 }
 
 /**
@@ -179,7 +184,7 @@ async function holdWhileSuspended(
 const TOO_MANY_LINK_TRIES = 'Too many attempts. Please try again in an hour.';
 
 function linkedElsewhereText(): string {
-  return `This chat is linked to another Textcrew account. Unlink it there first: sign in to that account at ${config().WEB_APP_URL} and remove the chat in Settings → Channels. Then send your code again.`;
+  return `This chat is linked to another Textcrew account. Unlink it there first: sign in to that account at ${integrationsPageUrl()} and unlink the chat in Integrations. Then send your code again.`;
 }
 
 /** Guessing codes: at most 10 tries per chat per hour, linked or not (wrong codes count). */

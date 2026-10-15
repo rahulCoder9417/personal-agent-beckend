@@ -91,7 +91,7 @@ export function agentAppStates(
         note:
           `${name} is still connecting: the sign-in was started ${minutesAgo(newest.createdAt, now)} ` +
           'and is not finished yet. Tell the user it may still be finishing, to try again in a ' +
-          `minute, and to connect it again on the Apps page (${apps}) if it does not finish.`,
+          `minute, and to connect it again on the Integrations page (${apps}) if it does not finish.`,
       });
       continue;
     }
@@ -103,7 +103,7 @@ export function agentAppStates(
         note:
           `${name} needs to be connected again: its connection ` +
           `${broken.status === 'expired' ? 'expired' : 'failed'}. Tell the user to connect it ` +
-          `again on the Apps page (${apps}).`,
+          `again on the Integrations page (${apps}).`,
       });
       continue;
     }
@@ -113,7 +113,7 @@ export function agentAppStates(
       note:
         `${name} did not finish connecting: the sign-in started on ` +
         `${newest!.createdAt.toISOString().slice(0, 10)} was never completed. Tell the user to ` +
-        `connect it again on the Apps page (${apps}).`,
+        `connect it again on the Integrations page (${apps}).`,
     });
   }
   return states;
@@ -238,9 +238,9 @@ export async function appActionsFor(
   if (states.length > 0) return { apps, actions };
   const named = wanted && CATALOG.find((a) => a.slug === wanted || a.toolkit === wanted);
   const note = !wanted
-    ? `No app is connected. Your user connects apps on the Apps page (${appsPageUrl()}).`
+    ? `No app is connected. Your user connects apps on the Integrations page (${appsPageUrl()}).`
     : named
-      ? `${named.name} is not connected. Your user connects it on the Apps page (${appsPageUrl()}).`
+      ? `${named.name} is not connected. Your user connects it on the Integrations page (${appsPageUrl()}).`
       : `There is no app "${filter.app}". Call list_app_actions with no app to see the connected ones.`;
   return { apps, actions, note };
 }

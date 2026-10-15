@@ -48,6 +48,35 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 15 October 2026: the bot and Tex point to Integrations, and the user sees more about each linked chat
+
+- **Where it is:** on the branch `feat/integrations-followup` in the backend and in the web app, not merged yet (15 October).
+- **Why:** the web app now has one Integrations page (`/integrations`), with tabs for the chat apps, the apps (`/integrations/apps`) and the user's own MCP servers. Settings → Channels is gone and `/apps` only redirects, but the backend still sent people to both. Also, an admin could see for each linked chat its masked chat id, when it last wrote and whether the user blocked the bot. The user could not see this about their own chats.
+- **What the user notices:**
+  - **A chat that is not linked** gets: "Open Integrations at https://app.textcrew.in/integrations and send me the code you get there", instead of "go to Settings → Channels".
+  - **A chat linked to another account** that sends a code is told to sign in to that account at the same address and unlink the chat in Integrations.
+  - **Tex says "the Integrations page"** when an app is still connecting, needs connecting again or is not connected, with the address `https://app.textcrew.in/integrations/apps`. After an app's sign-in the browser comes back to that address too.
+  - **In Integrations → Chat apps,** each linked chat now shows its chat id masked ("•••• 4821"), "Last message 2h ago", and "Blocked the bot", with what to do, when the user blocked the bot there.
+- **Backend:**
+  - The bot's two link replies use the Integrations page's address and the word "Integrations". No other text of the bot or of Tex said "Settings → Channels".
+  - The Apps address the backend builds is now `/integrations/apps`. It is the page to come back to after an app's sign-in, when the web app names none, and the address in the notes Tex gets about apps that are not ready. Old links to `/apps` keep working: the web app redirects them.
+  - The user's own list of linked chats (`GET /v1/channels`) gives for each chat the masked chat id, when it last wrote (or nothing if that was never recorded), and whether the user blocked the bot. They are worked out exactly as for the admin's list. The full chat id is never sent.
+  - The script that copies the contract to the web app (`pnpm openapi:sync`) wrote to a folder that no longer exists, `../user-frontend/ignore`. It now writes to `../user-frontend-web/ignore`.
+- **Cost and speed:** nothing. The three new fields come from the row that was already read.
+- **Contracts:** `openapi.yaml` changed, only by adding. `ChannelLink` gets three optional fields: `maskedChatId`, `lastInboundAt` (may be null) and `blocked`. The default return page of `POST /v1/apps/{appSlug}/connect` now reads `/integrations/apps`, and the admin's `AdminUserChannel.label` description says Integrations → Chat apps. The web app has the new copy and treats the new fields as optional, so it works with the server before and after the deploy. `vm.proto` did not change.
+- **Database:** none.
+- **How it was checked:**
+  - New tests: the user's list shows the masked chat id, the last message and blocked, the same as the admin's list says for the same chats, and never the full chat id; a short chat id shows nothing of itself; blocking shows, and writing again clears it and moves the last message on; only the user's own chats are listed.
+  - Changed tests: the two link replies name the Integrations address and not Settings; the page to come back to after a sign-in and Tex's notes use `/integrations/apps` and "the Integrations page", also for one named app that is not connected; `/integrations` addresses are not taken for purchase links on Telegram.
+  - Lint, type-check and the OpenAPI lint pass. The first whole test run had 904 of 906 passing. The two that failed were timing tests (the page reader's speed limit, 5.7 seconds where 5 are allowed, and the billing job's retry count) while other test runs were using the machine. On their own both files passed, and a second whole run passed 906 of 906.
+  - The web app: lint, type-check, its 755 tests and a production build pass.
+  - Not run on the test server.
+- **Still open:**
+  - The vm-manager's Bridge still tells Tex, in its opening lines, that the user connects apps "on Textcrew's Apps page, https://app.textcrew.in/apps" (`agent-image/bridge/core.py` and its tests). The redirect keeps that working; changing it to the Integrations page is a small vm-manager change for another piece of work.
+  - `CLAUDE.md` still says `pnpm openapi:sync` copies to `../user-frontend/ignore/`.
+- **Docs updated:** `backend-report.md`, section 7 (the replies to an unknown or already linked chat, unlinking, and a new part "What the user sees for each linked chat"), section 14 (the page to come back to, the notes Tex gets, an example and one item under what can go wrong) and section 31 (what the user sees for a chat).
+- **Commits:** backend `fa85985`, `ef5e6c8`, `5ebf630`, `8f08077`, `28f62f8`, and the docs commit with this entry; web app `42aac50`, `795a997`, `1a04678`, `2f6ec18`.
+
 ### 15 October 2026: connecting the same account again replaces the old connection, and its automations move over
 
 - **Where it is:** on `main` and on the test server since 15 October.

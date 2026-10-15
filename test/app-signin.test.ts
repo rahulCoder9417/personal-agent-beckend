@@ -87,7 +87,7 @@ describe('which way the sign-in starts', () => {
         userId: user.id,
         authConfigId: 'ac_own_github',
         authScheme: 'OAUTH2',
-        callbackUrl: 'http://web.test/apps?connected=github',
+        callbackUrl: 'http://web.test/integrations/apps?connected=github',
       },
     ]);
     expect(await connectionsOf(user.id)).toMatchObject([{ app: 'github', status: 'pending' }]);
@@ -148,7 +148,7 @@ describe('which way the sign-in starts', () => {
   });
 
   it('comes back only to a page of our own web app', () => {
-    expect(connectReturnUrl('gmail')).toBe('http://web.test/apps?connected=gmail');
+    expect(connectReturnUrl('gmail')).toBe('http://web.test/integrations/apps?connected=gmail');
     expect(connectReturnUrl('gmail', 'http://web.test/connected?app=gmail')).toBe(
       'http://web.test/connected?app=gmail',
     );
@@ -159,7 +159,9 @@ describe('which way the sign-in starts', () => {
       'https://evil.example/',
       'not a url',
     ])
-      expect(connectReturnUrl('gmail', elsewhere)).toBe('http://web.test/apps?connected=gmail');
+      expect(connectReturnUrl('gmail', elsewhere)).toBe(
+        'http://web.test/integrations/apps?connected=gmail',
+      );
   });
 
   it('a return page of another site is not passed on to Composio', async () => {
@@ -169,7 +171,9 @@ describe('which way the sign-in starts', () => {
       token: user.token,
       body: { returnUrl: 'http://web.test.evil.example/x' },
     });
-    expect(composio.state.signIns[0]!.callbackUrl).toBe('http://web.test/apps?connected=gmail');
+    expect(composio.state.signIns[0]!.callbackUrl).toBe(
+      'http://web.test/integrations/apps?connected=gmail',
+    );
   });
 });
 

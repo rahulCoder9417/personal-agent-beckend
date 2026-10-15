@@ -83,7 +83,7 @@ Each entry has a heading with the date and the name of the feature, then the par
   - The panel: lint, the type check, 57 tests (its logic and its demo backend) and the build pass. Every screen was opened in a browser on the demo data, wide and phone-sized, with no console errors.
   - Not against a real backend or real Clerk, and not on the server.
 - **Still open:**
-  - Put the panel live: a Vercel project, `admin.textcrew.in`, and that address added to the backend's `CLERK_AUTHORIZED_PARTIES` (its README has the steps). Not tried with real Clerk sign-in on a subdomain.
+  - Put the panel live: a Vercel project, `admin.textcrew.in`, and that address added to the backend's `CLERK_AUTHORIZED_PARTIES` (its README has the steps). Not tried with real Clerk sign-in on a subdomain.do it 
   - The waitlist's invite, reject and flag are not written to the audit log; every other admin action is.
   - The api's queue board opens with the Clerk session cookie of the api's own domain; from the panel's domain it may ask to sign in. The panel's Jobs page covers the same.
   - "Active in 7 days" and "last message" count messages users sent; an automation's runs don't make a user active.

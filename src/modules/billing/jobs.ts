@@ -11,7 +11,7 @@ export { handlePolarEvent } from './polar-events.ts';
 export const SYNC_USAGE_EVERY_MS = 5 * 60 * 1000;
 export const EXPIRE_CREDITS_EVERY_MS = 60 * 60 * 1000;
 
-/** system/sync-usage: every 5 min for everyone, or `{ userId }` for one user (after a turn). */
+/** system/sync-usage: every 5 min for everyone, or `{ userId }` for one user. */
 export async function handleSyncUsage(job: Job): Promise<unknown> {
   const userId = (job.data as { userId?: string }).userId;
   if (userId) return syncUsageForUser(userId);
@@ -29,6 +29,11 @@ export interface FailedTurn {
   endedAt: Date;
   /** `fault:<event id>`: one refund per turn. */
   idempotencyKey: string;
+  /**
+   * `false`: the turn ran on the user's Claude plan, so its AI never went through LiteLLM and
+   * LiteLLM is not asked. Left out: asked, as before.
+   */
+  ai?: boolean;
 }
 
 let refundDelayMs = 30_000;
@@ -47,6 +52,7 @@ export async function queueTurnRefund(userId: string, turn: FailedTurn): Promise
       startedAt: turn.startedAt.toISOString(),
       endedAt: turn.endedAt.toISOString(),
       idempotencyKey: turn.idempotencyKey,
+      ...(turn.ai === false ? { ai: false } : {}),
     },
     // BullMQ ids can't hold ':'.
     { jobId: `refund-${turn.idempotencyKey.replaceAll(':', '-')}`, delay: refundDelayMs },
@@ -63,6 +69,7 @@ export async function handleRefundTurn(job: Job): Promise<unknown> {
     startedAt: string;
     endedAt: string;
     idempotencyKey: string;
+    ai?: boolean;
   };
   const lastTry = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
   return reverseTurn(
@@ -72,7 +79,7 @@ export async function handleRefundTurn(job: Job): Promise<unknown> {
       endedAt: new Date(d.endedAt),
       idempotencyKey: d.idempotencyKey,
     },
-    { withoutAiIfUnknown: lastTry },
+    { withoutAiIfUnknown: lastTry, ai: d.ai !== false },
   );
 }
 

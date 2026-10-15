@@ -8,6 +8,7 @@ export type BalanceListener = (userId: string) => void | Promise<void>;
 const depleted = new Set<BalanceListener>();
 const added = new Set<BalanceListener>();
 const planChanged = new Set<BalanceListener>();
+const turnBilled = new Set<BalanceListener>();
 
 /** Called when a sync leaves the balance at or below zero. Returns an unsubscribe function. */
 export function onBalanceDepleted(fn: BalanceListener): () => void {
@@ -30,6 +31,15 @@ export function onPlanChanged(fn: BalanceListener): () => void {
   return () => planChanged.delete(fn);
 }
 
+/**
+ * Called after a turn's billing job has run (charged or not), e.g. to send the web app the new
+ * balance. Returns an unsubscribe function.
+ */
+export function onTurnBilled(fn: BalanceListener): () => void {
+  turnBilled.add(fn);
+  return () => turnBilled.delete(fn);
+}
+
 async function fire(listeners: Set<BalanceListener>, userId: string, hook: string): Promise<void> {
   for (const fn of [...listeners]) {
     try {
@@ -43,3 +53,4 @@ async function fire(listeners: Set<BalanceListener>, userId: string, hook: strin
 export const fireBalanceDepleted = (userId: string) => fire(depleted, userId, 'balance_depleted');
 export const fireCreditsAdded = (userId: string) => fire(added, userId, 'credits_added');
 export const firePlanChanged = (userId: string) => fire(planChanged, userId, 'plan_changed');
+export const fireTurnBilled = (userId: string) => fire(turnBilled, userId, 'turn_billed');

@@ -36,7 +36,7 @@ import { processors } from '../src/worker/processors.ts';
 import { startWorkers } from '../src/worker/runner.ts';
 // Importing the billing fakes sets the Polar products in the environment.
 import './billing-fakes.ts';
-import { DAY, fakeJob } from './billing-helpers.ts';
+import { DAY, fakeJob, turnsBilled } from './billing-helpers.ts';
 import { installFakeVm } from './fakes.ts';
 import { chatUser, createUser, waitFor } from './helpers.ts';
 import { PRODUCTS, installPolar, subscriptionEvent, type SubOpts } from './polar-fakes.ts';
@@ -338,6 +338,7 @@ describe('browser time and credits', () => {
     const u = await chatUser({ plan: 'max', credits: 10 });
     await ensureSandbox(u.id);
     expect(await turn(u.id)).toBe('done');
+    await turnsBilled(u.id); // its billing runs as a job after the turn
     expect(fake.wakes.filter((id) => id === u.id)).toHaveLength(1);
     // Ten minutes of browser time in that turn: 20 credits, more than the 10 there were.
     fake.state.usage.set(u.id, { awakeSeconds: 0n, browserSeconds: 600n });

@@ -2,7 +2,13 @@
 export { chargeAppAction } from './app-actions.ts';
 export { chargePaidTool } from './paid-tools.ts';
 export { getBalanceSummary, hasCredits, type BalanceSummary } from './balance.ts';
-export { onBalanceDepleted, onCreditsAdded, onPlanChanged, type BalanceListener } from './hooks.ts';
+export {
+  onBalanceDepleted,
+  onCreditsAdded,
+  onPlanChanged,
+  onTurnBilled,
+  type BalanceListener,
+} from './hooks.ts';
 export { getLiteLLMKey, ownKeyInUse } from './litellm.ts';
 export { onboardBilling, offboardBilling } from './onboard.ts';
 export { planHasWebSearch, planLimits, type PlanLimits, type PlanId } from './plans.ts';
@@ -15,6 +21,7 @@ export {
   type SyncResult,
 } from './usage.ts';
 export { queueTurnRefund, type FailedTurn } from './jobs.ts';
+export { queueTurnBilling, settleUnbilledTurns, type TurnToBill } from './turn-billing.ts';
 export { canUseModel } from './models.ts';
 export {
   balancesFor,

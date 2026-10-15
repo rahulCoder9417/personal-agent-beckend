@@ -7,8 +7,9 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { AgentRuntime } from '../proto-gen/vm/v1/vm_pb.ts';
 import { auditLog } from '../src/modules/admin/schema.ts';
 import { usagePeriods } from '../src/modules/billing/schema.ts';
+import { billTurnJobId, handleBillTurn } from '../src/modules/billing/turn-billing.ts';
 import { messages } from '../src/modules/channels/schema.ts';
-import { closeQueues } from '../src/modules/events/queues.ts';
+import { closeQueues, queue } from '../src/modules/events/queues.ts';
 import { events } from '../src/modules/events/schema.ts';
 import { setByokKey, setByokVerifier } from '../src/modules/integrations/byok.ts';
 import {
@@ -485,6 +486,12 @@ describe('turns', () => {
     expect(fake.deliveries.map((d) => d.text)).toEqual(['plan my week']);
     expect(fake.runtimes.get(u.id)).toBe(AgentRuntime.CLAUDE_CODE);
     expect(await outgoing(u.id)).toContain('echo: plan my week');
+
+    // The turn only queued its billing, marked as a Claude plan turn (LiteLLM is not asked).
+    expect(await db().select().from(usagePeriods).where(eq(usagePeriods.userId, u.id))).toEqual([]);
+    const job = await queue('system').getJob(billTurnJobId(fake.deliveries[0]!.deliveryId));
+    expect(job!.data).toEqual({ userId: u.id, turnId: fake.deliveries[0]!.deliveryId, ai: false });
+    await handleBillTurn(job!);
 
     const periods = await db().select().from(usagePeriods).where(eq(usagePeriods.userId, u.id));
     expect(periods).toHaveLength(1);

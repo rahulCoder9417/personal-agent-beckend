@@ -388,6 +388,8 @@ describe('GET /v1/admin/users', () => {
       engine: 'claude_code',
       channels: ['telegram'],
       connectedApps: 1,
+      onboardingCompletedAt: null,
+      gettingStartedDismissedAt: null,
     });
     expect(p1.items[0]).toMatchObject({ id: third.id, status: 'deleted', engine: 'hermes' });
     expect(p1.items[0]!.deletedAt).not.toBeNull();

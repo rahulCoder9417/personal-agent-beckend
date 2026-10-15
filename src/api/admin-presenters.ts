@@ -26,6 +26,8 @@ export function toAdminUser(v: AdminUserView): Schemas['AdminUser'] {
     engine: v.engine,
     channels: [...v.channels],
     connectedApps: v.connectedApps,
+    onboardingCompletedAt: iso(u.onboardingCompletedAt),
+    gettingStartedDismissedAt: iso(u.gettingStartedDismissedAt),
   };
 }
 

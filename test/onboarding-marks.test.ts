@@ -262,3 +262,85 @@ describe('first-run marks: an admin shows the welcome steps again', () => {
     expect(await auditRows(target.id)).toEqual([]);
   });
 });
+
+describe("first-run marks: the admin's user view shows them", () => {
+  type Err = { error: { code: string; message: string } };
+  type Marks = {
+    id: string;
+    onboardingCompletedAt: string | null;
+    gettingStartedDismissedAt: string | null;
+  };
+
+  /** The marks as an admin sees them, on one user's page and in the user list (the same). */
+  async function adminSees(userId: string, token: string) {
+    const detail = await expectContract<{ user: Marks }>(
+      'adminGetUser',
+      await call(`/v1/admin/users/${userId}`, { token }),
+      200,
+    );
+    const list = await expectContract<{ items: Marks[] }>(
+      'adminListUsers',
+      await call(`/v1/admin/users?query=${userId}`, { token }),
+      200,
+    );
+    expect(list.items).toHaveLength(1);
+    expect(list.items[0]).toMatchObject({
+      id: userId,
+      onboardingCompletedAt: detail.user.onboardingCompletedAt,
+      gettingStartedDismissedAt: detail.user.gettingStartedDismissedAt,
+    });
+    return detail.user;
+  }
+
+  it('null for a new user, the same time as on /v1/me once set, null again after the reset', async () => {
+    const admin = await createUser({ role: 'admin' });
+    const u = await createUser();
+
+    expect(await adminSees(u.id, admin.token)).toMatchObject({
+      onboardingCompletedAt: null,
+      gettingStartedDismissedAt: null,
+    });
+
+    const done = await patchMe(u.token, { onboardingCompleted: true });
+    expect(done.onboardingCompletedAt).not.toBeNull();
+    expect(await adminSees(u.id, admin.token)).toMatchObject({
+      onboardingCompletedAt: done.onboardingCompletedAt,
+      gettingStartedDismissedAt: null,
+    });
+
+    const closed = await patchMe(u.token, { gettingStartedDismissed: true });
+    expect(closed.gettingStartedDismissedAt).not.toBeNull();
+    expect(await adminSees(u.id, admin.token)).toMatchObject({
+      onboardingCompletedAt: done.onboardingCompletedAt,
+      gettingStartedDismissedAt: closed.gettingStartedDismissedAt,
+    });
+
+    await expectContract(
+      'adminResetUserOnboarding',
+      await call(`/v1/admin/users/${u.id}/onboarding/reset`, {
+        method: 'POST',
+        token: admin.token,
+        body: { reason: 'support' },
+      }),
+      200,
+    );
+    expect(await adminSees(u.id, admin.token)).toMatchObject({
+      onboardingCompletedAt: null,
+      gettingStartedDismissedAt: null,
+    });
+  });
+
+  it('a user who is not an admin still gets 403 in the Error shape, with no marks', async () => {
+    const user = await createUser();
+    const target = await createUser();
+    await patchMe(target.token, { onboardingCompleted: true });
+    for (const [op, path] of [
+      ['adminGetUser', `/v1/admin/users/${target.id}`],
+      ['adminListUsers', `/v1/admin/users?query=${target.id}`],
+    ] as const) {
+      const body = await expectContract<Err>(op, await call(path, { token: user.token }), 403);
+      expect(body.error).toMatchObject({ code: 'forbidden', message: 'Admins only' });
+      expect(JSON.stringify(body)).not.toContain('onboardingCompletedAt');
+    }
+  });
+});

@@ -172,10 +172,11 @@ export function wireModules(): void {
     offboard: async (userId) => {
       await offboardBilling(userId);
       await deleteUserByokKeys(userId); // after billing removed LiteLLM's copy
-      await deleteUserConnections(userId);
       await deleteUserMcpServers(userId);
       await deleteUserAutomations(userId);
       await deleteUserCrewJobs(userId);
+      // Last: it throws when Composio could not remove an account, and the job tries again.
+      await deleteUserConnections(userId);
     },
   });
 }

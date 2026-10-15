@@ -18,7 +18,7 @@ import {
 import { pauseAllForAdmin, resumeAfterAdmin } from '../automations/automations.ts';
 import { hasCredits } from '../billing/index.ts';
 import { stopPolitely } from '../orchestrator/sandbox.ts';
-import { audit } from './audit.ts';
+import { ACCOUNT_DELETED_ACTION, audit } from './audit.ts';
 
 /** Who acts and why. The reason is required (the contract refuses a blank one). */
 export interface AdminAction {
@@ -201,7 +201,7 @@ export async function deleteAccount(
     await audit({
       userId: user.id,
       actor: 'admin',
-      action: 'account_deleted',
+      action: ACCOUNT_DELETED_ACTION,
       summary: 'An admin deleted this account',
       details: details(a),
     });

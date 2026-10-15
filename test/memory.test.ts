@@ -714,11 +714,10 @@ describe('the user controls their memory', () => {
     await handleDeleteUser({ data: { userId: user.id } } as Job);
 
     expect(await rowsOf(user.id)).toHaveLength(0);
-    // The audit log is kept, and holds no memory text.
-    const kept = await auditOf(user.id);
-    expect(kept.some((e) => e.action === 'remember')).toBe(true);
-    expect(JSON.stringify(kept)).not.toContain('forgotten with the account');
+    // The activity log goes with the account too (it never held the memory's text anyway).
+    expect(await auditOf(user.id)).toEqual([]);
     expect(await rowsOf(other.user.id)).toHaveLength(1);
+    expect((await auditOf(other.user.id)).some((e) => e.action === 'remember')).toBe(true);
   });
 
   it('saveMemory is the only way in, and it needs a user', async () => {

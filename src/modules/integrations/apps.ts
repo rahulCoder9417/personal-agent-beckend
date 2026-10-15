@@ -452,13 +452,32 @@ export async function appActionChangesSomething(actionSlug: string): Promise<boo
   return actionChangesSomething(actionSlug, (await toolTags(actionSlug)) ?? []);
 }
 
+/**
+ * Account deletion: every connection, removed at Composio first, which drops the app's sign-in.
+ * A connection Composio could not remove keeps its row, so the deletion job's next try finds it
+ * and asks again; then this throws, which makes the job try again (and raise an alert after the
+ * last try). One Composio no longer has counts as removed. Safe to re-run.
+ */
 export async function deleteUserConnections(userId: string): Promise<void> {
   const rows = await listConnections(userId);
-  for (const r of rows)
-    await composio()
-      .deleteAccount(r.composioAccountId)
-      .catch(() => {});
-  await db().delete(connections).where(eq(connections.userId, userId));
+  const removed: string[] = [];
+  for (const r of rows) {
+    try {
+      await composio().deleteAccount(r.composioAccountId);
+      removed.push(r.id);
+    } catch (err) {
+      logger().warn(
+        { userId, connectionId: r.id, app: r.app, err: String(err) },
+        'account deletion: Composio could not remove a connected account; the job will try again',
+      );
+    }
+  }
+  if (removed.length)
+    await db()
+      .delete(connections)
+      .where(and(eq(connections.userId, userId), inArray(connections.id, removed)));
+  const left = rows.length - removed.length;
+  if (left) throw new Error(`Composio could not remove ${left} of the user's connected accounts`);
 }
 
 // --- Admin: one user's connections, a recheck, and the numbers per app --------------------------

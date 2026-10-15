@@ -297,6 +297,15 @@ export async function expireApprovals(): Promise<number> {
   return rows.length;
 }
 
+/**
+ * Account deletion: every approval of the user, in any state, with the inputs saved with it.
+ * A job that still holds one of their ids finds nothing and does nothing. Safe to re-run.
+ */
+export async function deleteUserApprovals(userId: string): Promise<number> {
+  const res = await db().delete(approvals).where(eq(approvals.userId, userId));
+  return res.rowCount ?? 0;
+}
+
 /** Admin overview: approvals waiting for an answer that have not expired. */
 export async function countOpenApprovals(now = new Date()): Promise<number> {
   const [row] = await db()

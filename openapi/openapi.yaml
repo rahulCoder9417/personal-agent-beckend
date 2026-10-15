@@ -1588,6 +1588,7 @@ paths:
         a secret), `memory_deleted` and `memories_cleared` (the user deleted in the web app).
         These carry `memoryId` where there is one. They never carry the memory's text: show it
         from `GET /v1/memories`.
+        The log is kept for as long as the account exists. Deleting the account removes it.
       parameters:
         - $ref: "#/components/parameters/Cursor"
         - $ref: "#/components/parameters/Limit"
@@ -3353,14 +3354,15 @@ paths:
         The same deletion a user's own goes through. The user is deleted in Clerk first (through
         Clerk's Backend API); then the account is marked deleted at once and the deletion job runs:
         the container and the user's folder (the vm-manager's `DeleteSandbox`), the LiteLLM key,
-        app connections, automations, linked chats, conversations, messages, files and memories,
-        and a renewing subscription is set to not renew. Clerk's `user.deleted` webhook that
-        follows finds the account already deleted and adds nothing.
+        app connections (removed at Composio too), automations, linked chats, conversations,
+        messages, files, memories, approvals and the user's activity log, and a renewing
+        subscription is set to not renew. Clerk's `user.deleted` webhook that follows finds the
+        account already deleted and adds nothing. The credits ledger and grants stay.
 
         `confirmEmail` must be the user's email (letter case and spaces around it don't matter),
         else 400 and nothing happens. Refused for your own account and for an admin (409). The log
         row keeps the admin's id, the deleted user's id and the reason; never the email or name.
-        An account already deleted answers 404.
+        It is the one activity-log row the deletion leaves. An account already deleted answers 404.
       parameters:
         - name: userId
           in: path

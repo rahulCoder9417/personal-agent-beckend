@@ -413,6 +413,10 @@ export async function installFakeComposio() {
     accountsPage: null as number | null,
     /** The next listAccounts or account call fails with this (used once). */
     accountsError: null as Error | null,
+    /** deleteAccount calls that succeeded, by account id. */
+    deletedAccounts: [] as string[],
+    /** deleteAccount fails with this for these account ids, until a test removes them. */
+    deleteAccountErrors: new Map<string, Error>(),
     /**
      * The tools of a toolkit, when a test sets them. Otherwise every toolkit has two: a send and a
      * list action.
@@ -519,7 +523,11 @@ export async function installFakeComposio() {
       }
       return null;
     },
-    async deleteAccount() {},
+    async deleteAccount(accountId) {
+      const err = state.deleteAccountErrors.get(accountId);
+      if (err) throw err;
+      state.deletedAccounts.push(accountId);
+    },
     async accessToken(accountId) {
       return `gho_fake_token_for_${accountId}`;
     },

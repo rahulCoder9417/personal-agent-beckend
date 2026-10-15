@@ -1,9 +1,11 @@
 import { Code, ConnectError } from '@connectrpc/connect';
 import type { Job } from 'bullmq';
+import { deleteUserAudit } from '../admin/audit.ts';
 import { deleteUserLinks } from '../auth/links.ts';
 import { getActiveUser } from '../auth/users.ts';
 import { deleteUserChannelData } from '../channels/messages.ts';
 import { deleteAgentSettings } from './agent-settings.ts';
+import { deleteUserApprovals } from './approvals.ts';
 import { deleteAllMemories } from './memory.ts';
 import { deleteSandboxRecord, ensureSandbox } from './sandbox.ts';
 import { deleteTurnTimings } from './timings.ts';
@@ -32,8 +34,11 @@ export async function handleOnboardUser(job: Job): Promise<unknown> {
 }
 
 /**
- * system/delete-user: delete the container and data (memories and messages too), revoke the
- * LiteLLM key, remove links.
+ * system/delete-user: delete the container and the user's data, each module its own tables. Every
+ * step is safe to re-run, so a try that failed half-way is simply run again. The steps that ask
+ * outside services and can fail (the offboard hook: Polar, LiteLLM, Composio) come after the
+ * user's own data, so a failure there holds back as little as possible. The activity log goes
+ * last, so a row written by an earlier step does not stay behind.
  */
 export async function handleDeleteUser(job: Job): Promise<unknown> {
   const { userId } = job.data as { userId: string };
@@ -48,9 +53,14 @@ export async function handleDeleteUser(job: Job): Promise<unknown> {
   await deleteAllMemories(userId);
   await deleteChatEngines(userId);
   await deleteTurnTimings(userId);
-  await hooks.offboard(userId);
+  // Approvals, with the exact inputs each one was asked for (an email's recipient, say).
+  await deleteUserApprovals(userId);
   await deleteUserLinks(userId);
   // Messages, files, conversations and each chat's counter.
   await deleteUserChannelData(userId);
+  // Billing (LiteLLM key, renewals), own keys, MCP servers, automations, crew jobs, app connections.
+  await hooks.offboard(userId);
+  // The activity log, with each action's inputs. An admin's record of the deletion stays.
+  await deleteUserAudit(userId);
   return null;
 }

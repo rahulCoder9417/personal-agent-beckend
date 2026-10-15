@@ -70,6 +70,7 @@ export interface ComposioApi {
   listAccounts(userId: string): Promise<ComposioAccount[]>;
   /** One connected account, asked by its id. Null when Composio has no such account. */
   account(accountId: string): Promise<ComposioAccount | null>;
+  /** Removes one connected account at Composio. One Composio no longer has counts as removed. */
   deleteAccount(accountId: string): Promise<void>;
   /**
    * The provider OAuth access token of one connected account, or null when Composio doesn't
@@ -138,6 +139,12 @@ const toAccount = (a: RawAccount): ComposioAccount => ({
   authConfigId: a.authConfig?.id ?? null,
 });
 
+/** Composio has no such connected account (an HTTP 404, or the SDK's own code for it). */
+function accountNotFound(err: unknown): boolean {
+  const e = err as { status?: number; code?: string } | null;
+  return e?.status === 404 || e?.code === 'CONNECTED_ACCOUNT_NOT_FOUND';
+}
+
 function sdk(): Composio {
   const apiKey = config().COMPOSIO_API_KEY;
   if (!apiKey) throw new Error('COMPOSIO_API_KEY is not set');
@@ -196,13 +203,18 @@ const realApi: ComposioApi = {
     try {
       return toAccount((await sdk().connectedAccounts.get(accountId)) as unknown as RawAccount);
     } catch (err) {
-      const e = err as { status?: number; code?: string };
-      if (e.status === 404 || e.code === 'CONNECTED_ACCOUNT_NOT_FOUND') return null;
+      if (accountNotFound(err)) return null;
       throw err;
     }
   },
   async deleteAccount(accountId) {
-    await sdk().connectedAccounts.delete(accountId);
+    try {
+      await sdk().connectedAccounts.delete(accountId);
+    } catch (err) {
+      // Already gone (an earlier try got that far): that is what was asked.
+      if (accountNotFound(err)) return;
+      throw err;
+    }
   },
   async accessToken(accountId) {
     const acc = (await sdk().connectedAccounts.get(accountId)) as unknown as {

@@ -379,7 +379,7 @@ This section follows a new person from sign-up to an account with credits and a 
 
 - **The web app arrives first.** If a request comes before Clerk's webhook, the api creates the account from Clerk's data. The requests that arrive together share that one read at Clerk. The same onboarding job is added once. The webhook that follows finds the same details and writes nothing.
 - **Clerk reports a change.** The email, its verified state and the role are updated, when they differ from ours. A report that changes none of them writes nothing. An admin is a user whose role is set to admin in Clerk. The admin tool that changes a role sets it in Clerk first and on our row at once, so this webhook then agrees (section 31).
-- **Clerk reports a deletion.** The account is marked deleted and a delete job runs. It removes the container and its data, the LiteLLM key, app connections, automations, linked chats, conversations, messages, files and memories. It also stops the subscription from renewing.
+- **Clerk reports a deletion.** The account is marked deleted and a delete job runs. It removes the container and its data, the LiteLLM key, app connections, automations, linked chats, conversations, messages, files, memories, approvals and the activity log. It also stops the subscription from renewing. Section 33, "What is kept and what is deleted", has the steps and what stays.
 - **An admin deletes the account.** The admin tool deletes the user in Clerk, marks the account deleted and adds the same delete job. Clerk's deletion webhook then finds nothing left to do (section 31).
 
 ### The first visit to the web app
@@ -902,6 +902,7 @@ The Platform MCP is the platform's tool server. MCP is a standard way for an AI 
 - Every tool call that succeeds adds one entry: the tool's name, a one-line summary, the inputs and the credits charged.
 - An input whose name looks like a secret (key, token, password) is blanked. `read_page` keeps the address without the part after the question mark. The memory tools never keep a memory's text.
 - A failed call adds no entry. Three refusals are still logged: a refused search, a refused page and a refused memory.
+- The log is kept for as long as the account exists. Deleting the account removes it, inputs and all. The one row that stays is an admin's record that they deleted the account (section 31).
 - A rate limit is a cap on calls in a period. Per user: 240 calls a minute to `/mcp`, 20 searches a minute, 30 pages a minute, 60 memory changes an hour.
 
 ### What can go wrong
@@ -990,6 +991,7 @@ Each connection keeps the time the platform last heard from Composio about it: a
 - **The app is not connected or not on the plan.** The tool says so. Nothing runs.
 - **Composio or the app is down.** The agent is told to try later. Nothing is charged.
 - **Composio is down while a user connects, or will not make a setup** (for example, the Composio key may not make setups). The api answers 503: "Gmail can't be connected right now". Nothing is saved, and the next try asks again.
+- **Composio cannot remove a connected account.** On Disconnect, by the user or an admin, the failure is only written to the server log, and our row is deleted anyway. The account then stays at Composio, with the app's sign-in, and nothing tries again. On account deletion it is different: the row stays and the deletion job fails, so it tries again (section 33).
 - **Two users connect a new app at the same moment.** Each may make a setup at Composio. The first one saved is used by everyone. The other stays unused at Composio, with no connections on it.
 - **The user says an app is connected, but the agent can't see it.** The agent says it may still be finishing, or that it needs connecting again on the Apps page. To see why, run the dev-user script's `apps` command on the server (`docs/composio.md`, section 11). It prints each connection with our status, its Composio account id, what Composio says about it, the setup it was made with, and what the agent sees.
 
@@ -1040,6 +1042,7 @@ The platform decides by these words in the action's name. There are two exceptio
 - **A late tap on an old button.** The user gets "That approval was already answered or has expired."
 - **A risky action with no approval.** Refused, with a message that tells the agent to ask first.
 - **The agent changes the email after the yes.** Refused, because the inputs differ. The approval still works with the right inputs.
+- **The account is deleted.** Every approval of the user goes, in any state, with the inputs saved with it. A job that still holds one of their ids finds nothing and does nothing.
 
 ## 16. The user's own MCP servers
 
@@ -2378,10 +2381,10 @@ Example: three people report spam from Ravi's agent. The founder suspends his ac
 
 1. The admin sends a reason and the user's email, typed out as a check. If the email does not match, nothing happens. Letter case and spaces around it don't matter.
 2. The backend deletes the user in Clerk, through its Backend API. If Clerk cannot be reached, nothing changes. If Clerk no longer has the user, the backend goes on.
-3. It marks the account deleted at once, so every sign-in is refused, and adds the same delete job a user's own deletion adds (section 6): the container and the user's folder through the vm-manager's `DeleteSandbox`, the LiteLLM key, app connections, automations, linked chats, conversations, messages, files and memories. A renewing subscription is set to not renew.
+3. It marks the account deleted at once, so every sign-in is refused, and adds the same delete job a user's own deletion adds (section 6): the container and the user's folder through the vm-manager's `DeleteSandbox`, the LiteLLM key, app connections, automations, linked chats, conversations, messages, files, memories, approvals and the activity log. A renewing subscription is set to not renew. Section 33 has the steps.
 4. Clerk's "user deleted" webhook arrives later, finds the account deleted already, and adds nothing.
 
-The activity-log row keeps the admin's id, the deleted user's id and the reason. Never the email or the name. A second delete of the same account answers "not found".
+The activity-log row keeps the admin's id, the deleted user's id and the reason. Never the email or the name. It is the one row of the user's activity log that the delete job leaves, so there is a record of who deleted the account and why. A second delete of the same account answers "not found".
 
 ### Signing a user out everywhere
 
@@ -2582,9 +2585,26 @@ Example: the limit is 3 and three containers are awake. A Free user was quiet fo
 A stop keeps everything in the user's folder: the engines' memory and chat sessions, the Claude sign-in, the workspace with files and cloned code, and the browser's profile. A new agent image keeps the folder too. Only deleting the account removes it:
 
 1. `DeleteSandbox` removes the container, the user's folder, the proxy rule and the vm-manager's record. Awake periods stay for billing history.
-2. The backend removes the token record, the agent settings, the shared memories, the chat links, the messages and the uploaded files.
-3. The user's gateway key is revoked, and a paid subscription is set to not renew.
-4. App connections, the user's own MCP servers and automations are removed.
+2. The backend removes the token record, the agent settings, the shared memories, the record of which engine ran each chat, the turn timings, the approvals (with the exact inputs each was asked for, such as an email's recipient), the chat links, the conversations, the messages and the uploaded files.
+3. The user's gateway key is revoked, and a paid subscription is set to not renew. The user's own AI keys, their own MCP servers, automations (with their Composio triggers) and crew jobs are removed.
+4. App connections are removed, at Composio first, which drops the app's sign-in.
+5. Last, the activity log, with the inputs of every action. The one row that stays is an admin's record that they deleted the account (section 31). It goes last so that a row written by an earlier step does not stay behind.
+
+Each module deletes its own tables. Every step is safe to run again, so a job that stopped half-way is simply run again. The steps that ask outside services (LiteLLM, Polar, Composio) come after the user's own data, so a failure there holds back as little as possible.
+
+**When Composio cannot remove an app.** That connection keeps its row and the job fails. It is tried again like any job: 5 tries, with waits of 5 seconds, 30 seconds, 2 minutes and 10 minutes, then an alert. An admin can then run it once more from the Jobs page (section 31). An app that Composio no longer has counts as removed. Example: Composio is down for a minute when Priya deletes her account. Her messages, approvals and memories go at once. Her GitHub connection waits; the next try, a few seconds later, removes it at Composio and then her activity log.
+
+**What stays after a deletion.**
+
+| What | Why |
+|---|---|
+| The `users` row, marked deleted, with the email and the name still in it | The admin list shows deleted accounts. Nothing removes the email and the name yet |
+| Credit grants, the credit ledger, usage periods, payments and subscriptions | Money records. The ledger is never edited (Part C) |
+| Coupon redemptions, with the IP address | One redemption per coupon and user, and the abuse flags (section 29) |
+| An admin's record that they deleted the account | Who deleted it and why (section 31) |
+| Saved webhooks in `events`, such as a Telegram message as it came in | The daily clean-up removes finished ones after 30 days. A failed one stays |
+| The vm-manager's awake periods | Billing history |
+| The nightly backups | A dump folder goes after `BACKUP_KEEP_DAYS` days, 7 by default. The archives of users' folders are never deleted (section 37) |
 
 ### The health check and the reconciler
 
@@ -2865,7 +2885,7 @@ Example: a person sends 11 link codes from one unlinked Telegram chat within an 
 ### What can go wrong
 
 - The users' files are not copied off the server. With the default settings their archives go to a separate "volumes" folder, and the upload command is given only the dump folder. The command must name the volumes folder too.
-- Old archives of users' files pile up: step 4 of the backup deletes only the dump folders.
+- Old archives of users' files pile up: step 4 of the backup deletes only the dump folders. So a deleted user's files also stay in the archives made before the deletion, with no end date. Their database rows stay in the dumps for `BACKUP_KEEP_DAYS` days.
 - One user's folder cannot be packed: the others still are, and one alert names the users that failed.
 - `ALERT_WEBHOOK_URL` is empty: alerts are only in the logs.
 
@@ -3123,6 +3143,8 @@ These were found by reading the code while this report was written. Each is desc
 - **The chargeback mark on an account is never shown anywhere** (section 28).
 - **Scout's instructions in the agent image are out of date.** They still say the page reader refuses the built-in search's results. On Claude Code it no longer does (section 21).
 - **What a user is told when Textcrew AI credits run out in the middle of a turn is not settled.** The turn may be treated as our fault and given back (section 26).
+- **Disconnect does not try again when Composio cannot remove the account.** The failure is only logged and our row is deleted, so the app's sign-in can stay at Composio with nothing pointing to it. Account deletion does try again (sections 14 and 33).
+- **A deleted account keeps its email and name** in its `users` row, and its data stays in backups for a while: 7 days in the database dumps by default, and with no end in the archives of users' files (sections 33 and 37).
 
 ### Crew jobs
 

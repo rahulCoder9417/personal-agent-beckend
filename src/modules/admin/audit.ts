@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, lt, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, lt, not, type SQL } from 'drizzle-orm';
 import { db, type Tx } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import { auditLog } from './schema.ts';
@@ -25,6 +25,26 @@ export async function audit(input: AuditInput, tx: Tx = db()): Promise<void> {
     details: input.details ?? null,
     creditsCharged: input.creditsCharged ?? null,
   });
+}
+
+/** The row an admin's deletion of an account writes (admin/accounts.ts). It outlives the account. */
+export const ACCOUNT_DELETED_ACTION = 'account_deleted';
+
+/**
+ * Account deletion: the user's whole activity log. One row stays: an admin's record that they
+ * deleted the account, which holds the admin's id, the user's id and the reason, never the
+ * user's email, name or any input. Safe to re-run. Returns how many rows went.
+ */
+export async function deleteUserAudit(userId: string): Promise<number> {
+  const adminDeletion = and(
+    eq(auditLog.actor, 'admin'),
+    eq(auditLog.action, ACCOUNT_DELETED_ACTION),
+  )!;
+  // A busy user has thousands of rows: count them, don't send their ids back.
+  const res = await db()
+    .delete(auditLog)
+    .where(and(eq(auditLog.userId, userId), not(adminDeletion)));
+  return res.rowCount ?? 0;
 }
 
 export async function listAudit(userId: string, opts: { cursor?: string; limit: number }) {

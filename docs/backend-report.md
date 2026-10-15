@@ -228,7 +228,7 @@ The web app signs the user in with Clerk. Clerk gives the browser a session toke
 
 1. The api checks the token's signature with Clerk's key. A missing, old or forged token is refused.
 2. The token holds Clerk's id of the user. The api finds the matching row in `users`, from the short copy in Redis when there is one (below). A deleted account is refused. A suspended account is refused with `account_suspended` (section 31).
-3. If there is no row yet, the api reads the user from Clerk and creates the account. This covers a user who arrives before Clerk's sign-up webhook.
+3. If there is no row yet, the api reads the user from Clerk and creates the account. This covers a user who arrives before Clerk's sign-up webhook. A new account's first page sends about a dozen requests at once; they share one read at Clerk and one new row, instead of each making its own.
 
 ### Keeping reads fast
 
@@ -242,6 +242,8 @@ The database is on Neon, in Ohio, and the server is in Mumbai. Each trip to the 
 
 - The copy is used for 60 seconds at most.
 - Every change to a user's row drops the copy at once: a suspension or its lifting, a new plan, a new role, a deletion, a new name or time zone, the first-run marks (also an admin's reset), a chargeback mark, and Clerk's updates. For the next 30 seconds no new copy is kept, and reads go to the database. A change made inside a longer transaction is saved within that time, so a read that saw the old row just before can't keep it.
+- An update from Clerk changes the row only when Clerk's email, its verified state or the role differ from ours. Clerk also reports changes we don't keep (a new picture, a name), and for a new account its webhook may come after the first requests; those write nothing and leave the copy in place. Before 15 October each of them dropped the copy, and the next 30 seconds of requests each made one more trip.
+- A new account gets its copy as soon as the account is made, by the webhook's job or by the first request. So the first page's requests don't each look the user up: one trip less on that page, about 0.2 seconds.
 - If Redis can't be reached, every read goes to the database, as before.
 - Which user a Clerk id belongs to never changes, so that is kept for a day.
 
@@ -365,7 +367,7 @@ This section follows a new person from sign-up to an account with credits and a 
 
 1. Priya signs up. Clerk creates her sign-in account and sends a "user created" webhook to the api.
 2. The api verifies it, saves the event and adds a system job.
-3. The worker creates her row in `users`: email, name and role. She starts on the Free plan.
+3. The worker creates her row in `users`: email, name and role. She starts on the Free plan. It also puts a copy of the row in Redis, so the web app's first page finds her without a trip to the database (section 4, "Keeping reads fast").
 4. Because the row is new, the worker adds one onboarding job. Its id holds her user id, so there is only one.
 5. The onboarding job gives her 100 sign-up credits. They are given once, ever.
 6. It asks LiteLLM for her own key. The key's spending limit follows her credit balance. The key is stored encrypted.
@@ -375,8 +377,8 @@ This section follows a new person from sign-up to an account with credits and a 
 
 ### Other paths
 
-- **The web app arrives first.** If a request comes before Clerk's webhook, the api creates the account from Clerk's data. The same onboarding job is added once.
-- **Clerk reports a change.** The email, its verified state and the role are updated. An admin is a user whose role is set to admin in Clerk. The admin tool that changes a role sets it in Clerk first and on our row at once, so this webhook then agrees (section 31).
+- **The web app arrives first.** If a request comes before Clerk's webhook, the api creates the account from Clerk's data. The requests that arrive together share that one read at Clerk. The same onboarding job is added once. The webhook that follows finds the same details and writes nothing.
+- **Clerk reports a change.** The email, its verified state and the role are updated, when they differ from ours. A report that changes none of them writes nothing. An admin is a user whose role is set to admin in Clerk. The admin tool that changes a role sets it in Clerk first and on our row at once, so this webhook then agrees (section 31).
 - **Clerk reports a deletion.** The account is marked deleted and a delete job runs. It removes the container and its data, the LiteLLM key, app connections, automations, linked chats, conversations, messages, files and memories. It also stops the subscription from renewing.
 - **An admin deletes the account.** The admin tool deletes the user in Clerk, marks the account deleted and adds the same delete job. Clerk's deletion webhook then finds nothing left to do (section 31).
 

@@ -128,6 +128,27 @@ describe('every change drops the copy', () => {
     expect(me).toMatchObject({ name: 'New Name', timezone: 'Asia/Kolkata' });
   });
 
+  it("the first-run marks show in the next call: the user's own, and an admin's reset", async () => {
+    const u = await createUser();
+    const admin = await createUser({ role: 'admin' });
+    const me = async () =>
+      expectContract<{ onboardingCompletedAt: string | null }>(
+        'getMe',
+        await call('/v1/me', { token: u.token }),
+        200,
+      );
+    expect((await me()).onboardingCompletedAt).toBeNull();
+    await call('/v1/me', { method: 'PATCH', token: u.token, body: { onboardingCompleted: true } });
+    expect((await me()).onboardingCompletedAt).not.toBeNull();
+    const reset = await call(`/v1/admin/users/${u.id}/onboarding/reset`, {
+      method: 'POST',
+      token: admin.token,
+      body: { reason: 'support' },
+    });
+    expect(reset.status).toBe(200);
+    expect((await me()).onboardingCompletedAt).toBeNull();
+  });
+
   it("Clerk's update (a new role) shows in the next call", async () => {
     const u = await createUser();
     await call('/v1/me', { token: u.token });

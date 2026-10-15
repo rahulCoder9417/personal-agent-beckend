@@ -48,6 +48,35 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 15 October 2026: deleting an account also removes the approvals and the activity log
+
+- **Where it is:** on the branch `worktree-agent-aa565e69739f56a5f`, waiting for your review. Not on `main` and not on the test server.
+- **Why:** the live privacy page says "Messages, approvals, automations, activity log: until you delete them or your account", and the web app says data is kept until the account is deleted. The delete job removed the container, messages, memories, files, connections, automations and links, but never the user's approvals or their activity log. Both hold the inputs of actions: an approval keeps the exact details it was asked for, such as an email's recipient, and an activity-log entry keeps a tool call's inputs, such as an event's title. Google's review of the app will check how users delete their data. Nothing in the design said these two were kept on purpose: no code reads the activity log except to show it, and the abuse checks use the coupon redemptions, not the log.
+- **What the user notices:** after deleting their account, nothing of their approvals or activity log is left. Nothing else changes.
+- **Backend:**
+  - **Approvals:** the delete job removes every approval of the user, in any state, with its saved inputs. The orchestrator, which owns the table, does it.
+  - **The activity log:** the delete job removes the user's whole log, as its last step, so a row written by an earlier step does not stay behind. The admin module, which owns the table, does it. One row stays: when an admin deleted the account, their record of it (the admin's id, the user's id and the reason, never the email or the name). The design already said this row is kept, so there is a record of who deleted an account and why.
+  - **The order of the steps:** the user's own data goes first, then the steps that ask outside services (LiteLLM, Polar, Composio), then the activity log. A failure at an outside service now holds back as little as possible. Before, a Polar failure stopped the job before the chats and messages were removed.
+  - **Composio:** when Composio could not remove a connected app, the failure was swallowed without a log line, and our row was deleted anyway. The app's sign-in then stayed at Composio with nothing pointing to it. Now the row stays, the failure is logged (the user id, the connection id, the app and the error, never a secret) and the job fails, so it runs again: 5 tries over about 13 minutes, then an alert, and an admin can run it once more from the Jobs page. An app that Composio no longer has counts as removed, so a try that got half-way does not fail forever. This is only for account deletion. Disconnect still deletes the row when Composio fails (see "Still open").
+  - **Not touched:** the credits ledger and grants, usage periods, payments, subscriptions and coupon redemptions. They are money records, and the ledger is never edited.
+  - Every step is still safe to run again.
+- **Cost and speed:** none worth measuring. Two more deletes per account deletion.
+- **Contracts:** `openapi.yaml` changed in words only: the admin delete now lists approvals and the activity log among what the job removes, says the ledger and grants stay and that the admin's row is the one activity-log row left, and the activity list says the log is kept for as long as the account exists. No field changed. `vm.proto` did not change.
+- **Database:** none. No new table and no migration.
+- **How it was checked:**
+  - New tests (4), in one new file: deleting an account removes its approvals and activity log, and the recipient of an approved email is then in no approval, no activity-log row and no message; another user keeps their approvals, log, messages and container. An admin's record of the deletion stays, and so do the credit grants and ledger, unchanged. A second and a third run succeed and change nothing. With Composio failing for one of two connected apps, the first run removes the other one at Composio, keeps the failed row and fails, while the messages and approvals are already gone; the next run removes the second app at Composio and then the activity log; the other user's app is never asked about.
+  - With the two new delete steps taken out on purpose, all 4 new tests failed. With them in, they pass.
+  - One older test changed: the memory test said the activity log is kept after the account is deleted. It now checks that the log goes, and that another user's stays.
+  - `pnpm lint`, `pnpm typecheck` and `pnpm test` pass: 70 test files, 859 tests.
+  - Not run on the test server, and not against the real Composio. Composio's "not found" answer is read the same way the code already read it when asking about one account.
+- **Still open:**
+  - **Disconnect does not try again.** When Composio fails, the failure is only logged (without the user or the connection) and our row is deleted. Two ways to fix it: keep the row as "removing" and let a small job try again, or add a job with the Composio account id that BullMQ retries. A third, wider net: on account deletion, ask Composio for every account it holds under the user's id and remove those too, which also catches ones a failed Disconnect left. Not built: it is outside the delete job.
+  - **Composio triggers** of a user's automations are still removed with the failure swallowed, on account deletion and on delete.
+  - **The privacy page and the backups.** The page says backups are "14 days rolling" and "fully cleared within 30 days". The backend keeps its database dumps 7 days (`BACKUP_KEEP_DAYS`, 7 by default and in `.env.example`; the server's own value was not read: the admin Settings page shows it). The archives of users' files are never deleted, so a deleted user's files stay in them. The nightly backup has also not been seen to work on the server yet (`aws-setup.md`). Neon keeps its own history of the database too.
+  - **Other things the page promises:** raw incoming events "30 days", but a failed event is never removed. A deleted account's `users` row keeps the email and the name.
+- **Docs updated:** `backend-report.md` sections 6, 13, 14, 15, 31, 33 (the steps, a Composio failure, and a new table of what stays), 37 and 43; `hld-mvp.md` section 12 (built, never run for real; and a new open question on the privacy page).
+- **Commits:** `86ed5e3` (code and tests), and the docs commit after it.
+
 ### 15 October 2026: sign-in moves to Clerk's production setup, with Textcrew's own Google sign-in
 
 - **Where it is:** live on the test server and the web app since 15 October.

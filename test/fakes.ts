@@ -5,6 +5,7 @@ import { setLiteLLMClient } from '../src/modules/billing/litellm.ts';
 import { sha256Hex } from '../src/shared/crypto.ts';
 import { setTelegramApi } from '../src/modules/channels/adapters/telegram.ts';
 import type {
+  ToolkitScopes,
   AuthConfigInfo,
   ComposioAccount,
   ComposioTool,
@@ -461,11 +462,21 @@ export async function installFakeComposio() {
     linkError: null as Error | null,
     /** Setups the server made with Composio's shared sign-in, by toolkit. */
     managedSetups: [] as Array<{ toolkit: string; name: string; id: string }>,
+    /** The scopes each setup names (absent: none, so Composio's default set). */
+    setupScopes: new Map<string, string[]>(),
+    /** What Composio says each toolkit's sign-in asks for (absent: nothing, no recommendation). */
+    toolkitScopes: new Map<string, ToolkitScopes>(),
+    /** Every scope question asked: a setup's (by id) or a toolkit's (with its actions). */
+    scopeQuestions: [] as Array<{ setup: string } | { toolkit: string; tools: string[] }>,
+    /** The next authConfigScopes / toolkitScopes call fails with this (used once). */
+    scopesError: null as Error | null,
     /** The next setUpManagedAuthConfig fails with this (used once). */
     setupError: null as Error | null,
   };
   let n = 0;
-  const once = <K extends 'authConfigError' | 'directError' | 'linkError' | 'setupError'>(
+  const once = <
+    K extends 'authConfigError' | 'directError' | 'linkError' | 'setupError' | 'scopesError',
+  >(
     key: K,
   ) => {
     const err = state[key];
@@ -493,6 +504,18 @@ export async function installFakeComposio() {
       state.authConfigLookups.push(authConfigId);
       once('authConfigError');
       return state.authConfigs.get(authConfigId) ?? { composioManaged: true, authScheme: 'OAUTH2' };
+    },
+    async authConfigScopes(authConfigId) {
+      state.scopeQuestions.push({ setup: authConfigId });
+      once('scopesError');
+      return state.setupScopes.get(authConfigId) ?? null;
+    },
+    async toolkitScopes(toolkit, tools) {
+      state.scopeQuestions.push({ toolkit, tools: [...tools] });
+      once('scopesError');
+      return (
+        state.toolkitScopes.get(toolkit) ?? { required: [], leastPrivilege: null, fewest: null }
+      );
     },
     async setUpManagedAuthConfig(toolkit, name) {
       once('setupError');

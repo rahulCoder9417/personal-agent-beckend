@@ -1,5 +1,6 @@
 import { createClerkClient } from '@clerk/backend';
 import { and, desc, eq, ilike, isNull, lt, ne, or, sql, type SQL } from 'drizzle-orm';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { config } from '../../shared/config.ts';
 import { db, type Tx } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
@@ -107,14 +108,42 @@ export async function markUserDeleted(clerkId: string): Promise<User | undefined
   return row;
 }
 
-/** A time zone given here counts as set: the web app never replaces it with the browser's. */
+/** True stamps the time now, keeping a time already there; false clears it. */
+const firstRunMark = (column: AnyPgColumn, on: boolean) =>
+  on ? sql`coalesce(${column}, now())` : null;
+
+/**
+ * A time zone given here counts as set: the web app never replaces it with the browser's.
+ * `onboardingCompleted` and `gettingStartedDismissed` set or clear the web app's first-run marks.
+ */
 export async function updateProfile(
   userId: string,
-  patch: { name?: string; timezone?: string },
+  patch: {
+    name?: string;
+    timezone?: string;
+    onboardingCompleted?: boolean;
+    gettingStartedDismissed?: boolean;
+  },
+  tx: Tx = db(),
 ): Promise<User> {
-  const [row] = await db()
+  const { onboardingCompleted, gettingStartedDismissed, ...profile } = patch;
+  const [row] = await tx
     .update(users)
-    .set({ ...patch, ...(patch.timezone !== undefined ? { timezoneSet: true } : {}) })
+    .set({
+      ...profile,
+      ...(profile.timezone !== undefined ? { timezoneSet: true } : {}),
+      ...(onboardingCompleted !== undefined
+        ? { onboardingCompletedAt: firstRunMark(users.onboardingCompletedAt, onboardingCompleted) }
+        : {}),
+      ...(gettingStartedDismissed !== undefined
+        ? {
+            gettingStartedDismissedAt: firstRunMark(
+              users.gettingStartedDismissedAt,
+              gettingStartedDismissed,
+            ),
+          }
+        : {}),
+    })
     .where(eq(users.id, userId))
     .returning();
   return row!;

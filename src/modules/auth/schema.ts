@@ -41,6 +41,14 @@ export const users = pgTable('users', {
     .default('active'),
   /** When the current suspension started. Null while active. */
   suspendedAt: ts(),
+  /**
+   * The web app's first-run marks (backend-report.md, "Sign-up and the first container"). Null:
+   * the welcome steps were not finished or skipped yet, so the web app shows them. Every account
+   * starts null, the ones made before these columns too (no backfill).
+   */
+  onboardingCompletedAt: ts(),
+  /** Null: the "Getting started" checklist may still show. Set when the user closes it. */
+  gettingStartedDismissedAt: ts(),
   createdAt: ts().notNull().defaultNow(),
   deletedAt: ts(),
 });

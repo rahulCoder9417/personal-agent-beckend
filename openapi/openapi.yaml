@@ -93,6 +93,10 @@ paths:
       description: |
         A `timezone` (an IANA name such as `Asia/Kolkata`, 400 for an unknown one) also makes
         `timezoneSet` true.
+
+        `onboardingCompleted` and `gettingStartedDismissed` are the web app's first-run marks (see
+        `Me`). `true` stamps the time now, or keeps the time already there; `false` clears it. Only
+        the signed-in user's own marks change.
       requestBody:
         required: true
         content:
@@ -3626,7 +3630,19 @@ components:
 
     Me:
       type: object
-      required: [id, email, emailVerified, name, timezone, timezoneSet, plan, role, credits, createdAt]
+      required:
+        - id
+        - email
+        - emailVerified
+        - name
+        - timezone
+        - timezoneSet
+        - plan
+        - role
+        - credits
+        - createdAt
+        - onboardingCompletedAt
+        - gettingStartedDismissedAt
       properties:
         id: { type: string }
         email: { type: string, format: email }
@@ -3649,12 +3665,42 @@ components:
             balance: { type: integer }
             nextExpiry: { type: [string, "null"], format: date-time }
         createdAt: { type: string, format: date-time }
+        onboardingCompletedAt:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            When the user finished or skipped the web app's welcome steps. Null means not yet, so
+            the web app shows them. Every account starts with null, and so did the accounts made
+            before this field existed: they see the welcome steps once too. Set with
+            `PATCH /v1/me` `onboardingCompleted: true`; cleared with `false` (to see them again,
+            from Settings) or by an admin.
+        gettingStartedDismissedAt:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            When the user closed the "Getting started" checklist. Null means it may still show.
+            The web app also hides it by itself once every step is done, worked out from the real
+            data (a linked chat, a connected app, and so on); the backend does not track the
+            steps. Set with `PATCH /v1/me` `gettingStartedDismissed: true`; cleared with `false`
+            or by an admin.
 
     MeUpdate:
       type: object
       properties:
         name: { type: string, maxLength: 80 }
         timezone: { type: string }
+        onboardingCompleted:
+          type: boolean
+          description: |
+            `true`: the welcome steps are done (finished or skipped). Sets `onboardingCompletedAt`
+            to now; if it is already set, the first time is kept. `false`: clears it, so the web
+            app shows the welcome steps again.
+        gettingStartedDismissed:
+          type: boolean
+          description: |
+            `true`: the user closed the "Getting started" checklist. Sets
+            `gettingStartedDismissedAt` to now; if it is already set, the first time is kept.
+            `false`: clears it, so the checklist may show again.
 
     ChannelLink:
       type: object

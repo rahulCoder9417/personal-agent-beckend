@@ -162,6 +162,13 @@
       "when": 1791981654459,
       "tag": "0022_user_account_status",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792045714869,
+      "tag": "0023_onboarding_marks",
+      "breakpoints": true
     }
   ]
 }

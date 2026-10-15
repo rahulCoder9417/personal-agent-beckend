@@ -93,6 +93,23 @@ export async function scheduleConnectionCheck(input: {
   return true;
 }
 
+/**
+ * A connection just became active: queues the job that replaces an older connection of the same
+ * app to the same account (connection-replace.ts). One job per connection; adding it again while
+ * it is queued or recently done does nothing. A failure to queue is only logged: the connection
+ * works anyway, and the older one stays until the next time.
+ */
+export async function queueConnectionSettle(userId: string, connectionId: string): Promise<void> {
+  await addJob(
+    'system',
+    'settle-connection',
+    { userId, connectionId },
+    { jobId: `settle-conn-${connectionId}` },
+  ).catch((err: unknown) =>
+    logger().warn({ userId, connectionId, err: String(err) }, 'could not queue the settle job'),
+  );
+}
+
 /** Our status for an account Composio describes, or null while it is not finished there. */
 export function statusFromComposio(composioStatus: string): Connection['status'] | null {
   if (composioStatus === 'ACTIVE') return 'active';
@@ -129,7 +146,7 @@ export async function refreshPendingConnections(
         if (!acc) return;
         const status = statusFromComposio(acc.status);
         // Composio answered: that is a check, also while it is still being set up.
-        await db()
+        const [updated] = await db()
           .update(connections)
           .set(
             status
@@ -142,7 +159,9 @@ export async function refreshPendingConnections(
               eq(connections.id, row.id),
               eq(connections.status, 'pending'),
             ),
-          );
+          )
+          .returning({ status: connections.status });
+        if (updated?.status === 'active') await queueConnectionSettle(userId, row.id);
       } catch (err) {
         logger().warn(
           { userId, connectionId: row.id, err: String(err) },
@@ -467,13 +486,19 @@ export async function setConnectionStatus(
   accountId: string,
   status: Connection['status'],
 ): Promise<void> {
-  await db()
+  const rows = await db()
     .update(connections)
     .set({ status, checkedAt: new Date() })
-    .where(eq(connections.composioAccountId, accountId));
+    .where(eq(connections.composioAccountId, accountId))
+    .returning({ id: connections.id, userId: connections.userId });
+  if (status === 'active') for (const row of rows) await queueConnectionSettle(row.userId, row.id);
 }
 
-/** The user's active connection for a toolkit, if any. */
+/**
+ * The user's active connection for a toolkit, if any: the newest one. A user may have two (a
+ * second account of the app, or the same account connected again before the older connection is
+ * replaced); Tex, triggers and the git gateway then all use the same one, the newest.
+ */
 export async function connectionForToolkit(
   userId: string,
   toolkit: string,
@@ -489,7 +514,9 @@ export async function connectionForToolkit(
         eq(connections.app, app.slug),
         eq(connections.status, 'active'),
       ),
-    );
+    )
+    .orderBy(desc(connections.createdAt), desc(connections.id))
+    .limit(1);
   return row;
 }
 
@@ -582,6 +609,8 @@ export async function recheckConnection(
     .returning();
   // Disconnected meanwhile.
   if (!updated) return undefined;
+  if (updated.status === 'active' && row.status !== 'active')
+    await queueConnectionSettle(userId, row.id);
   let checksQueued = false;
   if (updated.status === 'pending') {
     checksQueued = await scheduleConnectionCheck({

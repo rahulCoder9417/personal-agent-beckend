@@ -399,6 +399,8 @@ export async function installFakeComposio() {
     slug: string;
     triggerId: string;
     config: Record<string, unknown>;
+    /** The connected account it watches (Composio picks the user's first one when none is given). */
+    connectedAccountId: string | undefined;
   }> = [];
   const state = {
     /** What Composio reports for a user's connected accounts (listAccounts, account). */
@@ -440,6 +442,14 @@ export async function installFakeComposio() {
     executeData: new Map<string, unknown>(),
     /** The next createTrigger throws this (used once). */
     triggerError: null as Error | null,
+    /** The next listTriggers throws this (used once). */
+    listTriggersError: null as Error | null,
+    /** Every listTriggers call, with its filter. */
+    triggerListings: [] as Array<{ triggerIds?: string[]; connectedAccountIds?: string[] }>,
+    /** Connected accounts deleted at Composio, in order. */
+    deletedAccounts: [] as string[],
+    /** The next deleteAccount throws this (used once). */
+    deleteAccountError: null as Error | null,
     /**
      * What Composio says about each setup (auth config). One not listed here is Composio's
      * shared sign-in, as the real setups made in the dashboard are by default.
@@ -542,7 +552,17 @@ export async function installFakeComposio() {
       }
       return null;
     },
-    async deleteAccount() {},
+    async deleteAccount(accountId) {
+      const err = state.deleteAccountError;
+      state.deleteAccountError = null;
+      if (err) throw err;
+      state.deletedAccounts.push(accountId);
+      for (const [userId, list] of state.accounts)
+        state.accounts.set(
+          userId,
+          list.filter((a) => a.id !== accountId),
+        );
+    },
     async accessToken(accountId) {
       return `gho_fake_token_for_${accountId}`;
     },
@@ -594,14 +614,34 @@ export async function installFakeComposio() {
       const data = state.executeData.has(slug) ? state.executeData.get(slug) : { ok: true };
       return { successful: true, data, error: null };
     },
-    async createTrigger(userId, slug, _connectedAccountId, config) {
+    async createTrigger(userId, slug, connectedAccountId, config) {
       const err = state.triggerError;
       state.triggerError = null;
       if (err) throw err;
       // Unique across installs, as Composio's are: a test file installs this fake more than once.
       const triggerId = `ti_${randomBytes(6).toString('hex')}`;
-      triggers.push({ userId, slug, triggerId, config });
+      triggers.push({ userId, slug, triggerId, config, connectedAccountId });
       return { triggerId };
+    },
+    async listTriggers({ triggerIds, connectedAccountIds }) {
+      state.triggerListings.push({ triggerIds, connectedAccountIds });
+      const err = state.listTriggersError;
+      state.listTriggersError = null;
+      if (err) throw err;
+      if (!triggerIds?.length && !connectedAccountIds?.length) return [];
+      return triggers
+        .filter(
+          (t) =>
+            (!triggerIds?.length || triggerIds.includes(t.triggerId)) &&
+            (!connectedAccountIds?.length ||
+              connectedAccountIds.includes(t.connectedAccountId ?? '')),
+        )
+        .map((t) => ({
+          id: t.triggerId,
+          connectedAccountId: t.connectedAccountId ?? '',
+          slug: t.slug,
+          config: t.config,
+        }));
     },
     async deleteTrigger(triggerId) {
       const i = triggers.findIndex((t) => t.triggerId === triggerId);

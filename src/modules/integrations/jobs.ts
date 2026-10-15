@@ -9,6 +9,7 @@ import {
   scheduleConnectionCheck,
   setConnectionStatus,
 } from './apps.ts';
+import { settleConnection } from './connection-replace.ts';
 import { sandboxMcpConfig } from './mcp-servers.ts';
 
 /** system/sync-allowlist: push the user's MCP domains + servers to the vm-manager. Recomputed from the DB. */
@@ -60,4 +61,14 @@ export async function handleCheckConnection(job: Job): Promise<unknown> {
   const again = await scheduleConnectionCheck({ userId, connectionId, run, attempt: attempt + 1 });
   // Out of checks: it stays pending. The webhook or the app list can still finish it later.
   return { status: 'pending', nextCheck: again };
+}
+
+/**
+ * system/settle-connection: added when a connection becomes active. Replaces the user's older
+ * connection of the same app to the same account: its automations move over, then it is removed
+ * (connection-replace.ts). Safe to re-run.
+ */
+export async function handleSettleConnection(job: Job): Promise<unknown> {
+  const { userId, connectionId } = job.data as { userId: string; connectionId: string };
+  return (await settleConnection(userId, connectionId)) ?? IGNORED;
 }

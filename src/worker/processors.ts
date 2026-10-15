@@ -18,6 +18,7 @@ import { handleSendMessage, handleSendRaw } from '../modules/channels/outbound.t
 import { handleMessageStatus } from '../modules/channels/status.ts';
 import {
   handleCheckConnection,
+  handleSettleConnection,
   handleComposioEvent,
   handleSyncAllowlist,
 } from '../modules/integrations/jobs.ts';
@@ -55,6 +56,7 @@ export function processors(): Processors {
       'sync-browser': handleSyncBrowser,
       'composio-event': handleComposioEvent,
       'check-connection': handleCheckConnection,
+      'settle-connection': handleSettleConnection,
       'expire-approvals': async () => expireApprovals(),
       cleanup: handleCleanup,
       backup: handleBackup,

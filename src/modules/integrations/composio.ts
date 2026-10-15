@@ -29,6 +29,15 @@ export interface ComposioTriggerEvent {
   payload: Record<string, unknown>;
 }
 
+/** One trigger instance at Composio: what it watches for, and on which connected account. */
+export interface ComposioTriggerInstance {
+  id: string;
+  connectedAccountId: string;
+  /** The trigger's slug, e.g. GMAIL_NEW_GMAIL_MESSAGE. */
+  slug: string;
+  config: Record<string, unknown>;
+}
+
 /** What Composio says about one app setup (auth config). */
 export interface AuthConfigInfo {
   /** Composio's shared sign-in app at the provider. False: our own app (a custom auth config). */
@@ -145,6 +154,14 @@ export interface ComposioApi {
     triggerConfig: Record<string, unknown>,
   ): Promise<{ triggerId: string }>;
   deleteTrigger(triggerId: string): Promise<void>;
+  /**
+   * Trigger instances (switched off ones too), by their ids or by the connected accounts they
+   * watch. Read-only. Composio answers in pages; all pages are read, up to 2,000 instances.
+   */
+  listTriggers(filter: {
+    triggerIds?: string[];
+    connectedAccountIds?: string[];
+  }): Promise<ComposioTriggerInstance[]>;
   /** Verifies a webhook and returns either a trigger event or a connection status change. */
   verifyWebhook(input: {
     rawBody: string;
@@ -328,6 +345,32 @@ const realApi: ComposioApi = {
   },
   async deleteTrigger(triggerId) {
     await sdk().triggers.delete(triggerId);
+  },
+  async listTriggers(filter) {
+    const { triggerIds, connectedAccountIds } = filter;
+    // An empty filter would list every trigger in the project.
+    if (!triggerIds?.length && !connectedAccountIds?.length) return [];
+    const out: ComposioTriggerInstance[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 20; page++) {
+      const res = await sdk().triggers.listActive({
+        ...(triggerIds?.length ? { triggerIds } : {}),
+        ...(connectedAccountIds?.length ? { connectedAccountIds } : {}),
+        showDisabled: true,
+        limit: 100,
+        ...(cursor ? { cursor } : {}),
+      });
+      for (const t of res.items)
+        out.push({
+          id: t.id,
+          connectedAccountId: t.connectedAccountId,
+          slug: t.triggerName,
+          config: t.triggerConfig ?? {},
+        });
+      cursor = res.nextCursor ?? undefined;
+      if (!cursor) break;
+    }
+    return out;
   },
   async verifyWebhook(input) {
     const secret = config().COMPOSIO_WEBHOOK_SECRET;

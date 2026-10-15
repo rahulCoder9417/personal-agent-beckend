@@ -321,6 +321,7 @@ describe('turning review on and off', () => {
         slug: 'GITHUB_PULL_REQUEST_EVENT',
         triggerId: expect.any(String),
         config: { owner: 'acme', repo: 'website' },
+        connectedAccountId: expect.any(String),
       },
     ]);
     // Again, and with another spelling of the same repo: still one.

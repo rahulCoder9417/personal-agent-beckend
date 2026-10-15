@@ -896,7 +896,7 @@ The Platform MCP is the platform's tool server. MCP is a standard way for an AI 
 | `get_profile` | Returns the user's name, time zone, plan, connected apps, and the apps that are not ready yet with what to tell the user |
 | `list_app_actions` | Lists the user's apps with their status, and the actions the agent may run in the connected ones |
 | `run_app_action` | Runs one app action, for example "send an email" |
-| `request_approval` | Asks the user to approve a risky action. Answers "pending" at once |
+| `request_approval` | Asks the user to approve a risky action, with its exact inputs, checked against the action first. Answers "pending" at once |
 | `schedule_reminder` | Saves a reminder for one moment in time |
 | `create_automation` | Saves an automation: once, repeating, or on an app event. Its answer says where the runs will answer, so the agent can tell the user |
 | `list_automations` | Lists the user's reminders and automations |
@@ -1057,14 +1057,33 @@ The platform decides by these words in the action's name. There are two exceptio
 ### The life of an approval
 
 1. The agent calls `request_approval` with a short summary, the action's name and its exact inputs. The tool asks for the summary as what the agent will do, starting with the verb: "Send the notes to priya@example.com".
-2. The api saves it in the table `approvals` as `pending`. It expires after 24 hours.
-3. The api sends Tex's question to the chat the request came from. It is made from the summary, so it is there at once and costs nothing: no model is asked. "I'd like to " goes before the summary, its first word in small letters, and the way to answer goes after it: "I'd like to send the notes to priya@example.com. Approve or Deny below." In web chat the message carries the approval, and the web app shows the Approve and Deny card right under it. Telegram and WhatsApp show two buttons, Approve and Deny. iMessage has no buttons, so the line "Reply YES to approve or NO to deny." is added instead of "Approve or Deny below.". A summary that does not start with a common verb ("send", "delete", "pay", "create" and about 50 more) is kept as written: "I'd like your OK for this: ...".
-4. The tool answers "pending" at once, with the question the user now sees. It tells the agent to end its turn and not to repeat the question or say it is waiting: the user already sees both. The agent never waits inside a turn. In the web app the turn has paused: the "working" sign stops and a line under the card says "Waiting for your OK".
-5. The user taps a button, types "yes" or "no", or decides in the web app. A typed answer goes to the newest waiting approval in that chat.
-6. The api records the answer in the activity log ("Approved: ..." or "Denied: ..."). A job then wakes the agent with a new message: "The user APPROVED ..." or "The user REJECTED ... Don't do it. Tell them in one short sentence that you won't." It goes to the conversation the approval was asked in, not to the one that is open now. In the web app Tex shows as working again from the tap until it answers.
-7. After a yes, the agent calls `run_app_action` with the approval's id. The action runs, and the agent says how it went.
+2. For an app's action, the api first checks the inputs against the action's own list of inputs, which Composio gives (next part). Inputs that don't fit are refused at once, and the user sees nothing.
+3. The api saves it in the table `approvals` as `pending`, with its inputs. It expires after 24 hours.
+4. The api sends Tex's question to the chat the request came from. It is made from the summary, so it is there at once and costs nothing: no model is asked. "I'd like to " goes before the summary, its first word in small letters, and the way to answer goes after it: "I'd like to send the notes to priya@example.com. Approve or Deny below." In web chat the message carries the approval, and the web app shows the Approve and Deny card right under it, with the inputs under the action's own names. Telegram and WhatsApp show two buttons, Approve and Deny. iMessage has no buttons, so the line "Reply YES to approve or NO to deny." is added instead of "Approve or Deny below.". A summary that does not start with a common verb ("send", "delete", "pay", "create" and about 50 more) is kept as written: "I'd like your OK for this: ...".
+5. The tool answers "pending" at once, with the question the user now sees. It tells the agent to end its turn and not to repeat the question or say it is waiting: the user already sees both. The agent never waits inside a turn. In the web app the turn has paused: the "working" sign stops and a line under the card says "Waiting for your OK".
+6. The user taps a button, types "yes" or "no", or decides in the web app. A typed answer goes to the newest waiting approval in that chat.
+7. The api records the answer in the activity log ("Approved: ..." or "Denied: ..."). A job then wakes the agent with a new message: "The user APPROVED ..." or "The user REJECTED ... Don't do it. Tell them in one short sentence that you won't." It goes to the conversation the approval was asked in, not to the one that is open now. In the web app Tex shows as working again from the tap until it answers.
+8. After a yes, the agent calls `run_app_action` with the action's name and the approval's id. The inputs saved with the approval run; the agent does not send them again. The agent says how it went.
 
 **Example.** Rahul texts "email Priya the notes". He gets "I'd like to send the notes to priya@example.com. Approve or Deny below.", with the two buttons. He taps Approve. The agent wakes up, sends the email and says so. 1 credit is charged.
+
+### The inputs are checked when the agent asks
+
+The user should only ever approve something that can run exactly as they saw it. So when the agent asks about an app's action, the api compares the inputs with the action's list of inputs. Composio describes each action: the name of each input, what kind of value it takes (text, a number, a yes or no, a list), and which ones must be given. A request is refused when:
+
+- an input has a name the action does not have;
+- an input the action marks as required is missing;
+- a value is of the wrong kind, for example one address where the action wants a list.
+
+An empty value is left to the app. The refusal goes back to the agent with the action's real inputs, so it can ask again at once, correctly. The user sees nothing until then.
+
+Where the list comes from: the app's list of actions, which the api keeps for 10 minutes. That list holds at most 200 actions, and GitHub has more, so an action that isn't on it is asked of Composio by its name, and kept for 10 minutes too. An action Composio doesn't have is refused. When Composio can't be asked, the request is refused with "try again in a moment", rather than letting an unchecked one through. An action whose list of inputs Composio left empty is not checked.
+
+The approval always holds the inputs that will run. If the agent asked about an app's action without any inputs, the approval holds none, and the action runs with none.
+
+A request that is not about an app's action (no action, or one that is no app's) is saved as it was asked, without a check. A crew job's request has its own exact check (section 20).
+
+**Example.** On 15 October Tex asked to approve sending an email with an input called `to`. Gmail's send action has no `to`: the address goes in `recipient_email`. Rahul approved, and Composio refused the email. Tex then tried `recipient_email`, which our check refused because it was not what Rahul had approved, so Tex asked a second time. Now the first request is refused before Rahul sees it, with Gmail's real inputs, and Tex asks once, correctly.
 
 ### Single use and exact match
 
@@ -1073,18 +1092,33 @@ The platform decides by these words in the action's name. There are two exceptio
 - the approval belongs to this user and names the same action;
 - it is approved, and the yes is less than 24 hours old;
 - it has not been used before;
-- the inputs are exactly the ones saved with the approval.
+- the inputs are the ones saved with the approval. The saved inputs are what runs. If the agent sends inputs too, they must be exactly the saved ones.
 
-"Used" is marked in the same step as the check. So two calls at the same moment cannot both use one approval. If the agent asked without giving any inputs, only the action's name is compared.
+"Used" is marked in the same step as the check. So two calls at the same moment cannot both use one approval. An approval saved before 15 October without inputs still compares only the action's name; those are all gone after 24 hours.
+
+### Asking again: "replaced"
+
+Sometimes the app refuses an approved action, for example because a value it needs is wrong. Nothing has happened then, and the approval stays usable for one more try, in case the problem passes. The agent is told so. It is also told how to ask again when the inputs must change: with `request_approval`, the corrected inputs and `replaces_approval_id`, the id of the earlier request.
+
+The earlier request then becomes `replaced`, if it is still waiting, or approved and not used:
+
+- it can no longer run, and it can no longer be answered;
+- the web app shows "Replaced by a newer request" under its card, not "You denied this": the user did not say no;
+- a late tap on its Telegram button gets "That request was replaced by a newer one. Please answer the newest request.";
+- the activity log gets "Asked again with corrected details: ...", from the agent.
+
+The agent must name an earlier request of the same user for the same action; anything else is refused. A request that was already denied, expired or used is left as it is, and the new one is asked anyway. The agent is told to say in plain words why it asks again: the first request could not run as approved, so nothing was done yet.
 
 ### What can go wrong
 
 - **Denied.** The agent is woken, told not to do it and to say so in one sentence. That approval can never run an action. (Its state in the API is still called `rejected`.)
 - **The agent writes after asking anyway.** Its text arrives as a message after the question. Nothing breaks; the user reads the same thing twice.
 - **Never answered.** After 24 hours an hourly job marks it `expired`. The agent is not woken. Nothing runs.
-- **A late tap on an old button.** The user gets "That approval was already answered or has expired."
-- **A risky action with no approval.** Refused, with a message that tells the agent to ask first.
-- **The agent changes the email after the yes.** Refused, because the inputs differ. The approval still works with the right inputs.
+- **A late tap on an old button.** The user gets "That approval was already answered or has expired.", or for a replaced one "That request was replaced by a newer one. Please answer the newest request."
+- **A risky action with no approval.** Refused. The message tells the agent to use the approval's id if the user already said yes, and otherwise to ask first.
+- **The agent changes the email after the yes.** Refused, because the inputs differ. The approval still works: with no inputs sent, the approved ones run.
+- **The agent asks with inputs the action doesn't have.** Refused before the user sees anything, with the action's real inputs (above).
+- **The app refuses the approved action.** Nothing happens and nothing is charged. The agent may try once more, or ask again with the corrected inputs; the earlier request is then replaced (above).
 - **The account is deleted.** Every approval of the user goes, in any state, with the inputs saved with it. A job that still holds one of their ids finds nothing and does nothing.
 
 ## 16. The user's own MCP servers

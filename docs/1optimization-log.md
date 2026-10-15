@@ -48,6 +48,58 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 15 October 2026: an approval holds exactly what runs, and a request asked again shows as "replaced"
+
+- **Where it is:** on the branch `fix/approval-args` in the backend and in the web app, on top of `main` as it was after the approval question change below. Not on `main`, not on the test server.
+- **Why:** on 15 October your test email from web chat ("Email rahulkum94l94@gmail.com: subject Test, body Hello.") was never sent, and you were asked twice. What happened, from the server's logs, the approvals table, the activity log and Tex's own record of the turn (times in India time):
+  1. **9:16 PM.** Tex asked to approve Gmail's send action with four inputs: `to`, `subject`, `body`, `user_id`. Gmail's send action at Composio has no `to`: the address goes in `recipient_email`. Tex never looked at the action's list of inputs in that turn; it guessed. The card showed "To". Tex then said it was waiting for your OK, which was true at that moment. (Since the approval question change below, Tex no longer writes that line.)
+  2. **9:26:51 PM.** You pressed Approve in the web app, about 11 minutes later. The card has said "You approved this" since then, which is why the waiting message above it now reads oddly.
+  3. **9:26:55 PM.** Your container woke and Tex got the yes. Its first try left out the approval's id and was refused ("needs the user's approval first"). Its second try had the id and the same four inputs: our check passed, and Composio refused the email ("Input should be a valid string on parameter `recipient_email`"). Its third try used `recipient_email`, and our own check refused it, because those were not the inputs you had approved.
+  4. **9:27 PM.** Tex asked again with `recipient_email` (the card showed "Recipient email") and wrote "Sorry about that, the first approval had a parameter mismatch".
+  5. **9:28:15 PM.** The second card was rejected from the web app, signed in as you, 58 seconds after it appeared. Nothing in the backend or the web app rejects on its own: running out of time and a support cancel both show as "expired", and the web app sends an answer only when a button is pressed. So "You rejected this" (now "You denied this") on that card was a real press of the Reject button. Tex then said the email had not been sent.
+
+  The email was never sent. No credit was charged. The first approval is still "approved" and unused; it can't send anything, because Composio refuses its inputs, and it lapses 24 hours after the yes. None of the three failed tries is in the activity log, because only a tool call that succeeds is logged there.
+- **What the user notices:**
+  - **One request, one card.** A request whose inputs don't fit the action never reaches the user: Tex is told the action's real inputs at once and asks again, correctly, in the same turn. The card shows the inputs under the action's own names ("Recipient email").
+  - **After Approve, the action runs as approved.** Tex no longer has to send the inputs again, so it can't get them wrong after the yes.
+  - **If an app still refuses an approved action,** Tex is told to say in plain words that the app did not accept it and nothing was done yet, and to ask again. The earlier card then says "Replaced by a newer request", not "You approved this" or "You denied this". Pressing an old Telegram button for it says "That request was replaced by a newer one. Please answer the newest request."
+  - **The Approvals screen** says "Tex was told to go ahead" for an approved request, instead of "Tex went ahead with it", which was not always true.
+- **Backend:**
+  - **A check when Tex asks.** For an app's action, `request_approval` compares the inputs with Composio's own description of the action: every input must be one the action has, every input it requires must be given, and each value must be the right kind (text, a number, a list). An empty value is left to the app. A request that doesn't fit is refused with the action's real inputs. The description comes from the app's list of actions, kept for 10 minutes; that list holds at most 200 actions and GitHub has more, so an action not on it is asked of Composio by name. When Composio can't be asked, the request is refused with "try again in a moment".
+  - **The approval holds what runs.** An app action's approval always keeps its inputs (none given means none). `run_app_action` with the approval's id runs those saved inputs. Inputs sent again must be exactly the same, as before. The message that wakes Tex after a yes says to leave the inputs out.
+  - **A new state, "replaced".** `request_approval` takes the id of an earlier request (`replaces_approval_id`). The earlier one, if still waiting or approved and unused, becomes "replaced": it can't run and can't be answered, the web app is told at once, and the activity log says "Asked again with corrected details". It must be the same user's request for the same action.
+  - **Clearer messages to Tex.** A risky action tried without the approval's id now says "if the user already approved it, use that approval_id", so Tex doesn't ask twice. An approved action the app refuses says nothing was done and how to ask again.
+  - **Fixed on the way:** an app whose name has an underscore (Microsoft Teams, OneDrive) is now found from the action's name when Tex asks; before, the card had no app.
+- **Cost and speed:** when Tex asks for an approval, the action's description is read from the list the api already keeps for `list_app_actions`; at most one more Composio request when the list has expired or lacks the action. No change to credits. Not measured.
+- **Contracts:** `openapi.yaml` changed: an approval's status can now be `replaced`, and the list of approvals can be filtered by it. The web app follows, on its own `fix/approval-args` branch. `vm.proto` did not change.
+- **Database:** none. The status column is plain text, so the new state needs no migration (checked: `db:generate` finds nothing to do).
+- **How it was checked:**
+  - New tests (15), in `test/approval-args.test.ts`. 13 of them fail on the old code; the other checks behaviour that did not change.
+    - a name the action doesn't have (`to`) is refused, with the real inputs, and nothing is saved or shown;
+    - a missing required input and a wrong kind of value are refused; an empty value and an input that takes several kinds pass;
+    - an action the app doesn't have is refused; Composio being down refuses with "try again";
+    - an action left off the 200-action list is asked of Composio by name, once, and checked;
+    - a request without inputs holds none and runs with none, and inputs added after the yes are refused;
+    - a request that is not about an app's action is saved as before;
+    - after a yes the saved inputs run with no inputs sent, once only; the same inputs sent again also work; changed ones are refused and the approval stays usable;
+    - the message without an approval's id points Tex to the id it already has; the wake-up after a yes says to leave the inputs out;
+    - the app refusing an approved email: nothing sent, the approval stays usable, asking again replaces it; the replaced one is listed as "replaced" (not "rejected"), can't run, and answering it gets 409 "replaced by a newer one"; the new one runs;
+    - a waiting request can be replaced; a rejected one stays rejected;
+    - replacing another action's request or another user's is refused;
+    - a late Telegram tap on a replaced request gets the "replaced" message;
+    - the 15 October email replayed: one card, one yes, the email goes out with `recipient_email`.
+  - Changed: the stand-in for Composio can now answer for one action by name, and the approval question's tests (`test/approval-message.test.ts`) now use that stand-in, because asking now reads the action's inputs from Composio.
+  - Lint and the type check pass. The full backend run: 927 of 927 tests pass.
+  - The web app: 2 new tests on the words for each state; lint, the type check and the build pass, and 804 of 804 tests pass.
+  - The investigation read the server's logs, the approvals table (through the product's own admin function, inputs' names only), the activity log and Tex's record of the turn in your container's folder (tool names, input names and error texts only). Nothing on the server was changed.
+  - Not yet run on the server.
+- **Still open:**
+  - **The "I'm waiting for your approval" line** under a card that later says "You approved this" was Tex's own closing line, written right after it asked, as its instructions then said. The approval question change below removed it. Not touched here.
+  - **Failed tool calls are not in the activity log.** That is why the failed email could only be found in Tex's own record. Logging a refused app action (without its inputs) would make this visible to you and to support. Your decision.
+  - **A crew job's approval** still needs Tex to send the brief again after the yes; it is compared exactly, as before. It could run from the saved brief the same way. Not changed here.
+  - **The Approvals screen has no tab for replaced requests.** The newer request is listed; the replaced one shows only in the chat.
+- **Docs updated:** `backend-report.md` section 13 (the `request_approval` row) and section 15 (the life of an approval, a new part "The inputs are checked when the agent asks", "Single use and exact match", a new part "Asking again: replaced", "What can go wrong"); `hld-mvp.md` section 5.3 and section 12.
+- **Commits:** backend `9a24178` (contract), `326d791` (the fix), and the docs commit on the same branch; web app `b0eb988` (contract), `9ee3d16` (the words).
 ### 15 October 2026: when Tex asks for an OK, it says what it wants to do, and the "working" sign stops
 
 - **Where it is:** on `main` (backend) and live in the web app since 15 October. The backend part is not on the test server yet.

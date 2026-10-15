@@ -451,6 +451,10 @@ export async function installFakeComposio() {
     toolsLimit: 200,
     /** The next listTools call for this toolkit fails (used once). */
     toolsError: new Map<string, Error>(),
+    /** tool calls (one tool asked by its name), by slug. */
+    toolLookups: [] as string[],
+    /** The next tool call fails with this (used once). */
+    toolError: null as Error | null,
     /** Composio's tags per tool slug (e.g. `readOnlyHint`). */
     tags: new Map<string, string[]>(),
     /** toolTags calls, by slug. */
@@ -616,6 +620,21 @@ export async function installFakeComposio() {
             ],
         )
         .slice(0, state.toolsLimit);
+    },
+    async tool(slug) {
+      state.toolLookups.push(slug);
+      const err = state.toolError;
+      state.toolError = null;
+      if (err) throw err;
+      for (const list of state.tools.values()) {
+        const found = list.find((t) => t.slug === slug);
+        if (found) return found;
+      }
+      // A toolkit whose tools a test set has only those; any other name is a tool whose inputs
+      // Composio did not describe (so they are not checked).
+      const lower = slug.toLowerCase();
+      if ([...state.tools.keys()].some((t) => lower.startsWith(`${t}_`))) return null;
+      return { slug, toolkit: '', name: slug, description: '', inputParameters: {}, tags: [] };
     },
     async toolTags(slug) {
       state.tagLookups.push(slug);

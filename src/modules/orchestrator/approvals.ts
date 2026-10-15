@@ -1,5 +1,5 @@
 import type { Job } from 'bullmq';
-import { and, count, desc, eq, gt, isNull, lt, lte } from 'drizzle-orm';
+import { and, count, desc, eq, gt, isNull, lt, lte, or } from 'drizzle-orm';
 import { db } from '../../shared/db/client.ts';
 import { conflict, notFound } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
@@ -24,9 +24,20 @@ export const APPROVAL_TTL_MS = 24 * 3600 * 1000;
  */
 export const START_CREW_JOB_ACTION = 'TEXTCREW_START_CREW_JOB';
 
-/** The tool that runs what an approval was asked for. */
-const toolFor = (a: Approval) =>
-  a.action === START_CREW_JOB_ACTION ? 'start_crew_job' : 'run_app_action';
+/**
+ * What the agent is told to do after a yes. An app action's approval holds its arguments, and
+ * run_app_action runs exactly those: the agent does not send them again.
+ */
+function goAhead(a: Approval): string {
+  if (a.action === START_CREW_JOB_ACTION)
+    return `Go ahead (call start_crew_job with approval_id "${a.id}").`;
+  if (a.action && a.arguments)
+    return (
+      `Go ahead: call run_app_action with action "${a.action}" and approval_id "${a.id}". ` +
+      'It runs exactly the arguments the user approved, so leave arguments out.'
+    );
+  return `Go ahead (call run_app_action with approval_id "${a.id}").`;
+}
 
 export function toApiApproval(a: Approval) {
   return {
@@ -158,6 +169,8 @@ export async function decideApproval(
   if (!row) {
     const existing = await getApproval(userId, id);
     if (!existing) throw notFound('Approval not found');
+    if (existing.status === 'replaced')
+      throw conflict('This request was replaced by a newer one, so it can no longer be answered');
     throw conflict(`Approval is already ${existing.status}`);
   }
   await publish(userId, 'approval.resolved', toApiApproval(row));
@@ -205,7 +218,7 @@ export async function handleProcessApproval(job: Job): Promise<unknown> {
       ...(conversationId ? { conversationId } : {}),
       text:
         a.status === 'approved'
-          ? `The user APPROVED: ${a.summary}. Go ahead (call ${toolFor(a)} with approval_id "${a.id}").`
+          ? `The user APPROVED: ${a.summary}. ${goAhead(a)}`
           : `The user REJECTED: ${a.summary}. Don't do it. Tell them in one short sentence that you won't.`,
       approval: { id: a.id, approved: a.status === 'approved' },
     }),
@@ -259,10 +272,13 @@ export async function handleApprovalReply(userId: string, msg: InboundMessage): 
       msg.buttonReply ? `${msg.channel}:button` : `${msg.channel}:text`,
     );
   } catch {
+    const replaced = (await getApproval(userId, id!))?.status === 'replaced';
     await queueOutbound({
       userId,
       sessionKey: `${msg.channel}:${msg.externalChatId}`,
-      text: 'That approval was already answered or has expired.',
+      text: replaced
+        ? 'That request was replaced by a newer one. Please answer the newest request.'
+        : 'That approval was already answered or has expired.',
     });
   }
   return true;
@@ -289,6 +305,50 @@ export async function consumeApproval(
     )
     .returning();
   return row ?? null;
+}
+
+/**
+ * request_approval with replaces_approval_id: the agent asked again for the same action with
+ * corrected arguments (`by`), because the earlier request could not run as it was. The earlier one
+ * becomes `replaced` when it is still waiting, or approved and not used: it can then neither be
+ * answered nor run, and the web app shows it as replaced, not as rejected. One that was rejected,
+ * expired, used or replaced already stays as it is (null). The new request asks the user again.
+ */
+export async function replaceApproval(
+  userId: string,
+  oldId: string,
+  by: Approval,
+): Promise<Approval | null> {
+  const now = new Date();
+  const [row] = await db()
+    .update(approvals)
+    .set({ status: 'replaced' })
+    .where(
+      and(
+        eq(approvals.userId, userId),
+        eq(approvals.id, oldId),
+        by.action === null ? isNull(approvals.action) : eq(approvals.action, by.action),
+        isNull(approvals.usedAt),
+        or(
+          and(eq(approvals.status, 'pending'), gt(approvals.expiresAt, now)),
+          and(
+            eq(approvals.status, 'approved'),
+            gt(approvals.decidedAt, new Date(now.getTime() - APPROVAL_TTL_MS)),
+          ),
+        ),
+      ),
+    )
+    .returning();
+  if (!row) return null;
+  await publish(userId, 'approval.resolved', toApiApproval(row));
+  await audit({
+    userId,
+    actor: 'agent',
+    action: 'approval_replaced',
+    summary: `Asked again with corrected details: ${by.summary}`,
+    details: { approvalId: row.id, replacedBy: by.id, action: row.action },
+  });
+  return row;
 }
 
 /** system/expire-approvals (hourly): mark stale pending approvals expired. */

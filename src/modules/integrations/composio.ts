@@ -142,6 +142,11 @@ export interface ComposioApi {
    * one toolkit at a time (`appActionsFor`): GitHub alone has more than 200.
    */
   listTools(toolkits: string[]): Promise<ComposioTool[]>;
+  /**
+   * One tool, asked by its name, or null when Composio has no tool of that name (see `actionTool`
+   * below, which looks in the app's listing first and caches the answer).
+   */
+  tool(slug: string): Promise<ComposioTool | null>;
   /** One tool's Composio tags (see `toolTags` below, which caches them). */
   toolTags(slug: string): Promise<string[]>;
   execute(
@@ -204,6 +209,37 @@ const toAccount = (a: RawAccount): ComposioAccount => ({
   status: a.status,
   label: (a.data?.email as string | undefined) ?? null,
   authConfigId: a.authConfig?.id ?? null,
+});
+
+/** Composio has no tool of that name (the SDK's own error for it, or an HTTP 404). */
+function toolNotFound(err: unknown): boolean {
+  const e = err as { name?: string; code?: string; status?: number; cause?: unknown } | null;
+  const cause = e?.cause as { status?: number } | number | undefined;
+  return (
+    e?.code === 'TS-SDK::TOOL_NOT_FOUND' ||
+    e?.name === 'ComposioToolNotFoundError' ||
+    e?.status === 404 ||
+    cause === 404 ||
+    (typeof cause === 'object' && cause?.status === 404)
+  );
+}
+
+interface RawTool {
+  slug: string;
+  name: string;
+  description?: string;
+  toolkit?: { slug?: string };
+  inputParameters?: Record<string, unknown>;
+  tags?: string[];
+}
+
+const toTool = (t: RawTool): ComposioTool => ({
+  slug: t.slug,
+  toolkit: t.toolkit?.slug ?? '',
+  name: t.name,
+  description: t.description ?? '',
+  inputParameters: t.inputParameters ?? {},
+  tags: t.tags ?? [],
 });
 
 /** Composio has no such connected account (an HTTP 404, or the SDK's own code for it). */
@@ -316,22 +352,16 @@ const realApi: ComposioApi = {
     const tools = (await sdk().tools.getRawComposioTools({
       toolkits,
       limit: 200,
-    } as never)) as unknown as Array<{
-      slug: string;
-      name: string;
-      description?: string;
-      toolkit?: { slug?: string };
-      inputParameters?: Record<string, unknown>;
-      tags?: string[];
-    }>;
-    return tools.map((t) => ({
-      slug: t.slug,
-      toolkit: t.toolkit?.slug ?? '',
-      name: t.name,
-      description: t.description ?? '',
-      inputParameters: t.inputParameters ?? {},
-      tags: t.tags ?? [],
-    }));
+    } as never)) as unknown as RawTool[];
+    return tools.map(toTool);
+  },
+  async tool(slug) {
+    try {
+      return toTool((await sdk().tools.getRawComposioToolBySlug(slug)) as unknown as RawTool);
+    } catch (err) {
+      if (toolNotFound(err)) return null;
+      throw err;
+    }
   },
   async toolTags(slug) {
     const tool = (await sdk().tools.getRawComposioToolBySlug(slug)) as unknown as {
@@ -435,6 +465,8 @@ const authConfigCache = new Map<string, AuthConfigInfo>();
  */
 export const TOOL_LIST_TTL_MS = 10 * 60_000;
 const toolListCache = new Map<string, { at: number; tools: ComposioTool[] }>();
+/** One action asked by its name (`actionTool`), kept as long as a listing. */
+const toolCache = new Map<string, { at: number; tool: ComposioTool | null }>();
 
 export function composio(): ComposioApi {
   return api;
@@ -446,6 +478,7 @@ export function setComposioApi(fake: ComposioApi | undefined): void {
   tagCache.clear();
   authConfigCache.clear();
   toolListCache.clear();
+  toolCache.clear();
 }
 
 /** One app's actions (its Composio toolkit), from the last listing when it is recent enough. */
@@ -456,6 +489,27 @@ export async function toolkitTools(toolkit: string, now = Date.now()): Promise<C
   const tools = await api.listTools([toolkit]);
   toolListCache.set(key, { at: now, tools });
   return tools;
+}
+
+/**
+ * One action as Composio describes it, with its input schema. From its app's listing when it is
+ * there; otherwise asked by its name, because a listing holds at most 200 actions and GitHub has
+ * more. Null: Composio has no action of that name. Throws when Composio can't be asked.
+ */
+export async function actionTool(
+  toolkit: string,
+  slug: string,
+  now = Date.now(),
+): Promise<ComposioTool | null> {
+  const key = slug.toUpperCase();
+  const listed = await toolkitTools(toolkit, now).catch(() => null);
+  const found = listed?.find((t) => t.slug.toUpperCase() === key);
+  if (found) return found;
+  const kept = toolCache.get(key);
+  if (kept && now - kept.at < TOOL_LIST_TTL_MS) return kept.tool;
+  const tool = await api.tool(key);
+  toolCache.set(key, { at: now, tool });
+  return tool;
 }
 
 /** What Composio says about a setup, or null when it can't be asked right now (nothing cached). */

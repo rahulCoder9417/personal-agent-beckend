@@ -184,11 +184,11 @@ Example: the user texts "email Priya the notes".
 2. Later the agent wants to act, for example send an email.
 3. The agent calls our tool for app actions. The api, not the container, calls Composio. So the keys for apps never enter a container.
 4. If the action is risky, the tool refuses and tells the agent to ask first. Risky means: sending to another person, deleting, or paying.
-5. The agent asks. Tex says what it wants to do, in a message made from the request's own summary, with Approve and Deny buttons: "I'd like to send an email to priya@example.com with subject "Notes". Approve or Deny below." The turn ends there. In the web app the "working" sign stops and the chat says "Waiting for your OK".
-6. The user's answer arrives as a new message. After Approve the agent runs the action, exactly as it was approved, and says how it went. After Deny it says it won't do it. In the web app Tex shows as working again while it does this.
+5. The agent asks, with the action's exact details. The api first checks the details against the app's own list of inputs for that action, so the user only ever approves something that can run. Tex says what it wants to do, in a message made from the request's own summary, with Approve and Deny buttons: "I'd like to send an email to priya@example.com with subject "Notes". Approve or Deny below." The turn ends there. In the web app the "working" sign stops and the chat says "Waiting for your OK".
+6. The user's answer arrives as a new message. After Approve the agent runs the action: the details saved with the approval run, exactly as they were approved, and the agent does not send them again. It says how it went. After Deny it says it won't do it. In the web app Tex shows as working again while it does this.
 7. An action that changes something costs 1 credit. Reading and searching are free.
 
-An approval works once, and only for the exact action and details the user saw.
+An approval works once, and only for the exact action and details the user saw. If the app still refuses it, the agent asks again with corrected details; the earlier request is then marked "replaced", never "denied", because the user did not say no.
 
 ### 5.4 A reminder or an automation
 
@@ -432,6 +432,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - The server setting up an app at Composio by itself on the first connect (`COMPOSIO_MANAGED_APPS`). Not switched on on the server.
 - A late run saying so, and the web app setting a new account's time zone from the browser. Built on 13 October after the founder's "every morning at 9" summary landed in an unrelated chat at 3:01 PM India time. Checked with the automated tests, and the web app's part in its demo mode.
 - Deleting an account now also removes the user's approvals and activity log (15 October), as the privacy page says. Only an admin's record that they deleted the account stays. A connected app that Composio could not remove is tried again. Checked with the automated tests; no account has been deleted on the server since.
+- Approvals that hold exactly what runs (15 October, on the branch `fix/approval-args`, not on `main` yet). The founder's test email of that evening was never sent: Tex asked with an input Gmail doesn't have (`to` instead of `recipient_email`), the approved run failed, and Tex asked a second time. Now such a request is refused before the user sees it, the approved details run as saved, and a request asked again shows as "replaced" in the web app. Checked with the automated tests only.
 - The Automations chat: every run, verdict and automation notice answering there, pinned in the web app's chat list with a mark for a new run, and a copy of each answer on Telegram for an automation made there. Built on 13 October, after your decision for a separate automation chat. Checked with the automated tests, and the web app's part in its demo mode in a browser. No real run has gone through it yet. The conversations that automations made for themselves earlier that day stay as ordinary chats.
 
 ### Not finished

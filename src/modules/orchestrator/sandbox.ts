@@ -35,13 +35,21 @@ export function sandboxConfig(): SandboxConfigProvider {
   return provider;
 }
 
-/** Creates the user's container once (vm-manager's CreateSandbox is idempotent per user). */
-export async function ensureSandbox(userId: string): Promise<void> {
+/** Whether the user's container was created (its record is here). Only reads. */
+export async function hasSandbox(userId: string): Promise<boolean> {
   const [existing] = await db()
-    .select()
+    .select({ userId: sandboxTokens.userId })
     .from(sandboxTokens)
     .where(eq(sandboxTokens.userId, userId));
-  if (existing) return;
+  return Boolean(existing);
+}
+
+/**
+ * Creates the user's container once (vm-manager's CreateSandbox is idempotent per user).
+ * `exists`: the caller read `hasSandbox` already and it said yes, so nothing is read again.
+ */
+export async function ensureSandbox(userId: string, exists = false): Promise<void> {
+  if (exists || (await hasSandbox(userId))) return;
   const user = await getActiveUser(userId);
   if (!user) throw new Error(`user ${userId} not found`);
   const res = await vm().createSandbox({

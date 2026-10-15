@@ -29,8 +29,10 @@ export interface ConversationRef {
   epoch: number;
 }
 
+type EngineRow = typeof chatEngines.$inferSelect;
+
 /** Which engines finished a turn in this conversation, and when each last did. */
-async function enginesOf(userId: string, c: ConversationRef) {
+async function enginesOf(userId: string, c: ConversationRef): Promise<EngineRow[]> {
   return db()
     .select()
     .from(chatEngines)
@@ -88,8 +90,10 @@ export async function chatRecap(input: {
   engine: RuntimeName;
   /** This turn's own message, which is delivered as the turn's text. */
   skipMessageId?: string;
+  /** The conversation's engine record, read already (readTurnContext). */
+  engines?: Promise<EngineRow[]>;
 }): Promise<string | null> {
-  const rows = await enginesOf(input.userId, input.conversation);
+  const rows = await (input.engines ?? enginesOf(input.userId, input.conversation));
   const previous = rows.reduce<(typeof rows)[number] | undefined>(
     (latest, r) => (!latest || r.lastTurnAt > latest.lastTurnAt ? r : latest),
     undefined,
@@ -123,10 +127,33 @@ export async function chatRecap(input: {
   return [RECAP_START, ...lines.reverse(), RECAP_END].join('\n');
 }
 
+/** What a turn's text is made from, read before the engine is known (while the container wakes). */
+export interface TurnContextReads {
+  /** The memory block (memoryBlock). */
+  memory: Promise<string | null>;
+  /** Which engines finished a turn in the conversation (for the recap). */
+  engines: Promise<EngineRow[]>;
+}
+
+/**
+ * Starts the reads `turnText` needs that don't depend on the engine, both at once, so they run
+ * while the container wakes. Only reads. A failed read leaves its part out, as in `turnText`.
+ */
+export function readTurnContext(userId: string, conversation: ConversationRef): TurnContextReads {
+  const memory = memoryBlock(userId);
+  const engines = enginesOf(userId, conversation);
+  // Awaited by turnText; a turn that ends before it (the wake failed) must not leave an
+  // unhandled error behind.
+  memory.catch(() => {});
+  engines.catch(() => {});
+  return { memory, engines };
+}
+
 /**
  * The text to deliver for a turn: the memory block, then the recap, then the turn's own text.
  * With neither, the text is delivered as it is. Never fails a turn: if memory or the chat
- * history can't be read, that part is left out.
+ * history can't be read, that part is left out. `reads`: what readTurnContext started earlier;
+ * without it, everything is read here.
  */
 export async function turnText(
   input: {
@@ -137,6 +164,7 @@ export async function turnText(
     conversation: TurnConversation;
   },
   engine: RuntimeName,
+  reads?: TurnContextReads,
 ): Promise<string> {
   const log = logger().child({ userId: input.userId });
   const part = async (name: string, build: () => Promise<string | null>) => {
@@ -149,13 +177,14 @@ export async function turnText(
   };
   // Both at once: neither needs the other.
   const [memory, recap] = await Promise.all([
-    part('memory block', () => memoryBlock(input.userId)),
+    part('memory block', () => reads?.memory ?? memoryBlock(input.userId)),
     part('chat recap', () =>
       chatRecap({
         userId: input.userId,
         conversation: input.conversation,
         engine,
         ...(input.inboundMessageId ? { skipMessageId: input.inboundMessageId } : {}),
+        ...(reads ? { engines: reads.engines } : {}),
       }),
     ),
   ]);

@@ -24,9 +24,9 @@ import {
 } from './agent-settings.ts';
 import { syncBrowserAfterWake } from './browser.ts';
 import { crewOfProgress } from './crew.ts';
-import { ensureSandbox } from './sandbox.ts';
+import { ensureSandbox, hasSandbox } from './sandbox.ts';
 import { TurnTimer, type RouteTimes } from './timings.ts';
-import { recordEngineTurn, turnText } from './turn-context.ts';
+import { readTurnContext, recordEngineTurn, turnText } from './turn-context.ts';
 import { DeliverEventType, DeliverKind, planPriority, vm } from './vm.ts';
 
 export type TurnKind = 'message' | 'approval_answer' | 'automation' | 'app_event' | 'crew_job';
@@ -400,12 +400,20 @@ interface Woken {
   woke: Awaited<ReturnType<ReturnType<typeof vm>['wakeSandbox']>>;
 }
 
-/** Makes sure the container exists and wakes it. Null: the user is gone, or suspended. */
-async function wakeContainer(userId: string, timer: TurnTimer): Promise<Woken | null> {
+/**
+ * Makes sure the container exists and wakes it. Null: the user is gone, or suspended.
+ * `created`: whether the container's record is there, read at the turn's start beside its other
+ * reads (a failed read counts as "not known": it is read again here).
+ */
+async function wakeContainer(
+  userId: string,
+  timer: TurnTimer,
+  created: Promise<boolean>,
+): Promise<Woken | null> {
   const user = await getActiveUserCached(userId);
   // A suspended account's container is never woken (an admin's decision).
   if (!user || user.status === 'suspended') return null;
-  await ensureSandbox(userId);
+  await ensureSandbox(userId, await created.catch(() => false));
   timer.mark('wake_started');
   let woke;
   try {
@@ -447,6 +455,10 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
   hasCreditsRead.catch(() => {});
   const settingsRead = getAgentSettings(userId);
   settingsRead.catch(() => {});
+  // And whether the user's container was created: the wake needs it, and on the server it is one
+  // more round trip of about 260 ms when read after the route.
+  const createdRead = hasSandbox(userId);
+  createdRead.catch(() => {});
   // The turn's conversation: the message's own (or the Automations chat), else the chat's active
   // one. Everything the turn saves and everything the agent is given comes from this conversation.
   const conversation = await conversationFor(userId, given.sessionKey, given.conversationId, {
@@ -470,7 +482,7 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
   // The container may start waking while the route is decided (routing.ts calls `wakeEarly` once
   // the message is one Jev will judge), so a task does not wait for both one after the other.
   let wakeOnce: Promise<Woken | null> | undefined;
-  const wake = () => (wakeOnce ??= wakeContainer(userId, timer));
+  const wake = () => (wakeOnce ??= wakeContainer(userId, timer, createdRead));
   const decision = await hooks.route(input, {
     wakeEarly: () => {
       // A wake nobody waits for (the route said simple) must not end as an unhandled error.
@@ -493,6 +505,10 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
     return 'simple';
   }
 
+  // What the turn's text is made of (the user's memory, and which engine had this conversation,
+  // for the recap) is read while the container wakes, not after: only reads, and the user's lock
+  // keeps any other turn from changing them meanwhile.
+  const contextReads = readTurnContext(userId, conversation);
   // The settings (read above, while the container woke) say which engine it must run.
   if (!timer.has('woken'))
     await publish(userId, 'agent.status', { state: 'waking', lastActiveAt: null });
@@ -508,7 +524,7 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
   await syncBrowserAfterWake(userId, awake.plan, woke.sandbox);
   // What is known about the user (the same in every conversation), and a recap of this
   // conversation if the engine changed (HLD 0.9).
-  const text = await turnText({ ...input, conversation }, engine);
+  const text = await turnText({ ...input, conversation }, engine, contextReads);
   // What the platform adds to the delivery's metadata: the conversation's number in its chat,
   // always. The Bridge keeps one engine conversation per number, so this turn continues its own
   // conversation's context; the number is lower than the chat's highest when the user went back

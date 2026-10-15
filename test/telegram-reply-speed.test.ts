@@ -7,6 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { channelLinks } from '../src/modules/auth/schema.ts';
 import { messages } from '../src/modules/channels/schema.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
+import { saveMemory } from '../src/modules/orchestrator/memory.ts';
 import { db } from '../src/shared/db/client.ts';
 import { wireModules } from '../src/wiring.ts';
 import { processors } from '../src/worker/processors.ts';
@@ -153,16 +154,18 @@ describe('the rounds of queries a Telegram turn waits for', () => {
     const replyAt = tg.calls.find(
       (c) => c.method === 'sendMessage' && c.chatId === String(chatId) && c.at > t0,
     )!.at;
-    const before = roundsOf(m.sql, GAP, 0, deliveredAt - t0);
-    // Up to the Bot API call (the queries sent in the same moment come after it).
-    const toTelegram = roundsOf(m.sql, GAP, deliveredAt - t0, replyAt - t0 - 5);
+    // A query sent less than one delay before a moment can't be one that moment waited for (it
+    // was still on its way): such queries ran beside it (the activity log, the job's own end).
+    const before = roundsOf(m.sql, GAP, 0, deliveredAt - t0 - RTT / 2);
+    const toTelegram = roundsOf(m.sql, GAP, deliveredAt - t0, replyAt - t0 - RTT / 2);
     const timeline = m.sql.join('\n');
     // Before 15 October, evening: 11 rounds before the agent (the event, the link, the chat's
     // last message time, whether the message was saved, the conversation, the message, the
     // conversation's time, the turn's reads, the container record, memory and the recap, the
     // message's state) and 5 from the answer to Telegram (the chat, the conversation, the
-    // message, the conversation's time, the outbound job's read).
-    expect(before, timeline).toBeLessThanOrEqual(9);
+    // message, the conversation's time, the outbound job's read). Here the wake takes no time;
+    // on the server memory and the recap are read while the container wakes, one round fewer.
+    expect(before, timeline).toBeLessThanOrEqual(8);
     expect(toTelegram, timeline).toBeLessThanOrEqual(3);
   });
 });
@@ -229,5 +232,64 @@ describe("the agent's send_message", () => {
       const [row] = await db().select().from(messages).where(eq(messages.id, out[0]!.id));
       return row?.status === 'sent';
     });
+  });
+});
+
+describe('the turn reads what it needs early', () => {
+  it("whether the container exists goes with the turn's first reads", async () => {
+    const { chatId } = await readyChat(installFakeVm(), undefined);
+    const inbound = workers.find((w) => w.name === 'inbound')!;
+    await inbound.pause();
+    await sendTelegram(telegramUpdate(chatId, 'and tomorrow?'));
+    const m = await meter(async () => {
+      setDbDelays({ rttMs: 60 });
+      try {
+        inbound.resume();
+        await waitFor(async () => repliesTo(chatId).length === 1);
+      } finally {
+        setDbDelays({});
+      }
+    });
+    const at = (sqlStart: string) =>
+      Number(/^(\d+)ms /.exec(m.sql.find((q) => q.includes(sqlStart))!)![1]);
+    const timeline = m.sql.join('\n');
+    expect(
+      Math.abs(
+        at('select "user_id" from "sandbox_tokens"') -
+          at('select coalesce(sum("remaining"), 0) from "credit_grants"'),
+      ),
+      timeline,
+    ).toBeLessThan(25);
+  });
+
+  it('memory and which engine had the conversation are read while the container wakes', async () => {
+    const vm = installFakeVm();
+    const { user, chatId } = await readyChat(vm, undefined);
+    await saveMemory(user.id, { content: 'Prefers mornings' });
+    let wakeStarted = 0;
+    let wakeDone = 0;
+    vm.state.onWake = async () => {
+      wakeStarted = performance.now();
+      await new Promise((r) => setTimeout(r, 200));
+      wakeDone = performance.now();
+    };
+    let t0 = 0;
+    const m = await meter(async () => {
+      t0 = performance.now();
+      await sendTelegram(telegramUpdate(chatId, 'when am I free?'));
+      await waitFor(async () => repliesTo(chatId).length === 1);
+    });
+    vm.state.onWake = undefined;
+    const at = (sqlStart: string) =>
+      t0 + Number(/^(\d+)ms /.exec(m.sql.find((q) => q.includes(sqlStart))!)![1]);
+    const timeline = m.sql.join('\n');
+    const memoryRead = at('select "id", "user_id", "kind", "content"');
+    const enginesRead = at('select "user_id", "session_key", "epoch", "runtime", "last_turn_at"');
+    expect(wakeStarted, timeline).toBeGreaterThan(0);
+    // Both went out while the vm-manager was still waking the container.
+    expect(memoryRead, timeline).toBeLessThan(wakeDone);
+    expect(enginesRead, timeline).toBeLessThan(wakeDone);
+    // And the memory still reached the agent.
+    expect(vm.deliveries.at(-1)!.text).toContain('Prefers mornings');
   });
 });

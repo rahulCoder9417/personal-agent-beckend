@@ -120,6 +120,7 @@ pnpm dlx vercel@latest dns ls textcrew.in
 | `clkmail` | CNAME | `mail.juqijyr83vya.clerk.services` | 60 s | Clerk's mail service: the emails Clerk sends for us (sign-in codes, links). Added on 15 October 2026 |
 | `clk._domainkey` | CNAME | `dkim1.juqijyr83vya.clerk.services` | 60 s | Clerk's mail, DKIM: proves Clerk's emails are really ours. Added on 15 October 2026 |
 | `clk2._domainkey` | CNAME | `dkim2.juqijyr83vya.clerk.services` | 60 s | Clerk's mail, a second DKIM key. Added on 15 October 2026 |
+| `@` (textcrew.in itself) | TXT | `google-site-verification=…` | 60 s | Proves to Google that you own textcrew.in (Google Search Console, your Gmail). Google needs it to check the Textcrew brand on the Google sign-in screen. Never delete it: Google checks it again from time to time. Added on 15 October 2026 |
 
 Resend sends the waitlist emails from `no-reply@textcrew.in`. It sends through Amazon's mail system, so the values say `amazonses.com`.
 

@@ -131,6 +131,11 @@ export const messages = pgTable(
     uniqueIndex().on(t.userId, t.copyOf),
     /** A turn's messages (its reply is found by the turn's id). */
     index().on(t.userId, t.eventId),
+    /**
+     * The message an event brought (a chat app's message is looked up by its event alone, before
+     * anything else is known): without it, every incoming message read the whole table.
+     */
+    index().on(t.eventId),
     index().on(t.channel, t.externalId),
   ],
 );

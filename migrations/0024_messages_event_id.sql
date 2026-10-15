@@ -1,0 +1,1 @@
+CREATE INDEX "messages_event_id_index" ON "messages" USING btree ("event_id");

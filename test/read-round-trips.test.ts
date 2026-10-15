@@ -17,8 +17,8 @@ import { closeQueues } from '../src/modules/events/queues.ts';
 import { requestApproval } from '../src/modules/orchestrator/approvals.ts';
 import { saveMemory } from '../src/modules/orchestrator/memory.ts';
 import { setChatCompleter, setJevClient } from '../src/modules/orchestrator/routing.ts';
-import { closeDb, db } from '../src/shared/db/client.ts';
 import { sql } from 'drizzle-orm';
+import { closeDb, db, pingDb } from '../src/shared/db/client.ts';
 import { wireModules } from '../src/wiring.ts';
 import { processors } from '../src/worker/processors.ts';
 import { startWorkers } from '../src/worker/runner.ts';
@@ -37,9 +37,9 @@ let workers: Worker[];
 let user: Awaited<ReturnType<typeof chatUser>>;
 let conversationId: string;
 
-/** Opens `n` connections and leaves them idle in the pool (the pool is then "warm"). */
-async function warm(n: number) {
-  await Promise.all(Array.from({ length: n }, () => db().execute(sql`select 1`)));
+/** The pool as the api and the worker keep it: DB_POOL_MIN connections open and idle. */
+async function warm() {
+  await pingDb();
 }
 
 async function get(path: string): Promise<void> {
@@ -115,33 +115,38 @@ afterAll(async () => {
   }
 });
 
-/** Each endpoint alone, the pool warm: [path, the most queries it may make, auth included]. */
+/**
+ * Each endpoint alone, the pool warm: [path, the most queries it may make]. Who is signed in comes
+ * from the user's copy in Redis (no query); the queries listed run at the same time where there
+ * are several (the messages: the list, the conversation check and the chat's start; the apps: the
+ * connections and the server's app setups).
+ */
 const ENDPOINTS: Array<[string, number]> = [
-  ['/v1/me', 3],
-  ['/v1/approvals?status=pending&limit=50', 2],
-  ['/v1/agent/status', 1],
-  ['/v1/billing/plans', 1],
-  ['/v1/crew', 1],
-  ['/v1/channels', 2],
-  ['/v1/conversations?limit=30&kind=chat', 2],
-  ['/v1/conversations?limit=1&kind=automations', 2],
-  ['/v1/messages?limit=30&conversationId=:conversation', 4],
-  ['/v1/activity?limit=30', 2],
-  ['/v1/automations', 2],
-  ['/v1/agent/settings', 3],
-  ['/v1/apps', 4],
-  ['/v1/credits', 3],
-  ['/v1/credits/ledger?limit=30', 2],
-  ['/v1/billing/subscription', 2],
-  ['/v1/memories', 2],
-  ['/v1/crew-jobs?limit=30', 2],
-  ['/v1/byok', 3],
-  ['/v1/pr-reviews', 2],
+  ['/v1/me', 1],
+  ['/v1/approvals?status=pending&limit=50', 1],
+  ['/v1/agent/status', 0],
+  ['/v1/billing/plans', 0],
+  ['/v1/crew', 0],
+  ['/v1/channels', 1],
+  ['/v1/conversations?limit=30&kind=chat', 1],
+  ['/v1/conversations?limit=1&kind=automations', 1],
+  ['/v1/messages?limit=30&conversationId=:conversation', 3],
+  ['/v1/activity?limit=30', 1],
+  ['/v1/automations', 1],
+  ['/v1/agent/settings', 2],
+  ['/v1/apps', 2],
+  ['/v1/credits', 1],
+  ['/v1/credits/ledger?limit=30', 1],
+  ['/v1/billing/subscription', 1],
+  ['/v1/memories', 1],
+  ['/v1/crew-jobs?limit=30', 1],
+  ['/v1/byok', 2],
+  ['/v1/pr-reviews', 1],
 ];
 
 describe('the web app reads', () => {
   it.each(ENDPOINTS)('%s stays within its round trips', async (path, budget) => {
-    await warm(6);
+    await warm();
     const p = path.replace(':conversation', conversationId);
     const m = await measure(`GET ${p.split('?')[0]}`, () => get(p));
     expect(m.queries, m.sql.join('\n')).toBeLessThanOrEqual(budget);
@@ -176,24 +181,27 @@ async function openChat() {
 
 describe('whole pages', () => {
   it('the chat page, the pool warm', async () => {
-    await warm(6);
-    await measure('Chat page, warm (8 calls, then the messages)', openChat);
+    await warm();
+    const m = await measure('Chat page, warm (8 calls, then the messages)', openChat);
+    // The warm connections are enough for the whole page: none is opened.
+    expect(m.connects).toBe(0);
+    expect(m.queries, m.sql.join('\n')).toBeLessThanOrEqual(10);
   });
 
-  it('the chat page after the pool emptied (the first visit after a few idle minutes)', async () => {
+  it('the chat page with no connection open (before 15 October: the first visit after 5 idle minutes)', async () => {
     await closeDb();
-    await measure('Chat page, after idle minutes', openChat);
+    await measure('Chat page, no connection open', openChat);
   });
 
   it('the credits page, the pool warm', async () => {
-    await warm(6);
+    await warm();
     await measure('Credits page, warm (8 calls)', () => Promise.all(CREDITS_PAGE.map(get)));
   });
 });
 
 describe('a chat turn', () => {
   it('from sending a web message to the reply, then to the end of the job', async () => {
-    await warm(6);
+    await warm();
     const inbound = workers.find((w) => w.name === 'inbound')!;
     // Waited for without asking the database, so the waiting adds no round trip.
     let replied!: () => void;
@@ -209,7 +217,8 @@ describe('a chat turn', () => {
       const res = await call('/v1/messages', {
         method: 'POST',
         token: user.token,
-        body: { text: 'what is on my calendar', clientMessageId: randomUUID() },
+        // As the web app sends it: with the conversation open on screen.
+        body: { text: 'what is on my calendar', clientMessageId: randomUUID(), conversationId },
       });
       expect(res.status).toBe(202);
       toAccepted = Math.round(performance.now() - start);
@@ -239,4 +248,18 @@ describe('a chat turn', () => {
     );
     expect(m.queries).toBeGreaterThan(0);
   }, 180_000);
+});
+
+describe('the indexes the hot reads need', () => {
+  it("a chat app's message is found by its event without reading the whole table", async () => {
+    // The query saveInbound and getInboundByEvent make for every incoming chat app message.
+    const plan = await db().transaction(async (tx) => {
+      await tx.execute(sql`set local enable_seqscan = off`);
+      const { rows } = await tx.execute<{ 'QUERY PLAN': string }>(
+        sql`explain select * from messages where event_id = 'evt_x' and direction = 'in'`,
+      );
+      return rows.map((r) => r['QUERY PLAN']).join('\n');
+    });
+    expect(plan).toContain('messages_event_id_index');
+  });
 });

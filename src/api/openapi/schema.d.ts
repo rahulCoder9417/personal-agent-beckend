@@ -1986,6 +1986,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/users/{userId}/onboarding/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Show a user the welcome steps and the "Getting started" checklist again (admin)
+         * @description Clears the user's two first-run marks, `onboardingCompletedAt` and
+         *     `gettingStartedDismissedAt` (see `Me`). The web app then shows the welcome steps on the
+         *     user's next visit, and the "Getting started" checklist while any of its steps is left.
+         *     Nothing else changes. Allowed on any account that is not deleted, an admin's own too. When
+         *     both marks are already empty, nothing changes and no log row is written (`changed: false`).
+         */
+        post: operations["adminResetUserOnboarding"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/users/{userId}": {
         parameters: {
             query?: never;
@@ -7085,6 +7109,44 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+        };
+    };
+    adminResetUserOnboarding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Both marks are empty now */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        userId: string;
+                        onboardingCompletedAt: null;
+                        gettingStartedDismissedAt: null;
+                        /** @description False when both marks were already empty. */
+                        changed: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     adminGetUser: {

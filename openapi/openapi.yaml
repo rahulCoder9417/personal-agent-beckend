@@ -3014,11 +3014,12 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
-  # ---------------------------------------------------------------- admin: accounts (role, suspend, delete, sign out)
+  # ---------------------------------------------------------------- admin: accounts (role, suspend, delete, sign out, onboarding)
   # Every call here needs a `reason` and writes one activity-log row for the user with the admin's
   # id and that reason (the reason stays in the row's details; the user's own activity list shows
   # only a neutral summary). An admin can't act on their own account this way, and an admin must
-  # lose the admin role before they can be suspended or deleted.
+  # lose the admin role before they can be suspended or deleted. Showing the welcome steps again
+  # (`onboarding/reset`) is harmless, so it is allowed on any account, an admin's own too.
   /v1/admin/users/{userId}/role:
     put:
       operationId: adminSetUserRole
@@ -3234,6 +3235,52 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/admin/users/{userId}/onboarding/reset:
+    post:
+      operationId: adminResetUserOnboarding
+      tags: [admin]
+      summary: Show a user the welcome steps and the "Getting started" checklist again (admin)
+      description: |
+        Clears the user's two first-run marks, `onboardingCompletedAt` and
+        `gettingStartedDismissedAt` (see `Me`). The web app then shows the welcome steps on the
+        user's next visit, and the "Getting started" checklist while any of its steps is left.
+        Nothing else changes. Allowed on any account that is not deleted, an admin's own too. When
+        both marks are already empty, nothing changes and no log row is written (`changed: false`).
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              additionalProperties: false
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500, pattern: "\\S" }
+      responses:
+        "200":
+          description: Both marks are empty now
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [userId, onboardingCompletedAt, gettingStartedDismissedAt, changed]
+                properties:
+                  userId: { type: string }
+                  onboardingCompletedAt: { type: "null" }
+                  gettingStartedDismissedAt: { type: "null" }
+                  changed:
+                    type: boolean
+                    description: False when both marks were already empty.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /v1/admin/users/{userId}:
     get:

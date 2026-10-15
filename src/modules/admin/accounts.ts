@@ -1,12 +1,20 @@
 // Account-level admin tools (backend-report.md, "Admin tools"): the role, suspending and lifting a
-// suspension, deleting an account, signing a user out everywhere. Each needs a reason and writes
-// one activity-log row for the user, with the admin's id and the reason in its details. The user's
-// own activity list shows only the neutral summary, never the reason.
+// suspension, deleting an account, signing a user out everywhere, showing the welcome steps again.
+// Each needs a reason and writes one activity-log row for the user, with the admin's id and the
+// reason in its details. The user's own activity list shows only the neutral summary, never the
+// reason.
 import { badRequest, conflict, notFound, unavailable } from '../../shared/errors.ts';
 import { db } from '../../shared/db/client.ts';
 import { ClerkAdminError, clerkAdmin } from '../auth/clerk-admin.ts';
 import { enqueueUserDeletion } from '../auth/provision.ts';
-import { getUser, markUserDeleted, setAccountStatus, setRole, type User } from '../auth/users.ts';
+import {
+  getUser,
+  markUserDeleted,
+  setAccountStatus,
+  setRole,
+  updateProfile,
+  type User,
+} from '../auth/users.ts';
 import { pauseAllForAdmin, resumeAfterAdmin } from '../automations/automations.ts';
 import { hasCredits } from '../billing/index.ts';
 import { stopPolitely } from '../orchestrator/sandbox.ts';
@@ -199,6 +207,43 @@ export async function deleteAccount(
     });
   // One job per user (its id holds the user id), also when Clerk's webhook adds it too.
   await enqueueUserDeletion(user.id);
+}
+
+/**
+ * Clears the user's two first-run marks, so the web app shows the welcome steps again on their next
+ * visit, and the "Getting started" checklist while a step is left. Harmless, so any account that
+ * is not deleted may get it, an admin's own too. When both are already empty nothing changes and no
+ * row is written.
+ */
+export async function resetOnboarding(
+  userId: string,
+  a: AdminAction,
+): Promise<{ user: User; changed: boolean }> {
+  const user = await target(userId);
+  if (!user.onboardingCompletedAt && !user.gettingStartedDismissedAt)
+    return { user, changed: false };
+  const updated = await db().transaction(async (tx) => {
+    const row = await updateProfile(
+      user.id,
+      { onboardingCompleted: false, gettingStartedDismissed: false },
+      tx,
+    );
+    await audit(
+      {
+        userId: user.id,
+        actor: 'admin',
+        action: 'onboarding_reset',
+        summary: 'An admin set this account to show the welcome steps again',
+        details: details(a, {
+          onboardingCompletedAt: user.onboardingCompletedAt?.toISOString() ?? null,
+          gettingStartedDismissedAt: user.gettingStartedDismissedAt?.toISOString() ?? null,
+        }),
+      },
+      tx,
+    );
+    return row;
+  });
+  return { user: updated, changed: true };
 }
 
 /**

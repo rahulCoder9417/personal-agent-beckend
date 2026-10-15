@@ -180,6 +180,7 @@ Everything is under `/opt/textcrew`, owned by the `ubuntu` user.
 - **Empty:** the model provider keys (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`), `COMPOSIO_WEBHOOK_SECRET`, `CLERK_WEBHOOK_SECRET`, `CLERK_JWT_KEY`, everything for WhatsApp, Sendblue, Jev and Polar, `BACKUP_UPLOAD_CMD`, `ALERT_WEBHOOK_URL`.
 - **Changed on 2026-10-05:** `CLERK_WEBHOOK_SECRET`, `COMPOSIO_WEBHOOK_SECRET` and `BRAVE_SEARCH_API_KEY` are set (supplied by you that day; the laptop's copies are in `.env.deploy` and in a local `.env`), and `BROWSER_AVAILABLE=true` was added once the agent image with the browser was deployed. `beckend/.env.bak` on the server is the file as it was before. Still empty: the three model provider keys (the MiniMax key you supplied has no balance and nothing reads it), `CLERK_JWT_KEY`, Polar, `ALERT_WEBHOOK_URL`. `WEB_APP_URL` and `CLERK_AUTHORIZED_PARTIES` still name the server itself; they wait for the web app's Vercel address.
 - **Changed on 2026-10-08, for the beta:** in `compose.env`, `API_DOMAIN=api.textcrew.in` and `AWAKE_CAP=8`. In `beckend/.env`, `PUBLIC_API_URL=https://api.textcrew.in`, `WEB_APP_URL` and `CLERK_AUTHORIZED_PARTIES` are `https://app.textcrew.in` (the web app on Vercel), and `AI_ACCESS_MODE=own_only`, so a user who has not connected their own AI is told to connect it. The files as they were before are `compose.env.bak-2026-10-08` and `beckend/.env.bak-2026-10-08`.
+- **Changed on 2026-10-15, for Clerk's production setup:** sign-in moved from Clerk's development setup (test keys, meant for building) to its production setup for `textcrew.in` (live keys). In `beckend/.env`, `CLERK_SECRET_KEY` and `CLERK_WEBHOOK_SECRET` now hold the production setup's values, and the api was restarted to read them. The file as it was before is `beckend/.env.bak-2026-10-15-clerk-dev`. The laptop's copies are in `.env.deploy` and the local `.env`, with the old test keys kept there as commented lines. The web app's own two Clerk keys are in its production settings in Vercel. `CLERK_JWT_KEY` was removed there, because it belonged to the development setup and would have refused live sign-ins. Whether the server's `beckend/.env` still holds a `CLERK_JWT_KEY` was not checked; if it does, it must be empty or the production one.
 
 **SSH on the server** (`~/.ssh/`): two deploy keys, `deploy_beckend` and `deploy_vmm`, and a config with two host aliases, `gh-beckend` and `gh-vmm`, that point at `github.com` with the matching key.
 
@@ -274,7 +275,7 @@ There is no web app yet, so the test user was made with `scripts/dev-user.ts`, r
 | **Telegram** | Bot `@TestingtexBot`. Webhook set to `https://api.textcrew.in/webhooks/telegram` with a secret token (moved there on 2026-10-08). Linked to your Telegram with a one-time link code |
 | **AI** | Your Claude plan, through Claude Code in the container. You opened the sign-in link, approved it, and gave back the code. The sign-in is stored only in the user's own volume |
 | **Composio** | GitHub (`ac_b8PkSZuqwhjX`) and Gmail (`ac_eWrMykXPOfRE`) auth configs. You approved both connect links. Both are `active` |
-| **Clerk** | Test keys are set. Not used by the Telegram flow |
+| **Clerk** | Since 2026-10-15, the production setup for `textcrew.in` (live keys), answering at `clerk.textcrew.in`. Its webhook sends "user created", "user updated" and "user deleted" to `https://api.textcrew.in/webhooks/clerk`. Google sign-in uses Textcrew's own Google sign-in app (Google Cloud project "textcrew", under your Gmail). Before that, the development setup's test keys. Not used by the Telegram flow |
 | **Polar, WhatsApp, Sendblue, Jev** | Not set up. Skipped for this test |
 
 **The end-to-end test (2026-09-30):** a Telegram message asked the agent to look at `rahulCoder9417/personal-agent-beckend`, add a file on a new branch, open a pull request and email the link. It worked. That run used the GitHub API through Composio.
@@ -369,18 +370,20 @@ sudo docker ps --filter name=pa-sbx            # awake user containers
 ./dc --profile app exec -T api node --import tsx scripts/dev-user.ts status --user usr_01m3sk0g2wwgm7wj60822scjtp
 ```
 
-**If SSH stops working because your IP changed,** in CloudShell (Mumbai). Your home address changes from time to time, so expect this after the server has been off for a few days. The first command shows the address the rule allows now; your current one is at https://checkip.amazonaws.com:
+**If SSH stops working because your IP changed,** in CloudShell (Mumbai). Your home address changes from time to time, so expect this after the server has been off for a few days. So far it has stayed in `49.43.x.x`; only the last two numbers change. The first command shows the address the rule allows now; your current one is at https://checkip.amazonaws.com:
 
 ```sh
-aws ec2 describe-security-groups --group-ids sg-0a41006d88aefe928 --query 'SecurityGroups[0].IpPermissions[?FromPort==`22`].IpRanges[].CidrIp' --output text
+aws ec2 describe-security-groups --no-cli-pager --group-ids sg-0a41006d88aefe928 --query 'SecurityGroups[0].IpPermissions[?FromPort==`22`].IpRanges[].CidrIp' --output text
 ```
 
 Then replace it:
 
 ```sh
-aws ec2 revoke-security-group-ingress    --group-id sg-0a41006d88aefe928 --protocol tcp --port 22 --cidr <old IP>/32
-aws ec2 authorize-security-group-ingress --group-id sg-0a41006d88aefe928 --protocol tcp --port 22 --cidr <new IP>/32
+aws ec2 revoke-security-group-ingress    --no-cli-pager --group-id sg-0a41006d88aefe928 --protocol tcp --port 22 --cidr <old IP>/32
+aws ec2 authorize-security-group-ingress --no-cli-pager --group-id sg-0a41006d88aefe928 --protocol tcp --port 22 --cidr <new IP>/32
 ```
+
+**Keep `--no-cli-pager` on these commands.** Without it, CloudShell can show a command's answer in a pager: a screen that waits for a key press before it goes on. On 2026-10-15 the answer of the `revoke` command opened in a pager and swallowed the `authorize` command pasted right after it. The old rule was gone and the new one was never added, so there was no SSH rule at all until the new one was added. With `--no-cli-pager` the answer just prints, and the next command runs. Afterwards, the first command must show exactly one address, the new one.
 
 ---
 
@@ -399,7 +402,7 @@ aws ec2 authorize-security-group-ingress --group-id sg-0a41006d88aefe928 --proto
 - **The move to Neon** (section 8) is written and was tried from the laptop into scratch Neon databases, but has not been run on the server.
 - **RAM with several users awake.** One user's container with the browser used 625 to 661 MiB of its 2 GiB limit after a turn (2026-10-05); the peak with a heavy page open was not measured.
 - **Composio's webhook reaching the server.** The secret is set (2026-10-05); no delivery from Composio has been seen yet, so pull-request review's trigger is unproven.
-- **Clerk's webhook reaching the server.** The secret is set (2026-10-05); it is used once the web app has an address and someone signs in there.
+- **Clerk's webhook reaching the server, on the production setup.** On the development setup it worked: the first sign-up in the web app arrived through it (2026-10-08). The production setup has a new webhook and a new secret (2026-10-15). No real sign-up had been done on it when this was written, so its first delivery has not been seen.
 
 **Known gaps**
 
@@ -409,7 +412,7 @@ aws ec2 authorize-security-group-ingress --group-id sg-0a41006d88aefe928 --proto
 - **No web app, no Polar,** and no WhatsApp or iMessage.
 - **Leftovers on the server:** `/opt/textcrew/old/`, `/opt/textcrew/it.sh`, and a few LiteLLM test keys with a $1 budget.
 - **Disk is 63% full** (18 of 29 GB on 2026-10-05, with the 2.78 GB agent image). Image rebuilds add to it; prune the Docker build cache when it grows. A user whose container has the browser adds about 0.5 GB to their volume, because Hermes downloads its own tools there (the vm-manager's build report, section 9), and there is no `/data` quota.
-- **The domain** moved from `sslip.io` to `api.textcrew.in` on 2026-10-08 (`docs/domain-setup.md` explains the DNS). The webhooks at Clerk and Composio must name the new address; that edit is yours.
+- **The domain** moved from `sslip.io` to `api.textcrew.in` on 2026-10-08 (`docs/domain-setup.md` explains the DNS). Clerk's webhook names the new address. Composio's must too; that edit is yours.
 - **No automatic deploy.** A push to `main` needs `deploy.sh` to be run by hand.
 
 ---
@@ -452,3 +455,5 @@ All times UTC.
 | 15:48 | Server stopped (`sudo shutdown -h now`), at your request |
 | about 16:05 | Server started by you |
 | 16:36 | Deploy: a new chat, Claude Code's model and effort, the Telegram `/new` command. Your account `user7867575@gmail.com` moved to Max with 9,999,999 extra credits (`dev-user.ts plan` and `credits`) |
+| 2026-10-15 | SSH locked out for a while: your home address had changed, and CloudShell's pager swallowed the second firewall command, so no SSH rule was left (section 13). Fixed once the new rule was added |
+| 2026-10-15 | Sign-in moved to Clerk's production setup for `textcrew.in`: five DNS records for Clerk, Textcrew's own Google sign-in app, a new Clerk webhook, the live keys in `beckend/.env` (backup `beckend/.env.bak-2026-10-15-clerk-dev`) and in Vercel. The api restarted healthy. Everyone signs up again |

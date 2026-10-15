@@ -2,7 +2,7 @@
 
 This explains where `textcrew.in` was bought, who controls it, and where each name points. It also gives the steps to add a new name, and to move the backend to another server.
 
-The facts here were checked with commands on 8 October 2026. Where something could not be checked, it says "not confirmed".
+The facts here were checked with commands on 8 October 2026. The five records for Clerk, the sign-in service, were added on 15 October 2026 and checked on public DNS that day. Where something could not be checked, it says "not confirmed".
 
 ## 1. In short
 
@@ -16,13 +16,15 @@ The facts here were checked with commands on 8 October 2026. Where something cou
 
 **The names in use:**
 
-| Name | What it is | Where it points | State on 8 October 2026 |
+| Name | What it is | Where it points | State |
 |---|---|---|---|
 | `textcrew.in` | The landing page | Vercel project `personal-agent-landing-page` | Works |
 | `www.textcrew.in` | The landing page | The same project. It redirects to `textcrew.in` | Works |
-| `app.textcrew.in` | The web app | Vercel project `textcrew-app` | Works. Added that day |
-| `api.textcrew.in` | The backend | The AWS test server, fixed IP `3.111.132.222` | Works. Added that day |
+| `app.textcrew.in` | The web app | Vercel project `textcrew-app` | Works. Added on 8 October 2026 |
+| `api.textcrew.in` | The backend | The AWS test server, fixed IP `3.111.132.222` | Works. Added on 8 October 2026 |
 | `send.textcrew.in` | Email sent by Resend | Resend's mail system | The records exist |
+| `clerk.textcrew.in` | Clerk's sign-in service, which the web app talks to | Clerk | Works, with a valid certificate. Added on 15 October 2026 |
+| `accounts.textcrew.in` | Clerk's sign-in pages | Clerk | Added on 15 October 2026 |
 
 **The Vercel commands in this file** are run from the web app folder. Go there first:
 
@@ -49,6 +51,7 @@ cd "/home/rahul/Desktop/coding/projects/b2b ai saas/1_personal_agent/user-fronte
 | **Wildcard (`*`)** | A record that answers for every name that has no record of its own |
 | **TTL** | "Time to live", in seconds. How long others may remember an answer before they ask again |
 | **Certificate** | A file that proves a site really owns its name. It makes `https://` work |
+| **Clerk** | The outside service that handles sign-in for the web app. Since 15 October 2026 it runs on our own names, `clerk` and `accounts` |
 
 **Example:** a browser opens `api.textcrew.in`. It asks Vercel's nameservers. They answer `3.111.132.222`. The browser then connects to that server.
 
@@ -112,8 +115,15 @@ pnpm dlx vercel@latest dns ls textcrew.in
 | `send` | TXT | `v=spf1 include:amazonses.com ~all` | 3600 s | Resend, called SPF: says which servers may send our mail |
 | `resend._domainkey` | TXT | `p=MIGfMA0GCSqGSIb3...` (a long key, cut short here) | 3600 s | Resend, called DKIM: a key that proves an email is really ours |
 | `_dmarc` | TXT | `v=DMARC1; p=none;` | 60 s | Called DMARC: tells mail services what to do with fake mail. `p=none` means "do nothing" |
+| `clerk` | CNAME | `frontend-api.clerk.services` | 60 s | Clerk's sign-in service. The web app talks to it at `clerk.textcrew.in`. Added on 15 October 2026 |
+| `accounts` | CNAME | `accounts.clerk.services` | 60 s | Clerk's sign-in pages. Added on 15 October 2026 |
+| `clkmail` | CNAME | `mail.juqijyr83vya.clerk.services` | 60 s | Clerk's mail service: the emails Clerk sends for us (sign-in codes, links). Added on 15 October 2026 |
+| `clk._domainkey` | CNAME | `dkim1.juqijyr83vya.clerk.services` | 60 s | Clerk's mail, DKIM: proves Clerk's emails are really ours. Added on 15 October 2026 |
+| `clk2._domainkey` | CNAME | `dkim2.juqijyr83vya.clerk.services` | 60 s | Clerk's mail, a second DKIM key. Added on 15 October 2026 |
 
 Resend sends the waitlist emails from `no-reply@textcrew.in`. It sends through Amazon's mail system, so the values say `amazonses.com`.
+
+The five Clerk rows came from Clerk's dashboard when sign-in moved to Clerk's production setup on 15 October 2026. The part in the middle of the mail values (`juqijyr83vya`) is Clerk's own name for our setup. Clerk's dashboard shows whether it sees all five. Removing any of them breaks sign-in or Clerk's emails.
 
 **Records that Vercel made by itself.** Vercel's help says these cannot be removed.
 
@@ -127,6 +137,7 @@ Resend sends the waitlist emails from `no-reply@textcrew.in`. It sends through A
 
 - `www` and `app` have no row. The `*` row answers for them and sends them to Vercel. Vercel then looks up which project owns the name.
 - `api` has its own row. Its own row wins over `*`. So `api` goes to the server, not to Vercel.
+- `clerk` and `accounts` have their own rows too. So they go to Clerk, not to Vercel.
 
 **Example:** `anything.textcrew.in` is not set up anywhere. It still gets an answer, because of `*`. It lands at Vercel, and the browser shows a certificate error.
 
@@ -217,4 +228,5 @@ The `dns update` command comes from the Vercel tool's own help. It has not been 
 | The site shows the wrong project | Run `domains inspect` (section 3). It lists each project with its names. Remove the name from the wrong project, then do recipe A |
 | A Vercel name gives "404" | The name works. The answer comes from the app itself. On 8 October 2026 a plain `curl` to `app.textcrew.in/` got 404, because the app sends only real browsers to the sign-in page. In a browser the same address opens the sign-in page |
 | Email lands in spam | List the records: the four email rows must still be there. Check in Resend that the domain shows as verified (not checked here). `_dmarc` is `p=none`, the weakest setting |
+| The sign-in page does not load, or `clerk.textcrew.in` gives a certificate error | List the records: the five Clerk rows must still be there, with the values in section 4. Check in Clerk's dashboard (production) that it sees all five |
 | A change does not show yet | Wait for the TTL: 60 seconds for `api`, up to 30 minutes for Vercel's own rows |

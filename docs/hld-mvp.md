@@ -396,7 +396,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - Scout's browser: opening pages, clicking, reading. Browser time is charged.
 - Containers stopping after idle time and waking again.
 - The agent's tool paths being closed from the internet.
-- A real sign-up through Clerk in the web app at `https://app.textcrew.in`: the account, the 100 sign-up credits and the container were made.
+- A real sign-up through Clerk in the web app at `https://app.textcrew.in`: the account, the 100 sign-up credits and the container were made. This was on Clerk's development setup, before the move of 15 October (below).
 - Connecting a Claude plan in the web app, and a web chat message answered by the agent.
 - Tested on 8 October (on a test account): a reminder that fires, a daily automation created and cancelled, the 15-minute limit, a free GitHub read, an approval approved (an email sent) and one rejected, memory saved, recalled and forgotten without naming the tool, a password refused as a memory, Scout reading pages on Claude Code, the browser, out of credits, "connect your own AI first" for a user with none, the idle stop (3 minutes 11 seconds), and the isolation test (5 of 5).
 - A request Anthropic refuses gets a clear reply, is not counted as our fault and is not kept in the chat's history.
@@ -408,6 +408,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 
 ### Built, never run for real
 
+- Sign-in on Clerk's production setup (15 October). Clerk is the outside service that handles sign-in. Until then it ran on Clerk's development setup, which is meant for building and has test keys. Now it runs on the production setup for `textcrew.in`, with live keys: Clerk answers at `clerk.textcrew.in`, and Google's sign-in screen names Textcrew, through Textcrew's own Google sign-in app. The live web app loads the live key and the api restarted healthy, but nobody has signed up on it yet. Accounts from the development setup do not carry over, so everyone signs up again.
 - The databases on Neon (14 October). The backend, the vm-manager and LiteLLM were each run against scratch Neon databases from the laptop, and the move script copied a local database into Neon with matching row counts. The server still uses its own `postgres` until the move script is run there.
 - Textcrew AI on the Hermes engine. There is no working model key.
 - The user's own API key. Every model call goes to the user's provider with their key, through LiteLLM on our server. There is no key with balance to test it.
@@ -448,7 +449,6 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - **Composio's name on the connect pages:** the web app now shows its own connect screen first. What users still see of Composio depends on steps only you can do: our logo and name on Composio's connect page (a dashboard setting, five minutes), and our own GitHub sign-in app (no review needed, about twenty minutes). Google needs a review of several weeks before our own Google app can replace Composio's. `composio.md`, section 9, has every step.
 - **Old conversations:** keep Claude Code's 30-day clean-up of saved sessions (an older conversation then starts afresh when opened), or keep sessions for as long as the conversation exists (more disk per user).
 - **Codex and other engines:** see `engines-proposal.md`, section 10. A ChatGPT plan cannot be used yet; OpenAI must approve first.
-- **A Clerk production instance on `textcrew.in`:** needed before a public launch, and it makes the first visit about a second faster.
 
 ### Smaller open questions
 
@@ -465,6 +465,8 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 
 ### Also waiting on you
 
+- After the move to Clerk's production setup (15 October): sign up once in the web app, then make your new account an admin again (in Clerk's dashboard, the role "admin" in the user's public metadata). Your Max plan, extra credits and Telegram link stay on the old account; an admin moves them by hand, and unlinks Telegram on the old account first.
+- Upload the logo in Textcrew's Google sign-in app and submit the brand for Google's check. It takes a few days. Until then Google shows the name without the logo.
 - A repo to test pull-request review on.
 - How Free credits should run out sooner (section 7).
 - New keys in place of the four that were pasted into chat.
@@ -487,9 +489,11 @@ The domain is `textcrew.in`. In the steps below, `yourdomain` stands for it.
 | A. Domain | Done. `api.textcrew.in` points at the AWS server. `docs/domain-setup.md` explains the DNS |
 | B. Web app on Vercel | Done. It is live at `https://app.textcrew.in`, as the Vercel project `textcrew-app`. A push to GitHub does not deploy by itself yet; Claude deploys it from the terminal |
 | C. Server | Done. It answers at `https://api.textcrew.in`, Textcrew AI is off, and 8 containers may be awake at once |
-| D. Outside services | The Telegram bot is moved. Clerk's webhook is on the new address: the first sign-up arrived through it. Composio's webhook address is yours to change (step 11); not confirmed yet |
+| D. Outside services | The Telegram bot is moved. Clerk's webhook is on the new address: the first sign-up arrived through it. Composio's webhook address is yours to change (step 11); not confirmed yet. On 15 October sign-in moved to Clerk's production setup (below step 12) |
 | E. First real run | Started. A real sign-up made the account, gave 100 credits and created the container. The Claude plan was connected in the web app, and the first web chat message was answered in about 5 seconds. Left: link Telegram, connect an app, and the same on a phone (steps 15 to 18) |
 | F to H | Not started |
+
+**Since 15 October,** sign-in runs on Clerk's production setup. Accounts made before do not carry over, so step 13 has to be done once more, on the production setup.
 
 ### Part A. Your domain
 
@@ -528,7 +532,18 @@ The domain is `textcrew.in`. In the steps below, `yourdomain` stands for it.
 11. In the Composio dashboard, change the webhook's address to `https://api.yourdomain/webhooks/composio`.
 12. Claude points the Telegram bot's webhook at the new address.
 
-The Clerk app in use is a test app (its keys start with `pk_test` and `sk_test`). That is enough for the beta. A public launch needs a Clerk production app on your own domain.
+**Done on 15 October 2026: Clerk's production setup.** Until then the Clerk app in use was its development setup, with test keys. Now:
+
+| What | State |
+|---|---|
+| Clerk's production setup for `textcrew.in` | Live. Clerk answers at `clerk.textcrew.in` |
+| Five DNS records for Clerk | Added at Vercel. `domain-setup.md`, section 4, lists them |
+| Textcrew's own Google sign-in app | Published. Google's screen names Textcrew, not Clerk. Left: the logo and Google's brand check (a few days) |
+| Clerk's webhook | A new one on the production setup, to `https://api.yourdomain/webhooks/clerk`, for the same three events |
+| The live keys | On the server, in Vercel's production settings, and in the laptop's `.env.deploy` and `.env` |
+| A real sign-up on it | Not yet done |
+
+Everyone signs up again: accounts from the development setup do not carry over. Signing in on the laptop (`localhost`) needs the old test keys, which are kept in the laptop's `.env` as commented lines.
 
 ### Part E. The first real run
 

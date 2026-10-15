@@ -48,6 +48,46 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 15 October 2026: sign-in moves to Clerk's production setup, with Textcrew's own Google sign-in
+
+- **Where it is:** live on the test server and the web app since 15 October.
+- **Why:** Clerk is the outside service that handles sign-in. Until now the web app and the backend used Clerk's development setup. That setup is meant for building: it has test keys, it lives on Clerk's own addresses, and Google's sign-in screen said "continue to Clerk" instead of Textcrew. You chose to move to Clerk's production setup before the beta. The design already listed it as needed before a public launch.
+- **What the user notices:**
+  - **Everyone signs up again.** Accounts made on the development setup do not carry over to the production one. A new sign-up makes a new account in our database, as for any new user.
+  - **Google's sign-in screen names Textcrew,** not Clerk. Until Google has checked the brand (see "Still open"), it shows the name without the logo.
+  - **Your new account has to be made an admin again.** The admin role travels in the account's details at Clerk, and the old account's details stayed on the development setup.
+  - **Local development:** the laptop's `beckend/.env` now holds the live keys. The live keys only work on `textcrew.in`, so signing in on `localhost` needs the old test keys put back. They are kept in that file as commented lines.
+- **Backend:** no code changed. Only settings and outside services changed:
+  - **Where the keys live now** (names only, no values here):
+
+    | Where | Settings | Notes |
+    |---|---|---|
+    | The server, `beckend/.env` | `CLERK_SECRET_KEY`, `CLERK_WEBHOOK_SECRET` | The file as it was before is kept as `beckend/.env.bak-2026-10-15-clerk-dev`. The api was restarted to read them |
+    | Vercel, the web app's production settings | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` | `CLERK_JWT_KEY` was removed there: it belonged to the development setup and would have refused every live sign-in |
+    | The laptop, `beckend/.env.deploy` and `beckend/.env` | The same keys | Both files are kept out of git. The old test keys stay in them as commented lines |
+
+  - **Clerk's sign-in service now answers at `clerk.textcrew.in`,** our own address, with Clerk's sign-in pages at `accounts.textcrew.in`.
+  - **Five DNS records were added to `textcrew.in` at Vercel.** DNS is the internet's phone book: it turns a name into an address. All five are CNAMEs, records that point one name at another name. `clerk` points at Clerk's sign-in service, `accounts` at Clerk's sign-in pages, and `clkmail`, `clk._domainkey` and `clk2._domainkey` at Clerk's mail service, so the emails Clerk sends for us (codes, links) are trusted as ours. `domain-setup.md`, section 4, lists them with their values.
+  - **Google sign-in uses Textcrew's own Google sign-in app.** It is in a Google Cloud project named "textcrew", under your Gmail address, and it is published. Its redirect address, where Google sends the user back after they say yes, is `https://clerk.textcrew.in/v1/oauth_callback`. Its id and secret are kept in Clerk's production setup, not by us.
+  - **A new webhook in Clerk's production setup.** A webhook is a message Clerk sends our server when something happens. This one sends "user created", "user updated" and "user deleted" to `https://api.textcrew.in/webhooks/clerk`, the same address as before.
+- **Cost and speed:** not measured. The design expected the first visit to be about a second faster on a production setup. No change to credits or to our bills from this.
+- **Contracts:** none. `openapi.yaml` and `vm.proto` did not change.
+- **Database:** none. The accounts made on the development setup stay in the database as they were, with their credits, chats and containers. Nobody can sign in to them any more.
+- **How it was checked:**
+  - The live web app loads the live key.
+  - `clerk.textcrew.in` answers with a valid certificate.
+  - The api restarted with the new keys and reports healthy.
+  - The five records answer on public DNS with the values in `domain-setup.md`.
+  - Not yet done at the time of writing: a real sign-up on the production setup, so the webhook's first delivery has not been seen.
+- **Still open:**
+  - **Do one real sign-up** in the web app, and check that the account appears with its credits and container. This also proves the new webhook.
+  - **Make your new account an admin.** In Clerk's dashboard (production), add the role "admin" to your new user's public metadata. Clerk's "user updated" webhook then brings the role to our database.
+  - **Upload the logo** in Textcrew's Google sign-in app and **submit the brand for Google's check.** It takes a few days. Until then Google shows the name without the logo.
+  - **Your old account's plan, extra credits and Telegram link stay on the old account.** Moving your Max plan and credits to the new account is done by hand again, from the admin panel. A Telegram chat linked to an old account cannot be linked to a new one. The bot answers that the chat is linked to another Textcrew account and must be removed there first, but nobody can sign in to the old account any more. So an admin unlinks it on the old account's page in the admin panel. Then the new account's link code works. Beta testers who linked Telegram before 15 October need the same.
+  - **`CLERK_JWT_KEY` on the server was not checked for this entry.** It was removed from Vercel because it belonged to the development setup. If the server's `beckend/.env` still holds that one, the api would refuse every signed-in call from the web app. It must be empty, or the production setup's.
+- **Docs updated:** `domain-setup.md` sections 1, 2, 4 and 7 (the five Clerk records); `aws-setup.md` section 6 (what `beckend/.env` sets), section 9 (the Clerk row), section 13 (the SSH note: on 15 October SSH was locked out for a while after your home address changed, and CloudShell's pager swallowed a pasted command, so the firewall commands now carry `--no-cli-pager`), section 14 and the timeline; `hld-mvp.md` section 12 (the first sign-up was on the development setup; the production setup under "Built, never run for real"; the Clerk decision taken off "Decisions waiting on you"; the open steps under "Also waiting on you") and section 13 (the progress table, and Part D's note on Clerk's production setup, now marked done).
+- **Commits:** the docs commit that adds this entry. No code changed.
+
 ### 15 October 2026: a turn's billing runs after the reply, and the next message no longer waits for it
 
 - **Where it is:** on `main` and on the test server since 15 October. Checked there: two quick messages in a row both got their reply (16.4 s with the container waking, then 8.5 s).

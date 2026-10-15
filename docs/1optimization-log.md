@@ -50,7 +50,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 15 October 2026: connecting the same account again replaces the old connection, and its automations move over
 
-- **Where it is:** on `main` since 15 October. Not on the test server yet.
+- **Where it is:** on `main` and on the test server since 15 October.
 - **Why:** to move a user from Composio's shared Google sign-in app to our own, the user connects the app again. That made a second connection next to the old one, which caused three problems:
   - **Tex picked either one.** The server took "an active connection" with no order, so which one Tex used was not defined.
   - **Automations stayed on the old connection.** An automation of the kind "when an email arrives" watches the connection it was made on. Removing the old connection would stop it without a word.
@@ -106,7 +106,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 15 October 2026: a scope check in the ops script, before asking Google to review our sign-in app
 
-- **Where it is:** on `main` since 15 October. Not on the test server yet.
+- **Where it is:** on `main` and on the test server since 15 October.
 - **Why:** a scope is one permission a sign-in screen asks for, such as "see and edit your calendar events". Google sorts scopes into four classes, and the class decides what Google wants before real users can allow our own Google sign-in app:
 
   | Class | What Google wants | Example |
@@ -152,7 +152,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 15 October 2026: a trial switch, so only some users connect through our own Google sign-in app
 
-- **Where it is:** on `main` since 15 October. Not on the test server yet.
+- **Where it is:** on `main` and on the test server since 15 October.
 - **Why:** when someone connects a Google app, Google's screen says "continue to Composio". To make it say Textcrew, each Google app needs our own sign-in app at Google. Google must review that app first. While it does, at most 100 people can ever use it, and each of them sees a "Google hasn't verified this app" warning. Until now an app had one setup for everyone, and there is only one server. So there was no way to let you and a few testers try our own sign-in app while everyone else stays on Composio's.
 - **What the user notices:** nothing, until the two new settings are filled in. Then:
   - a user named in the trial list connects that app through our own sign-in app. Google's screen names Textcrew, and there is no Composio page on the way;
@@ -183,7 +183,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 15 October 2026: deleting an account also removes the approvals and the activity log
 
-- **Where it is:** on `main` since 15 October. Not on the test server yet.
+- **Where it is:** on `main` and on the test server since 15 October.
 - **Why:** the live privacy page says "Messages, approvals, automations, activity log: until you delete them or your account", and the web app says data is kept until the account is deleted. The delete job removed the container, messages, memories, files, connections, automations and links, but never the user's approvals or their activity log. Both hold the inputs of actions: an approval keeps the exact details it was asked for, such as an email's recipient, and an activity-log entry keeps a tool call's inputs, such as an event's title. Google's review of the app will check how users delete their data. Nothing in the design said these two were kept on purpose: no code reads the activity log except to show it, and the abuse checks use the coupon redemptions, not the log.
 - **What the user notices:** after deleting their account, nothing of their approvals or activity log is left. Nothing else changes.
 - **Backend:**

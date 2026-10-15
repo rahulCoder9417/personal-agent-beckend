@@ -514,7 +514,7 @@ export async function devUser(argv: string[]): Promise<string[]> {
       const setups = await Promise.all(
         [...new Set(rows.map((r) => r.app))].map(async (app) => ({
           app,
-          setup: await currentSetupFor(app),
+          setup: await currentSetupFor(app, user.id),
         })),
       );
       const agent = await appActionsFor(user.id, user.plan);

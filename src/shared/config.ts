@@ -63,6 +63,59 @@ const managedAppList = z.string().transform((value, ctx): 'all' | string[] => {
   return names;
 });
 
+/**
+ * COMPOSIO_TRIAL_AUTH_CONFIGS: a JSON map of app slug → Composio setup id, such as
+ * `{"googlecalendar":"ac_123"}`. Empty is none. A damaged value stops the start, with the reason,
+ * instead of quietly switching the trial off.
+ */
+const trialAuthConfigMap = z.string().transform((value, ctx): Record<string, string> => {
+  if (!value.trim()) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    ctx.addIssue({ code: 'custom', message: 'not JSON: write it as {"googlecalendar":"ac_…"}' });
+    return z.NEVER;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    ctx.addIssue({ code: 'custom', message: 'must be a JSON object: {"googlecalendar":"ac_…"}' });
+    return z.NEVER;
+  }
+  const out: Record<string, string> = {};
+  for (const [app, id] of Object.entries(parsed)) {
+    if (!/^[a-z0-9_]{1,40}$/.test(app)) {
+      ctx.addIssue({ code: 'custom', message: `not an app name: ${app}` });
+      return z.NEVER;
+    }
+    if (typeof id !== 'string' || !/^ac_[A-Za-z0-9_-]{1,100}$/.test(id)) {
+      ctx.addIssue({ code: 'custom', message: `${app}: a Composio setup id starts with ac_` });
+      return z.NEVER;
+    }
+    out[app] = id;
+  }
+  return out;
+});
+
+/**
+ * COMPOSIO_TRIAL_USERS: who gets the trial setups, as user ids (`usr_…`) and emails separated by
+ * commas (trimmed; emails lower-cased; no duplicates). Empty is nobody.
+ */
+const trialUserList = z.string().transform((value, ctx): string[] => {
+  const items = value
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean)
+    .map((v) => (v.includes('@') ? v.toLowerCase() : v));
+  const bad = items.filter(
+    (v) => !/^usr_[0-9a-z]{10,40}$/.test(v) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v),
+  );
+  if (bad.length) {
+    ctx.addIssue({ code: 'custom', message: `not a user id or an email: ${bad.join(', ')}` });
+    return z.NEVER;
+  }
+  return [...new Set(items)];
+});
+
 /** The crew's specialists (HLD 0.7). The lead, Tex, is always there. */
 export const SPECIALIST_IDS = ['byte', 'patch', 'scout'] as const;
 export type SpecialistId = (typeof SPECIALIST_IDS)[number];
@@ -179,6 +232,14 @@ export const configSchema = z.object({
    * Empty: none. COMPOSIO_AUTH_CONFIGS wins for an app named in both.
    */
   COMPOSIO_MANAGED_APPS: managedAppList.default([]),
+  /**
+   * A second setup per app, for the users in COMPOSIO_TRIAL_USERS only: our own sign-in app at a
+   * provider while it is still being tried or reviewed (docs/composio.md, section 9). Everyone
+   * else keeps the app's usual setup. For those users it wins over every other setup.
+   */
+  COMPOSIO_TRIAL_AUTH_CONFIGS: trialAuthConfigMap.default({}),
+  /** The users who connect with COMPOSIO_TRIAL_AUTH_CONFIGS: user ids, or verified emails. */
+  COMPOSIO_TRIAL_USERS: trialUserList.default([]),
 
   /** TypeSafe API root for Jev routing (default https://api.typesafe.ai, or LiteLLM's /typesafe pass-through). */
   JEV_URL: optional,

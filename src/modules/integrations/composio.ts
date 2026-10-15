@@ -383,6 +383,14 @@ export function authConfigFor(appSlug: string): string | undefined {
 }
 
 /**
+ * The trial setup named for an app (COMPOSIO_TRIAL_AUTH_CONFIGS = {"googlecalendar":"ac_…"}).
+ * Only for the users in COMPOSIO_TRIAL_USERS; apps.ts decides who they are.
+ */
+export function trialAuthConfigFor(appSlug: string): string | undefined {
+  return config().COMPOSIO_TRIAL_AUTH_CONFIGS[appSlug];
+}
+
+/**
  * Where `/oauth/callback` sends the browser on to: Composio's own callback, with the provider's
  * query string unchanged (`search` starts with "?" or is empty). Used for a sign-in app of our
  * own whose redirect address is ours (Composio's white-labeling guide, "the return redirect").

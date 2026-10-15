@@ -430,7 +430,7 @@ A message from a chat that is not linked never reaches an agent. It is not saved
 
 | The message has | The reply says |
 |---|---|
-| No code | The chat is not linked yet. Get a code in the web app |
+| No code | The chat is not linked yet. Open Integrations in the web app (its address, ending in `/integrations`) and send the code from there |
 | A wrong or expired code | The code is invalid or expired |
 | A code, after too many tries | Too many attempts. Try again in an hour |
 | A code, but the chat belongs to another account | The chat is linked to another Textcrew account. Unlink it there first |
@@ -441,7 +441,7 @@ A code never moves a linked chat to another account. The user unlinks the chat f
 
 | The code is | The reply says |
 |---|---|
-| A valid code of another account | The chat is linked to another Textcrew account. Sign in there, unlink it in Settings → Channels, then send the code again |
+| A valid code of another account | The chat is linked to another Textcrew account. Sign in to that account at the Integrations page's address, unlink the chat in Integrations, then send the code again |
 | A code of the same account, or a wrong or expired one | This chat is already linked to your account |
 | Any code, after too many tries | Too many attempts. Try again in an hour |
 
@@ -451,7 +451,21 @@ Example: Rahul's Telegram is linked to his first account. He signs in to a secon
 
 ### Unlinking
 
-The user removes a link in the web app, in Settings → Channels. The activity log records it, like the link: the channel and the name shown when it was linked, never the chat id. From then on the chat gets the "not linked yet" reply.
+The user removes a link in the web app, on the Integrations page (its Chat apps tab). The activity log records it, like the link: the channel and the name shown when it was linked, never the chat id. From then on the chat gets the "not linked yet" reply.
+
+### What the user sees for each linked chat
+
+The web app lists the user's linked chats with `GET /v1/channels`. For each chat it gets:
+
+- the channel, and the name shown for it (a Telegram name, or a masked number);
+- when it was linked;
+- the chat id, masked: a Telegram chat keeps its last 4 digits, a phone number its country code and its last 4 digits. The full id is never sent;
+- when the chat last wrote to the bot, or nothing if that was never recorded. Linking counts as writing;
+- whether the user blocked the bot there. Nothing is sent to a blocked chat. The mark goes away when the chat writes again.
+
+These are the same as an admin sees for the chat (section 31). The masked id, the last message and the blocked mark came on 15 October 2026; the web app treats them as optional, so it also works with a server from before.
+
+Example: Rahul's Telegram chat shows "@rahul", "•••• 3645", "Last message 2h ago". He blocks the bot in Telegram; the next message Tex sends him fails, and the chat now shows "Blocked the bot". He unblocks the bot and writes to it again, and the mark goes away.
 
 An admin can remove a link for the user (section 31). It goes the same way and writes the same activity log entry, marked as done by an admin.
 
@@ -949,7 +963,7 @@ A provider such as Google reviews our own sign-in app before everyone may use it
    - **Our own sign-in app** (Composio calls it a custom auth config, with OAuth). The api asks Composio for a link that goes straight to the provider's own page. Composio's word for this is `initiate()` with "long redirect URL". The user sees no Composio page and no Composio address on the way out.
    - **Composio's shared sign-in**, or a setup that asks for an API key. The api asks for a Composio Connect Link. Composio's page comes first, then the provider's. Composio no longer allows the first way for its shared sign-in, since 3 July 2026.
    - If Composio cannot say which kind it is, or the direct link fails, the api uses a Connect Link. It works for every kind.
-6. The api gives Composio our own user id and the page to come back to. That page must be on our web app's own address. Anything else, also an address that only starts the same way, is replaced by the Apps page.
+6. The api gives Composio our own user id and the page to come back to. That page must be on our web app's own address. Anything else, also an address that only starts the same way, is replaced by the Apps tab of the Integrations page (`/integrations/apps`). The web app sends its old `/apps` address there too.
 7. The api saves the connection as `pending` in the table `connections`, and returns the link.
 8. The user signs in on the provider's page and allows access. The platform never sees the password. Composio sends the browser back to the web app and adds `status=success` or `status=failed` to the address. The web app says "Gmail is connected" or "Gmail didn't connect". That message comes from Composio's address only: our own record may still say `pending` for a few seconds, until the platform has checked (next part).
 9. A user may connect a second account of the same app ("Add account"). Connecting the same account again replaces the older connection (below).
@@ -983,7 +997,7 @@ It never removes a connection to another account of the app ("Add account"), nor
 
 It is safe to run twice. A second run finds nothing to do. A run that stopped after making a new trigger but before saving it leaves that trigger on the new connection; the next run uses it instead of making another. An old account that Composio no longer has counts as removed. Runs for the same user wait for each other, with a short lock of their own.
 
-**Example.** Rahul's Gmail is on Composio's shared sign-in, with "when my boss emails me, tell me". He connects Gmail again through our own sign-in app. A few seconds later his Apps page shows one Gmail connection, the new one, and the automation watches the new one.
+**Example.** Rahul's Gmail is on Composio's shared sign-in, with "when my boss emails me, tell me". He connects Gmail again through our own sign-in app. A few seconds later Integrations → Apps shows one Gmail connection, the new one, and the automation watches the new one.
 
 ### How the agent finds and runs an action
 
@@ -991,10 +1005,10 @@ It is safe to run twice. A second run finds nothing to do. A run that stopped af
 2. The answer has two parts. `apps` gives every app the user has a connection for, with its status:
    - **connected**: active and on the user's plan. Its actions are listed.
    - **connecting**: a sign-in started less than 20 minutes ago and not finished. The note says "Google Calendar is still connecting", and asks the agent to tell the user it may still be finishing.
-   - **not finished**: a sign-in started longer ago and never finished. The note asks the agent to tell the user to connect it again on the Apps page.
+   - **not finished**: a sign-in started longer ago and never finished. The note asks the agent to tell the user to connect it again on the Integrations page.
    - **needs reconnecting**: the connection expired or failed. Same advice.
    - **not on plan**: connected, but the app is not on the user's plan any more.
-   An active connection of an app wins over any other of the same app. Of two active connections of one app, the agent uses the newest; new automations and the git gateway use the same one. The notes carry the Apps page address, so the agent sends the user there and nowhere else.
+   An active connection of an app wins over any other of the same app. Of two active connections of one app, the agent uses the newest; new automations and the git gateway use the same one. The notes carry the address of the Integrations page's Apps tab (`/integrations/apps`), so the agent sends the user there and nowhere else. Until 15 October 2026 they said "the Apps page" and `/apps`.
 3. `actions` lists the actions of the connected apps, at most 100. The api asks Composio once per app. It used to ask once for all of them, with one limit of 200 tools in all. GitHub alone has more than 200, so it left no room for the next app. That is the most likely reason why, on 13 October, the agent saw only GitHub after the founder connected Google Calendar (not confirmed on the server). Now the 100 places are shared fairly: an app with few actions gets them all, and the rest goes to the big ones. An app that is cut short gets a note: "Showing 97 of its 200 actions", and to ask again with that app and a search word. An app's actions are the same for every user, so the api keeps each app's listing for 10 minutes and serves every call from it, for every user. Before, every call asked Composio again for every connected app, and the lead calls `list_app_actions` on many turns. A listing that failed is not kept.
 4. Each action carries two marks: whether it needs approval, and whether it costs a credit.
 5. The agent calls `run_app_action` with the action's name and its inputs. For an app that is not ready, the answer is the same note as above, for example "Google Calendar is still connecting".
@@ -1021,7 +1035,7 @@ It is safe to run twice. A second run finds nothing to do. A run that stopped af
 - **Two connections of the same app stay after connecting again.** Composio gave no email for the account, so the server can't tell it from a second account. The agent uses the newer one; the user can remove the old one with Disconnect.
 - **A trial setting is damaged.** The api and the worker don't start after the restart, and the log says which value is wrong.
 - **Which permissions does an app's sign-in ask for?** Our server sets none; each app uses Composio's default set, which Composio does not publish. The dev-user script's `scopes` command prints it: the setup's own scopes, the ones Composio's sign-in always asks for, Composio's narrowest and smallest sets for the app's actions, and for a Google app each scope's class at Google (basic, non-sensitive, sensitive or restricted). It only reads, and of a setup it reads the scopes only, never the client id or secret beside them. `docs/composio.md`, section 9.
-- **The user says an app is connected, but the agent can't see it.** The agent says it may still be finishing, or that it needs connecting again on the Apps page. To see why, run the dev-user script's `apps` command on the server (`docs/composio.md`, section 11). It prints each connection with our status, its Composio account id, what Composio says about it, the setup it was made with, and what the agent sees.
+- **The user says an app is connected, but the agent can't see it.** The agent says it may still be finishing, or that it needs connecting again on the Integrations page. To see why, run the dev-user script's `apps` command on the server (`docs/composio.md`, section 11). It prints each connection with our status, its Composio account id, what Composio says about it, the setup it was made with, and what the agent sees.
 
 ## 15. Approvals
 
@@ -2237,7 +2251,7 @@ The rules for all of them:
 - **Disconnect** is the user's own disconnect: the account is removed at Composio and the connection is deleted. Like the user's own, it leaves the user's app-event automations as they are.
 - **Recheck** asks Composio about that one connection now, whatever its state, and copies the answer: active, expired or failed. An account that Composio no longer has becomes failed, unless it was still pending. One still being set up stays pending and gets a fresh series of checks, as after a new connect. If Composio can't be asked, the api answers 503 and nothing changes.
 
-**Chats.** The list shows each linked chat: the channel, what the user sees for it in Settings → Channels, the masked chat id, when it was linked, whether the channel is switched on here, whether the user blocked the bot, and when the chat last wrote. Unlink is the user's own unlink, with the same activity log entry (section 7). The chat then gets the "not linked yet" reply.
+**Chats.** The list shows each linked chat: the channel, what the user sees for it in Integrations → Chat apps, the masked chat id, when it was linked, whether the channel is switched on here, whether the user blocked the bot, and when the chat last wrote. Unlink is the user's own unlink, with the same activity log entry (section 7). The chat then gets the "not linked yet" reply.
 
 **Automations.**
 

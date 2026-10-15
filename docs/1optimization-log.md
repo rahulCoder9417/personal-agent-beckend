@@ -48,6 +48,53 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 15 October 2026: a turn's billing runs after the reply, and the next message no longer waits for it
+
+- **Where it is:** on `main`, not yet on the server.
+- **Why:** you asked why the billing has to be done before the user can go on, above all for a user on their own Claude plan: "the user can get the reply and in the background we can run the checks for billing". Measured before this change: after the reply was shown, the turn still made 20 trips to the database, 19 of them one after another (5.0 seconds at Neon's distance), while it held the user's lock. 12 of them were the usage sync that charges the turn. A second message sent right after a reply waited for all of it.
+- **What the user notices:** a message sent right after a reply starts about 3.4 seconds sooner. The balance in the web app drops a moment after the reply instead of together with it. Nothing else changes.
+- **Backend:**
+  - **The billing of a turn is a job of its own,** named `bill-turn`, in the system queue. The turn adds it as soon as it knows how it ended, before it gives the lock back. Adding it is one note in Redis, with no trip to the database. Then the turn saves what the next message depends on (the message's last state and which engine has the conversation, now both at once), the event is marked done, and the lock is given back.
+  - **The job is the same usage sync as before,** for that one user, followed by the live balance for the web app. There is one job per turn: its id comes from the turn's event. A second run charges nothing twice, because usage is charged by period, never by turn, with the same idempotency keys. A failed run is tried again, 5 tries in all, then an alert is raised and the 5-minute sync charges the usage. If Redis refuses the job, the turn bills itself, the old way.
+  - **What each way of paying for the AI costs per turn, and what is asked:**
+
+    | Who pays for the AI | Charged in credits after a turn | Asked before (inside the lock) | Asked now (after the lock) |
+    |---|---|---|---|
+    | Textcrew AI | AI at cost × 2.5, awake time, browser time | LiteLLM and the vm-manager | The same |
+    | The user's own API key | Awake time, browser time. The AI is free | LiteLLM and the vm-manager | The same |
+    | The user's own Claude plan | Awake time, browser time. The AI is free | LiteLLM (the AI so far, then the key's budget) and the vm-manager | Only the vm-manager |
+
+    App actions and web searches through Textcrew are charged when they run, for everyone, as before. No price and no rule changed.
+  - **On a Claude plan, LiteLLM is no longer asked after a turn:** not for the AI so far, not for the key's budget, and not for the spend log when a failed turn is refunded. Claude Code does not use LiteLLM, so there is nothing there to charge. Any AI that did reach the key would still be charged by the 5-minute sync, which asks LiteLLM as before.
+  - **The check before a turn still sees the charges of all but one turn.** The turns waiting for their billing are noted in Redis. A turn may start while the one before it still waits (the usual case: a message sent right after a reply). If two wait, the turn bills them itself first, then checks the balance. So nobody can run turns for free by racing the billing, even with the system queue stopped. Looking costs one read in Redis.
+- **Cost and speed:**
+  - Measured with the same test as the entry below (`test/read-round-trips.test.ts`): every database query waits 260 ms and every new connection 2 seconds; the AI and the container wake are fakes. The test now also shows the stretch from the reply to the free lock, and the billing job on its own. The "before" numbers come from the same test run on the code before this change.
+
+    | | Before | After |
+    |---|---|---|
+    | From the reply shown until the lock is free (the next message can start) | 20 trips, 19 in a row, 4.97 s | 8 trips, 6 in a row, 1.58 s |
+    | The whole turn, from sending until the job ends | 42 trips, 8.12 s | 30 trips, 4.73 s |
+    | Sending until the reply shows | 3.15 s | 3.16 s (no change) |
+    | The turn's billing | Inside the turn, 12 of the 20 trips | Its own job after the lock: 12 trips, 2.92 s, nobody waits for it |
+
+  - The billing job in that test had nothing to charge. A turn with something to charge makes a few more trips in it, all after the lock.
+  - **Credits:** no change for anyone. The charge reaches the balance a moment later, about 3 seconds at Neon's distance. At a turn's start at most one earlier turn can be unbilled; at zero credits its cost becomes a small debt, as awake time already could.
+  - **LiteLLM:** for a Claude-plan user, one call fewer per turn (the read of the key's spend), and a budget update fewer whenever the balance changed.
+  - **Redis:** one small list per user of the turns waiting for their billing, gone after an hour at most.
+- **Contracts:** none. `openapi.yaml` and `vm.proto` did not change. The live `credits.updated` event is the same; it is now sent by the billing job.
+- **Database:** none.
+- **How it was checked:**
+  - New tests (7): the next message starts and gets its reply while the first turn's billing job still waits, then both turns are charged once and the web app gets the new balance; the job run twice charges once, and added twice is queued once; a job that fails is tried again and charges the turn exactly once; a job that never ran is covered by the 5-minute sync, and running it later charges nothing more; a Textcrew AI turn is charged exactly what the sync after the turn charged before (the example of section 25: "Usage: AI 8, awake time 1", 9 credits), compared with a user charged the old way; a Claude-plan turn and the refund of a failed Claude-plan turn make no call to LiteLLM at all, and the awake time is still charged and refunded; with 1 credit and the billing stopped, two turns run and the third is billed first and refused with the out-of-credits reply, and the billing jobs that run later charge nothing more.
+  - Changed tests: the Claude-plan turn test runs the queued billing job and checks it is marked as a Claude-plan turn; one browser test waits for the turn's billing job; the round-trip test pauses the billing during the turn, counts the trips between the reply and the free lock (at most 8), and measures the billing job apart.
+  - Lint and the type check pass. The full backend run: 853 of 853 tests pass.
+  - Not yet run on the server.
+- **Still open:**
+  - **The 5-minute sync still asks LiteLLM for every user with a key,** also for a user on their Claude plan. It finds no AI there and charges none. It could be left out for those users too; it costs one LiteLLM call per user every 5 minutes. Not changed here.
+  - **After the reply the turn still makes 8 trips (6 in a row, 1.6 s)** before the lock is free: the end of the agent's send (the conversation's time, a crew job's report, the activity log), the engine's record and the message's last state, the turn's timings and the event. Moving Neon closer to the server is the structural fix (entry below).
+  - No pricing question: the docs say clearly what a user on their own AI pays (backend report section 24), and that is what is charged.
+- **Docs updated:** `backend-report.md` section 3 (the system queue, the per-user lock), section 4 (a row in "Keeping reads fast"), section 9 (steps 18 and 19, where a turn's time goes), section 12 (`credits.updated`), section 25 (the usage sync, a new part "The billing of a turn", re-runs, the refund, what can go wrong), section 26 (the check before a turn), section 30 (the Claude plan), section 32 (`GetUsage`) and section 43; `hld-mvp.md` section 5.2, step 9.
+- **Commits:** `9abf205` (the billing job and the check before a turn), `af805a5` (its tests, and no LiteLLM after a Claude-plan refund), `ef892c8` (the round-trip test), and the docs commit that adds this entry.
+
 ### 15 October 2026: pages and replies wait for fewer trips to the database
 
 - **Where it is:** on `main`, not yet on the server. Its database update (`0024_messages_event_id`, one index) runs on Neon at the next deploy.
@@ -101,7 +148,7 @@ Each entry has a heading with the date and the name of the feature, then the par
   - Lint and the type check pass. After merging `main`, the full backend run: 846 of 846 tests pass. In earlier full runs, now and then one timing test failed while the whole run was busy (a crew job, the browser switch, a refund job's retries, Jev routing), each passing alone; the commit before this work showed the same, 1 failed run in 4.
   - Not run against Neon itself, and not yet on the server.
 - **Still open:**
-  - **After the reply, a turn still makes about 19 trips in a row (about 5 s at Neon's distance) before it gives the user's lock back.** About 12 of them are the usage sync, which charges the credits. A second message sent right after a reply waits for all of it. It could give the lock back before the sync, or run as a job of its own; both change how the charging is ordered, so it is your call. Not changed here.
+  - **After the reply, a turn still makes about 19 trips in a row (about 5 s at Neon's distance) before it gives the user's lock back.** About 12 of them are the usage sync, which charges the credits. A second message sent right after a reply waits for all of it. It could give the lock back before the sync, or run as a job of its own; both change how the charging is ordered, so it is your call. Not changed here. Done since: see "a turn's billing runs after the reply" above.
   - **The vm-manager's own database is on Neon too.** `GET /v1/agent/status` and every wake ask the vm-manager, which reads its database in Ohio. Not measured here, and the vm-manager is unchanged.
   - **The web app** asks Clerk for a fresh token on every call, and an approval card in a conversation can ask for the approvals up to 4 times in a row (pending, approved, rejected, expired) to find its own. Both are the web app's work.
   - **Moving Neon to Singapore** is the structural fix (above).

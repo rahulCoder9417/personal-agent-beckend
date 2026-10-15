@@ -48,6 +48,32 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 15 October 2026: when Tex asks for an OK, it says what it wants to do, and the "working" sign stops
+
+- **Where it is:** on the branch `feat/approval-message` in the backend and in the web app. Not merged, not on the test server.
+- **Why:** the founder tested an email in web chat at 21:15 IST. The question said only "Approval needed: <summary>", and under its card the chat kept showing "Tex is working…" until the agent's own line ("I've asked for your OK…") came about 3 seconds later. After he tapped Approve, nothing showed Tex at work until its answer, which took 25 seconds with a cold container. He wants Tex to say plainly what it wants to do and that it waits for his Approve, and the "working" sign to stop while Tex only waits for him.
+- **What the user notices:**
+  - Tex's question reads like Tex: "I'd like to send an email to x@acme.com with subject "Test". Approve or Deny below." In web chat the Approve / Deny card sits right under it. On Telegram (and WhatsApp) the two buttons say ✅ Approve and ❌ Deny. On iMessage the line under it says "Reply YES to approve or NO to deny."
+  - In web chat the "Tex is working…" bubble stops as soon as the question is there, and a quiet line under the card says "Waiting for your OK".
+  - After Approve or Deny, "Tex is working…" shows again at once, until Tex's reply: the result after Approve, one sentence saying it won't do it after Deny.
+  - Tex no longer adds its own "waiting for your OK" line after the question.
+  - The word is Deny everywhere: the buttons, the Approvals screen ("Denied") and the activity log ("Denied: …").
+- **Backend:**
+  - The question is made from the approval's own summary: "I'd like to " goes before it, its first word in small letters, then the way to answer for that chat. A summary that does not start with a common verb is kept as written ("I'd like your OK for this: …"). No model is asked, so it is there at once and costs nothing.
+  - The `request_approval` tool tells the agent to write the summary as what it will do, starting with the verb, and to end its turn without repeating the question or saying it waits. Its answer now holds the question the user sees and that instruction.
+  - After Deny, the message that wakes the agent asks it to say in one short sentence that it won't do it.
+- **vm-manager:** nothing. When the agent ends its turn with no text, the Bridge already sends nothing.
+- **Cost and speed:** the question costs no credits and no model call. The asking turn no longer writes a closing line, so it ends one short model round sooner and writes fewer words (about 1 to 3 seconds; not measured on the server yet). The follow-up after Approve or Deny costs what it did.
+- **Contracts:** none. The question is the same message with its approval id; only its text changed. The decision in the API is still `approve` / `reject`, and the state `rejected`.
+- **Database:** none.
+- **How it was checked:** backend: a new test file (the question's wording for each chat, a summary that doesn't start with a verb, the tool's answer, the message saved and sent on the live stream, and the Deny follow-up's instruction) and the existing approval, iMessage, plain-text and ops-script tests updated: lint, types and all 908 tests pass. Web app: tests for when the thread waits and when it works, for the steps folding into the question, and for the question drawn above the card: lint, types, the build and all 760 tests pass. Tried in the web app's demo mode at 1280 and 390 pixels wide: the question with its card and "Waiting for your OK", then "Tex is working…" right after Approve, then the reply; the same with Deny. Not yet tried against the server.
+- **Still open:**
+  - WhatsApp's template for a question sent after 24 hours was registered with its own words around the text; with the new text it may read twice. WhatsApp is not live.
+  - On Telegram the buttons stay under the question after a tap, and Telegram shows no "working" sign while Tex finishes.
+  - In the founder's test the approved email was not sent: Tex tried at 21:27 IST, Gmail (through Composio) refused it, and Tex asked again. The reason is not in the logs, because the tools' errors are not logged. This change does not touch that.
+- **Docs updated:** `hld-mvp.md` 5.3; `backend-report.md` 12 (the web app's rules), 15 (the life of an approval, what can go wrong) and 20 (the crew job example).
+- **Commits:** backend c16d374, 3283290 and this entry. Web app 6280bc4, 2bd9523.
+
 ### 15 October 2026: connecting the same account again replaces the old connection, and its automations move over
 
 - **Where it is:** on `main` and on the test server since 15 October.

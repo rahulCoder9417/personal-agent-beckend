@@ -29,12 +29,61 @@ export interface ComposioTriggerEvent {
   payload: Record<string, unknown>;
 }
 
+/** One trigger instance at Composio: what it watches for, and on which connected account. */
+export interface ComposioTriggerInstance {
+  id: string;
+  connectedAccountId: string;
+  /** The trigger's slug, e.g. GMAIL_NEW_GMAIL_MESSAGE. */
+  slug: string;
+  config: Record<string, unknown>;
+}
+
 /** What Composio says about one app setup (auth config). */
 export interface AuthConfigInfo {
   /** Composio's shared sign-in app at the provider. False: our own app (a custom auth config). */
   composioManaged: boolean;
   /** How users sign in: `OAUTH2`, `OAUTH1`, `API_KEY`… Null when Composio didn't say. */
   authScheme: string | null;
+}
+
+/**
+ * The scopes Composio names for an app's OAuth sign-in. `required`: the ones its sign-in always
+ * asks for. `leastPrivilege` and `fewest`: Composio's recommendation for the given actions (the
+ * narrowest scope per need, and the smallest set that covers all); Composio marks it beta, so it
+ * is null when it can't be had.
+ */
+export interface ToolkitScopes {
+  required: string[];
+  leastPrivilege: string[] | null;
+  fewest: string[] | null;
+}
+
+/**
+ * The scopes a setup asks for, from its credentials, or null when it names none (Composio's default
+ * set). Only the two scope fields are read: the same object holds the client secret of our own
+ * sign-in app, which must never be printed. A list may be one string with commas or spaces.
+ */
+export function scopesFromCredentials(credentials: unknown): string[] | null {
+  if (!credentials || typeof credentials !== 'object') return null;
+  const c = credentials as Record<string, unknown>;
+  const out: string[] = [];
+  for (const value of [c.scopes, c.user_scopes]) {
+    const items = Array.isArray(value)
+      ? value.filter((v): v is string => typeof v === 'string')
+      : typeof value === 'string'
+        ? value.split(/[\s,]+/)
+        : [];
+    for (const item of items) if (item.trim()) out.push(item.trim());
+  }
+  return out.length ? [...new Set(out)] : null;
+}
+
+/** The scopes an app's OAuth sign-in always asks for, from Composio's description of the app. */
+export function requiredScopesFrom(
+  details: Array<{ mode?: string; requiredScopes?: string[] }> | undefined,
+): string[] {
+  const oauth = (details ?? []).find((d) => d.mode === 'OAUTH2' || d.mode === 'OAUTH1');
+  return [...new Set(oauth?.requiredScopes ?? [])];
 }
 
 /** The slice of Composio we use. Real SDK below; tests install a fake. */
@@ -61,6 +110,16 @@ export interface ComposioApi {
   ): Promise<{ accountId: string; redirectUrl: string }>;
   /** One app setup, as Composio describes it (see `authConfigInfo` below, which caches it). */
   authConfig(authConfigId: string): Promise<AuthConfigInfo>;
+  /**
+   * The scopes one setup asks for, or null when it names none (then Composio's default set
+   * applies). Read-only. Never returns anything else of the setup: see `scopesFromCredentials`.
+   */
+  authConfigScopes(authConfigId: string): Promise<string[] | null>;
+  /**
+   * What Composio says an app's sign-in asks for, and its recommendation for these actions
+   * (`[]`: every action of the app). Read-only. For the ops script's `scopes` command.
+   */
+  toolkitScopes(toolkit: string, tools: string[]): Promise<ToolkitScopes>;
   /**
    * An enabled setup with Composio's shared sign-in for a toolkit: one already in the project, or
    * a new one named `name`. Needs a Composio key that may make setups (the default "full access").
@@ -96,6 +155,14 @@ export interface ComposioApi {
     triggerConfig: Record<string, unknown>,
   ): Promise<{ triggerId: string }>;
   deleteTrigger(triggerId: string): Promise<void>;
+  /**
+   * Trigger instances (switched off ones too), by their ids or by the connected accounts they
+   * watch. Read-only. Composio answers in pages; all pages are read, up to 2,000 instances.
+   */
+  listTriggers(filter: {
+    triggerIds?: string[];
+    connectedAccountIds?: string[];
+  }): Promise<ComposioTriggerInstance[]>;
   /** Verifies a webhook and returns either a trigger event or a connection status change. */
   verifyWebhook(input: {
     rawBody: string;
@@ -179,6 +246,24 @@ const realApi: ComposioApi = {
     // Composio leaves the flag out on some setups; reading that as "shared" is the safe side,
     // because a Connect Link works for both kinds.
     return { composioManaged: ac.isComposioManaged !== false, authScheme: ac.authScheme ?? null };
+  },
+  async authConfigScopes(authConfigId) {
+    const ac = await sdk().authConfigs.get(authConfigId);
+    return scopesFromCredentials(ac.credentials);
+  },
+  async toolkitScopes(toolkit, tools) {
+    const details = await sdk().toolkits.get(toolkit);
+    const required = requiredScopesFrom(details.authConfigDetails);
+    // Composio marks the recommendation beta: without it, the required scopes are still shown.
+    const recommended = await sdk()
+      .toolkits.recommendScopes(toolkit, { tools, authScheme: 'OAUTH2' })
+      .then((r) => r.scopes)
+      .catch(() => null);
+    return {
+      required,
+      leastPrivilege: recommended ? [...recommended.leastPrivilege] : null,
+      fewest: recommended ? [...recommended.fewest] : null,
+    };
   },
   async setUpManagedAuthConfig(toolkit, name) {
     const found = await sdk().authConfigs.list({ toolkit, isComposioManaged: true });
@@ -272,6 +357,32 @@ const realApi: ComposioApi = {
   },
   async deleteTrigger(triggerId) {
     await sdk().triggers.delete(triggerId);
+  },
+  async listTriggers(filter) {
+    const { triggerIds, connectedAccountIds } = filter;
+    // An empty filter would list every trigger in the project.
+    if (!triggerIds?.length && !connectedAccountIds?.length) return [];
+    const out: ComposioTriggerInstance[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 20; page++) {
+      const res = await sdk().triggers.listActive({
+        ...(triggerIds?.length ? { triggerIds } : {}),
+        ...(connectedAccountIds?.length ? { connectedAccountIds } : {}),
+        showDisabled: true,
+        limit: 100,
+        ...(cursor ? { cursor } : {}),
+      });
+      for (const t of res.items)
+        out.push({
+          id: t.id,
+          connectedAccountId: t.connectedAccountId,
+          slug: t.triggerName,
+          config: t.triggerConfig ?? {},
+        });
+      cursor = res.nextCursor ?? undefined;
+      if (!cursor) break;
+    }
+    return out;
   },
   async verifyWebhook(input) {
     const secret = config().COMPOSIO_WEBHOOK_SECRET;
@@ -392,6 +503,14 @@ export function authConfigFor(appSlug: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The trial setup named for an app (COMPOSIO_TRIAL_AUTH_CONFIGS = {"googlecalendar":"ac_…"}).
+ * Only for the users in COMPOSIO_TRIAL_USERS; apps.ts decides who they are.
+ */
+export function trialAuthConfigFor(appSlug: string): string | undefined {
+  return config().COMPOSIO_TRIAL_AUTH_CONFIGS[appSlug];
 }
 
 /**

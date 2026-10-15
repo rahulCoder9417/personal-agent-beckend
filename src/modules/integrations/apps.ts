@@ -4,7 +4,7 @@ import { db } from '../../shared/db/client.ts';
 import { notFound, planLimit, unavailable } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
 import { logger } from '../../shared/logger.ts';
-import type { PlanId } from '../auth/users.ts';
+import { getUserCached, type PlanId } from '../auth/users.ts';
 import { addJob } from '../events/queues.ts';
 import {
   actionChangesSomething,
@@ -21,6 +21,7 @@ import {
   composio,
   rememberAuthConfig,
   toolTags,
+  trialAuthConfigFor,
   type AuthConfigInfo,
   type ComposioAccount,
 } from './composio.ts';
@@ -92,6 +93,23 @@ export async function scheduleConnectionCheck(input: {
   return true;
 }
 
+/**
+ * A connection just became active: queues the job that replaces an older connection of the same
+ * app to the same account (connection-replace.ts). One job per connection; adding it again while
+ * it is queued or recently done does nothing. A failure to queue is only logged: the connection
+ * works anyway, and the older one stays until the next time.
+ */
+export async function queueConnectionSettle(userId: string, connectionId: string): Promise<void> {
+  await addJob(
+    'system',
+    'settle-connection',
+    { userId, connectionId },
+    { jobId: `settle-conn-${connectionId}` },
+  ).catch((err: unknown) =>
+    logger().warn({ userId, connectionId, err: String(err) }, 'could not queue the settle job'),
+  );
+}
+
 /** Our status for an account Composio describes, or null while it is not finished there. */
 export function statusFromComposio(composioStatus: string): Connection['status'] | null {
   if (composioStatus === 'ACTIVE') return 'active';
@@ -128,7 +146,7 @@ export async function refreshPendingConnections(
         if (!acc) return;
         const status = statusFromComposio(acc.status);
         // Composio answered: that is a check, also while it is still being set up.
-        await db()
+        const [updated] = await db()
           .update(connections)
           .set(
             status
@@ -141,7 +159,9 @@ export async function refreshPendingConnections(
               eq(connections.id, row.id),
               eq(connections.status, 'pending'),
             ),
-          );
+          )
+          .returning({ status: connections.status });
+        if (updated?.status === 'active') await queueConnectionSettle(userId, row.id);
       } catch (err) {
         logger().warn(
           { userId, connectionId: row.id, err: String(err) },
@@ -161,6 +181,8 @@ export function appsPageUrl(): string {
 // --- Which apps can be connected here, and with which Composio setup ---------------------------
 //
 // An app's setup (Composio's "auth config") is, in this order:
+//   0. for a user in COMPOSIO_TRIAL_USERS only: the app's trial setup in
+//      COMPOSIO_TRIAL_AUTH_CONFIGS (our own sign-in app while Google reviews it, for example);
 //   1. the one named for it in COMPOSIO_AUTH_CONFIGS (for example our own GitHub sign-in app);
 //   2. one the server made itself earlier, kept in `composio_auth_configs`;
 //   3. one the server makes now, on the first connect, with Composio's shared sign-in, when the
@@ -176,12 +198,51 @@ export function serverMaySetUp(app: CatalogApp): boolean {
 }
 
 /**
- * The setup an app connects with today, without making one: from COMPOSIO_AUTH_CONFIGS, or one
- * the server made itself. For the dev-user script's `apps` command.
+ * Is this user one of COMPOSIO_TRIAL_USERS? Named by user id, or by email when that email is
+ * verified. The user is read only when the list holds an email.
+ */
+export async function isTrialUser(userId: string): Promise<boolean> {
+  const listed = config().COMPOSIO_TRIAL_USERS;
+  if (!listed.length) return false;
+  if (listed.includes(userId)) return true;
+  if (!listed.some((v) => v.includes('@'))) return false;
+  const user = await getUserCached(userId);
+  return (
+    !!user &&
+    !user.deletedAt &&
+    user.emailVerified &&
+    listed.includes(user.email.trim().toLowerCase())
+  );
+}
+
+/** The app's trial setup, when there is one and this user is a trial user. */
+async function trialSetupFor(appSlug: string, userId: string): Promise<string | undefined> {
+  const trial = trialAuthConfigFor(appSlug);
+  if (!trial) return undefined;
+  return (await isTrialUser(userId)) ? trial : undefined;
+}
+
+/** The apps this user connects with a trial setup (empty for everyone else). */
+async function trialAppsFor(userId: string): Promise<Set<string>> {
+  const apps = Object.keys(config().COMPOSIO_TRIAL_AUTH_CONFIGS);
+  if (!apps.length || !(await isTrialUser(userId))) return new Set();
+  return new Set(apps);
+}
+
+export type SetupOrigin =
+  'COMPOSIO_TRIAL_AUTH_CONFIGS' | 'COMPOSIO_AUTH_CONFIGS' | 'made by the server';
+
+/**
+ * The setup an app connects with today, without making one: the trial setup (for a trial user,
+ * when `userId` is given), COMPOSIO_AUTH_CONFIGS, or one the server made itself. For the dev-user
+ * script's `apps` and `scopes` commands.
  */
 export async function currentSetupFor(
   appSlug: string,
-): Promise<{ id: string; source: 'COMPOSIO_AUTH_CONFIGS' | 'made by the server' } | null> {
+  userId?: string,
+): Promise<{ id: string; source: SetupOrigin } | null> {
+  const trial = userId ? await trialSetupFor(appSlug, userId) : undefined;
+  if (trial) return { id: trial, source: 'COMPOSIO_TRIAL_AUTH_CONFIGS' };
   const named = authConfigFor(appSlug);
   if (named) return { id: named, source: 'COMPOSIO_AUTH_CONFIGS' };
   const stored = (await storedAuthConfigs()).get(appSlug);
@@ -230,7 +291,12 @@ const setupName = (app: CatalogApp) => `Textcrew ${app.name}`;
  * The setup to connect an app with (the order above). Makes it when the server may.
  * Undefined: the app can't be connected on this server.
  */
-async function authConfigToConnect(app: CatalogApp): Promise<string | undefined> {
+async function authConfigToConnect(app: CatalogApp, userId: string): Promise<string | undefined> {
+  const trial = await trialSetupFor(app.slug, userId);
+  if (trial) {
+    logger().info({ userId, app: app.slug }, 'connecting with the trial setup');
+    return trial;
+  }
   const named = authConfigFor(app.slug);
   if (named) return named;
   const [row] = await db()
@@ -294,12 +360,16 @@ export function connectReturnUrl(appSlug: string, returnUrl?: string): string {
 }
 
 /**
- * The catalog for one user. `connectable`: this server can connect the app (it has a setup for
- * it, or may make one: see above). Without that the app is listed but `startConnect` answers 404
+ * The catalog for one user. `connectable`: this server can connect the app for this user (it has
+ * a setup for it, a trial one for a trial user, or may make one: see above). Without that the app is listed but `startConnect` answers 404
  * for it, so the web app shows "Not available yet" instead of a Connect button.
  */
 export async function appCatalogFor(userId: string, plan: PlanId) {
-  const [read, setups] = await Promise.all([listConnections(userId), appSetups()]);
+  const [read, setups, trialApps] = await Promise.all([
+    listConnections(userId),
+    appSetups(),
+    trialAppsFor(userId),
+  ]);
   // Read again only when a pending connection was asked about (it may have just finished).
   const rows = (await refreshPendingConnections(userId, read))
     ? await listConnections(userId)
@@ -312,7 +382,7 @@ export async function appCatalogFor(userId: string, plan: PlanId) {
     iconUrl: null,
     category: app.category,
     availableOnPlan: appAllowedOnPlan(app, plan),
-    connectable: setups.get(app.slug)?.connectable ?? false,
+    connectable: trialApps.has(app.slug) || (setups.get(app.slug)?.connectable ?? false),
     connections: rows
       .filter((r) => r.app === app.slug && r.status !== 'pending')
       .map((r) => ({
@@ -364,7 +434,7 @@ export async function startConnect(
   if (!app) throw notFound('Unknown app');
   if (!appAllowedOnPlan(app, plan))
     throw planLimit(`${app.name} isn't available on the ${plan} plan`, { app: app.slug, plan });
-  const authConfigId = await authConfigToConnect(app);
+  const authConfigId = await authConfigToConnect(app, userId);
   if (!authConfigId) throw notFound(`${app.name} isn't configured yet`);
   const callback = connectReturnUrl(app.slug, returnUrl);
   const { accountId, redirectUrl, direct } = await openSignIn(app, userId, authConfigId, callback);
@@ -416,13 +486,19 @@ export async function setConnectionStatus(
   accountId: string,
   status: Connection['status'],
 ): Promise<void> {
-  await db()
+  const rows = await db()
     .update(connections)
     .set({ status, checkedAt: new Date() })
-    .where(eq(connections.composioAccountId, accountId));
+    .where(eq(connections.composioAccountId, accountId))
+    .returning({ id: connections.id, userId: connections.userId });
+  if (status === 'active') for (const row of rows) await queueConnectionSettle(row.userId, row.id);
 }
 
-/** The user's active connection for a toolkit, if any. */
+/**
+ * The user's active connection for a toolkit, if any: the newest one. A user may have two (a
+ * second account of the app, or the same account connected again before the older connection is
+ * replaced); Tex, triggers and the git gateway then all use the same one, the newest.
+ */
 export async function connectionForToolkit(
   userId: string,
   toolkit: string,
@@ -438,7 +514,9 @@ export async function connectionForToolkit(
         eq(connections.app, app.slug),
         eq(connections.status, 'active'),
       ),
-    );
+    )
+    .orderBy(desc(connections.createdAt), desc(connections.id))
+    .limit(1);
   return row;
 }
 
@@ -550,6 +628,8 @@ export async function recheckConnection(
     .returning();
   // Disconnected meanwhile.
   if (!updated) return undefined;
+  if (updated.status === 'active' && row.status !== 'active')
+    await queueConnectionSettle(userId, row.id);
   let checksQueued = false;
   if (updated.status === 'pending') {
     checksQueued = await scheduleConnectionCheck({

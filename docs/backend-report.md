@@ -173,7 +173,7 @@ The api only adds jobs, and the worker runs them. This keeps the api fast. It sa
 | inbound | User messages, approval answers, fired automations, app events | 20 |
 | outbound | Replies to send, delivery receipts | 20 |
 | scheduled | Timers of reminders and automations | 5 |
-| system | Sign-up, account deletion, payments, usage sync, the billing of each turn, refunds of failed turns, cleanup, backup | 5 |
+| system | Sign-up, account deletion, payments, usage sync, the billing of each turn, refunds of failed turns, checking and tidying app connections, cleanup, backup | 5 |
 
 There are four so slow work never blocks fast work. A long agent turn in inbound does not hold back a reply in outbound. Some system jobs repeat on their own. Usage sync and the health check run every 5 minutes. Credit expiry and approval expiry run every hour. Cleanup and backup run once a day.
 
@@ -921,13 +921,23 @@ Composio is an outside service. It keeps the user's sign-ins to apps such as Gma
 - Free may connect 10 of them: Gmail, Google Calendar, Drive, Docs, Sheets, Notion, Todoist, Slack, GitHub and Exa Search.
 - For each app the catalog also says whose sign-in page comes next (`provider`, for example Google for Gmail) and, in one sentence, what the agent can do with it (`description`). The web app's connect screen shows both.
 - An app also needs a Composio setup ("auth config") before it can be connected. The api looks for one in this order:
+  0. for a user named in `COMPOSIO_TRIAL_USERS` only: the setting `COMPOSIO_TRIAL_AUTH_CONFIGS`, which names a second setup per app. It is for trying our own sign-in app at a provider with a few people, while the provider reviews it (below);
   1. the setting `COMPOSIO_AUTH_CONFIGS`, which names a setup per app. Our own sign-in app at a provider goes here;
   2. the table `composio_auth_configs`, which keeps the setups the server made itself;
   3. the setting `COMPOSIO_MANAGED_APPS`. It names the apps the server may set up by itself, or says `all`. Then the server makes the setup on the first connect, with Composio's shared sign-in, and keeps its id in the table. If the Composio project already has an enabled shared setup for that app, the server uses that one instead of making another.
 - With none of the three, the api answers that the app is not configured yet.
 - When the server reuses a shared setup already in the Composio project, it takes only one that Composio says is for that same app.
 - Exa Search signs in with an API key, not with a sign-in page, so the server never sets it up by itself.
-- The app list says for each app if it can be connected on this server. The field is called `connectable`. It is true when one of the three ways above gives a setup, or would. The web app shows an app that cannot be connected as "Not available yet", with no Connect button. The test server has setups named for Gmail and GitHub, and since 13 October `COMPOSIO_MANAGED_APPS` is `all`: the server made Google Calendar's setup itself.
+- The app list says for each app if it can be connected on this server, by this user. The field is called `connectable`. It is true when one of the ways above gives a setup, or would. The web app shows an app that cannot be connected as "Not available yet", with no Connect button. The test server has setups named for Gmail and GitHub, and since 13 October `COMPOSIO_MANAGED_APPS` is `all`: the server made Google Calendar's setup itself.
+
+### Trying our own sign-in app with a few users
+
+A provider such as Google reviews our own sign-in app before everyone may use it. Until then, at most 100 people can ever allow it, and each sees a warning first. So it is tried with a few people, with two settings:
+
+- `COMPOSIO_TRIAL_AUTH_CONFIGS` names a second setup per app, for example `{"googlecalendar":"ac_…"}`.
+- `COMPOSIO_TRIAL_USERS` names who gets it: user ids, or email addresses, separated by commas. An email counts only once it is verified, so nobody gets in by signing up with someone else's address.
+- For those users the trial setup comes before every other setup of that app. Plan limits still come first. Everyone else gets the app's usual setup.
+- Both settings are checked when the api and the worker start. A damaged value stops the start and says what is wrong. (A damaged `COMPOSIO_AUTH_CONFIGS` instead quietly turns every app off.)
 
 ### How a user connects an app
 
@@ -942,7 +952,7 @@ Composio is an outside service. It keeps the user's sign-ins to apps such as Gma
 6. The api gives Composio our own user id and the page to come back to. That page must be on our web app's own address. Anything else, also an address that only starts the same way, is replaced by the Apps page.
 7. The api saves the connection as `pending` in the table `connections`, and returns the link.
 8. The user signs in on the provider's page and allows access. The platform never sees the password. Composio sends the browser back to the web app and adds `status=success` or `status=failed` to the address. The web app says "Gmail is connected" or "Gmail didn't connect". That message comes from Composio's address only: our own record may still say `pending` for a few seconds, until the platform has checked (next part).
-9. A user may connect a second account of the same app ("Add account").
+9. A user may connect a second account of the same app ("Add account"). Connecting the same account again replaces the older connection (below).
 
 **The way back through our own address.** With our own sign-in app, the provider sends the browser back to Composio's address after the user allows access. To keep our own address there too, the sign-in app's redirect address can be `https://api.textcrew.in/oauth/callback`. The api answers that address with a redirect to Composio's own, with the same query. It saves nothing, adds no job and never writes the query to a log, because it holds a one-time code. `docs/composio.md`, section 9, has the steps.
 
@@ -960,6 +970,21 @@ Each way asks Composio about each pending connection by its own account id, the 
 
 Each connection keeps the time the platform last heard from Composio about it: a check that got an answer, Composio's webhook, or an admin's recheck. Only admins see it. An admin can also ask Composio again about any connection, whatever its state, and disconnect one for the user (section 31).
 
+### Connecting the same account again
+
+A user connects an app again with the same account: to move to our own sign-in app, or after the connection expired (Reconnect). The older connection must then go, and what was made on it must follow.
+
+1. Whenever a connection becomes active, in any of the four ways above, the api or the worker adds a job named `settle-connection` to the system queue. One job per connection.
+2. The job looks for the user's older connections of the same app to the same account. "The same account" means the same account label: the email Composio gives for the account, in any letter case. A label we don't have yet is asked of Composio and kept.
+3. For each one, the user's app-event automations of that app move to the new connection. The automations module makes a new trigger on the new connection, points the automation at it, then removes the old trigger. Which automations watch the old connection is asked of Composio.
+4. Then the old connection is removed at Composio, and in our table.
+
+It never removes a connection to another account of the app ("Add account"), nor any connection when neither side has a label: it could be a second account. A newer connection, one still being set up, and another app's are left alone too.
+
+It is safe to run twice. A second run finds nothing to do. A run that stopped after making a new trigger but before saving it leaves that trigger on the new connection; the next run uses it instead of making another. An old account that Composio no longer has counts as removed. Runs for the same user wait for each other, with a short lock of their own.
+
+**Example.** Rahul's Gmail is on Composio's shared sign-in, with "when my boss emails me, tell me". He connects Gmail again through our own sign-in app. A few seconds later his Apps page shows one Gmail connection, the new one, and the automation watches the new one.
+
 ### How the agent finds and runs an action
 
 1. The agent calls `list_app_actions`. It can filter by app or by a search word.
@@ -969,7 +994,7 @@ Each connection keeps the time the platform last heard from Composio about it: a
    - **not finished**: a sign-in started longer ago and never finished. The note asks the agent to tell the user to connect it again on the Apps page.
    - **needs reconnecting**: the connection expired or failed. Same advice.
    - **not on plan**: connected, but the app is not on the user's plan any more.
-   An active connection of an app wins over any other of the same app. The notes carry the Apps page address, so the agent sends the user there and nowhere else.
+   An active connection of an app wins over any other of the same app. Of two active connections of one app, the agent uses the newest; new automations and the git gateway use the same one. The notes carry the Apps page address, so the agent sends the user there and nowhere else.
 3. `actions` lists the actions of the connected apps, at most 100. The api asks Composio once per app. It used to ask once for all of them, with one limit of 200 tools in all. GitHub alone has more than 200, so it left no room for the next app. That is the most likely reason why, on 13 October, the agent saw only GitHub after the founder connected Google Calendar (not confirmed on the server). Now the 100 places are shared fairly: an app with few actions gets them all, and the rest goes to the big ones. An app that is cut short gets a note: "Showing 97 of its 200 actions", and to ask again with that app and a search word. An app's actions are the same for every user, so the api keeps each app's listing for 10 minutes and serves every call from it, for every user. Before, every call asked Composio again for every connected app, and the lead calls `list_app_actions` on many turns. A listing that failed is not kept.
 4. Each action carries two marks: whether it needs approval, and whether it costs a credit.
 5. The agent calls `run_app_action` with the action's name and its inputs. For an app that is not ready, the answer is the same note as above, for example "Google Calendar is still connecting".
@@ -993,6 +1018,9 @@ Each connection keeps the time the platform last heard from Composio about it: a
 - **Composio is down while a user connects, or will not make a setup** (for example, the Composio key may not make setups). The api answers 503: "Gmail can't be connected right now". Nothing is saved, and the next try asks again.
 - **Composio cannot remove a connected account.** On Disconnect, by the user or an admin, the failure is only written to the server log, and our row is deleted anyway. The account then stays at Composio, with the app's sign-in, and nothing tries again. On account deletion it is different: the row stays and the deletion job fails, so it tries again (section 33).
 - **Two users connect a new app at the same moment.** Each may make a setup at Composio. The first one saved is used by everyone. The other stays unused at Composio, with no connections on it.
+- **Two connections of the same app stay after connecting again.** Composio gave no email for the account, so the server can't tell it from a second account. The agent uses the newer one; the user can remove the old one with Disconnect.
+- **A trial setting is damaged.** The api and the worker don't start after the restart, and the log says which value is wrong.
+- **Which permissions does an app's sign-in ask for?** Our server sets none; each app uses Composio's default set, which Composio does not publish. The dev-user script's `scopes` command prints it: the setup's own scopes, the ones Composio's sign-in always asks for, Composio's narrowest and smallest sets for the app's actions, and for a Google app each scope's class at Google (basic, non-sensitive, sensitive or restricted). It only reads, and of a setup it reads the scopes only, never the client id or secret beside them. `docs/composio.md`, section 9.
 - **The user says an app is connected, but the agent can't see it.** The agent says it may still be finishing, or that it needs connecting again on the Apps page. To see why, run the dev-user script's `apps` command on the server (`docs/composio.md`, section 11). It prints each connection with our status, its Composio account id, what Composio says about it, the setup it was made with, and what the agent sees.
 
 ## 15. Approvals
@@ -1134,7 +1162,7 @@ An automation is a saved instruction that the agent runs later, without the user
 1. The user asks in chat. The agent calls `schedule_reminder` with a text and a time. For the other kinds it calls `create_automation`.
 2. The api checks the request (the list below) and saves it in the table `automations`. The database is the source of truth.
 3. It also saves the chat the request was made in, web chat or a Telegram chat. That decides only where a copy of each answer goes (below). The answers themselves always go to the Automations chat. If the user has no Automations chat yet, it is started now, so the web app can show where the results will be.
-4. The api sets the timer. For an app event, Composio starts a watch on the app, called a trigger. The agent then confirms to the user. The tool's answer tells the agent where the runs will answer, so it can say so.
+4. The api sets the timer. For an app event, Composio starts a watch on the app, called a trigger. It watches the connection the agent uses for that app, the newest. When the user connects the same account again, the trigger moves to the new connection (section 14, "Connecting the same account again"). The agent then confirms to the user. The tool's answer tells the agent where the runs will answer, so it can say so.
 
 - **The plan limit.** Free 1, Pro 5, Max 50. Reminders count, and paused automations count. A finished one-time reminder does not.
 - **The 15-minute minimum.** For a schedule, the next 50 runs must each be at least 15 minutes apart.
@@ -3043,6 +3071,8 @@ This section lists the backend's settings by group. They are environment setting
 | | `COMPOSIO_WEBHOOK_SECRET` | Checks Composio's webhooks | App events do not arrive |
 | | `COMPOSIO_AUTH_CONFIGS` | Maps each app to its Composio setup. Our own sign-in app for an app goes here | An app without an entry can be connected only if the next setting allows it |
 | | `COMPOSIO_MANAGED_APPS` | `all`, or app names such as `googlecalendar,notion`: apps the server may set up at Composio by itself, with Composio's shared sign-in, on the first connect | None |
+| | `COMPOSIO_TRIAL_AUTH_CONFIGS` | A second setup per app, written like `COMPOSIO_AUTH_CONFIGS`, for the trial users only (section 14) | No trial |
+| | `COMPOSIO_TRIAL_USERS` | Who gets the trial setups: user ids, or verified emails, separated by commas | Nobody |
 | | `COMPOSIO_API_URL` | Composio's address. `/oauth/callback` sends the browser on to it | `https://backend.composio.dev` |
 | Routing | `JEV_API_KEY` | Turns the router on | Every message goes to the agent |
 | | `WAKE_WHILE_ROUTING` | Starts waking the container while Jev decides (section 9). `false` wakes it only for a task | On |
@@ -3195,7 +3225,8 @@ The backend has 739 automated tests. They use a real database and real queues, a
 | The Automations chat cannot be deleted | No. Built on 14 October, with the automated tests only, and the web app's part in its demo mode |
 | A late run saying so; the time zone set from the browser | No. Built on 13 October, with the automated tests only, and the web app's part in its demo mode |
 | Replies to a chat app as plain text, with the formatting kept for the web app | No. Built on 9 October, with the automated tests only |
-| Connecting straight to the provider with our own sign-in app, apps the server sets up at Composio by itself, `/oauth/callback` | No. Built on 13 October, with the automated tests only and a stand-in for Composio. No own sign-in app exists yet, and `COMPOSIO_MANAGED_APPS` is not set on the server |
+| Connecting straight to the provider with our own sign-in app, apps the server sets up at Composio by itself, `/oauth/callback` | No. Built on 13 October, with the automated tests only and a stand-in for Composio. No own sign-in app exists yet, and `COMPOSIO_MANAGED_APPS` is not set on the server. The way back answers on the server (15 October) |
+| The trial switch, the `scopes` command, and connecting the same account again | No. Built on 15 October on a branch, with the automated tests only and a stand-in for Composio |
 | Web search through Brave | No. The key answers a direct call |
 | The page reader on Claude Code | Yes |
 | Voice, images and documents | No |

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { CronExpressionParser } from 'cron-parser';
 import { and, count, desc, eq, isNull, or } from 'drizzle-orm';
 import { db } from '../../shared/db/client.ts';
@@ -362,6 +363,90 @@ export async function resumeAfterAdmin(
 export async function findByTriggerRef(triggerRef: string): Promise<Automation | undefined> {
   const [row] = await db().select().from(automations).where(eq(automations.triggerRef, triggerRef));
   return row;
+}
+
+/** Every field we set on a trigger has the same value in Composio's (which may add defaults). */
+function sameTriggerConfig(
+  ours: Record<string, unknown>,
+  theirs: Record<string, unknown>,
+): boolean {
+  return Object.entries(ours).every(([k, v]) => isDeepStrictEqual(theirs[k], v));
+}
+
+/**
+ * Moves the user's app-event automations of one app from one Composio connected account to
+ * another: the same account of that app was connected again, and the older connection is about
+ * to be removed (integrations/connection-replace.ts). For each automation: a trigger on the new
+ * account, the automation pointed at it, then the old trigger removed.
+ *
+ * Which automations watch the old account is asked of Composio, by their trigger ids. Safe to
+ * re-run: an automation already on another account is left alone, and a trigger an earlier run
+ * made on the new account before it stopped is used instead of making another. A Composio failure
+ * throws, so the job is tried again. Returns how many automations moved.
+ */
+export async function moveAppTriggers(input: {
+  userId: string;
+  toolkit: string;
+  from: string;
+  to: string;
+}): Promise<number> {
+  const all = await db()
+    .select()
+    .from(automations)
+    .where(and(eq(automations.userId, input.userId), eq(automations.kind, 'event')));
+  const ofApp = all.filter((a) => {
+    if (!a.triggerRef || !a.trigger) return false;
+    const app = findApp(a.trigger.app) ?? appForToolkit(a.trigger.app);
+    return app?.toolkit === input.toolkit;
+  });
+  if (!ofApp.length) return 0;
+
+  const watched = await composio().listTriggers({ triggerIds: ofApp.map((a) => a.triggerRef!) });
+  const onOld = new Set(
+    watched.filter((t) => t.connectedAccountId === input.from).map((t) => t.id),
+  );
+  const toMove = ofApp.filter((a) => onOld.has(a.triggerRef!));
+  if (!toMove.length) return 0;
+
+  // Triggers already on the new account that no automation of this user points at: left by an
+  // earlier run that stopped between making one and saving it.
+  const inUse = new Set(all.map((a) => a.triggerRef).filter(Boolean));
+  const spare = (await composio().listTriggers({ connectedAccountIds: [input.to] })).filter(
+    (t) => !inUse.has(t.id),
+  );
+
+  let moved = 0;
+  for (const a of toMove) {
+    const event = a.trigger!.event;
+    const config = a.trigger!.config ?? {};
+    const i = spare.findIndex((t) => t.slug === event && sameTriggerConfig(config, t.config));
+    const reused = i >= 0 ? spare.splice(i, 1)[0]!.id : null;
+    const newRef =
+      reused ?? (await composio().createTrigger(input.userId, event, input.to, config)).triggerId;
+    const [saved] = await db()
+      .update(automations)
+      .set({ triggerRef: newRef })
+      .where(and(eq(automations.id, a.id), eq(automations.triggerRef, a.triggerRef!)))
+      .returning({ id: automations.id });
+    if (!saved) {
+      // Changed or deleted meanwhile: the trigger just made is not needed.
+      if (!reused)
+        await composio()
+          .deleteTrigger(newRef)
+          .catch((err: unknown) => logger().warn({ err: String(err) }, 'delete trigger failed'));
+      continue;
+    }
+    await composio()
+      .deleteTrigger(a.triggerRef!)
+      .catch((err: unknown) => logger().warn({ err: String(err) }, 'delete trigger failed'));
+    moved++;
+  }
+  if (moved)
+    logger().info(
+      { userId: input.userId, toolkit: input.toolkit, moved },
+      'automations moved to the new connection',
+    );
+  return moved;
 }
 
 export async function recordRun(a: Automation, ok: boolean): Promise<Automation> {

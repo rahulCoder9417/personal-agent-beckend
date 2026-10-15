@@ -48,6 +48,139 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 15 October 2026: connecting the same account again replaces the old connection, and its automations move over
+
+- **Where it is:** on `main` since 15 October. Not on the test server yet.
+- **Why:** to move a user from Composio's shared Google sign-in app to our own, the user connects the app again. That made a second connection next to the old one, which caused three problems:
+  - **Tex picked either one.** The server took "an active connection" with no order, so which one Tex used was not defined.
+  - **Automations stayed on the old connection.** An automation of the kind "when an email arrives" watches the connection it was made on. Removing the old connection would stop it without a word.
+  - **The old connection stayed.** The user kept seeing it, and Google kept listing Composio's app in their Google account.
+
+  The same happened after **Reconnect** on a connection that had expired: its automations stayed on the dead connection.
+- **What the user notices:**
+  - **After connecting the same account again,** the Apps page shows one connection for it, the new one, a few seconds later.
+  - **Automations keep working,** now on the new connection. One that stopped because its connection expired works again after Reconnect.
+  - **A second account of the same app is kept.** "Add account" (two Gmail addresses, for example) works as before.
+- **Backend:**
+  - **Tex uses the newest active connection** of an app. New automations and the git gateway use the same one.
+  - **A new job, `settle-connection`, in the system queue.** It is added whenever a connection becomes active, in any of the four ways: the app list, the check job, Composio's webhook, or an admin's recheck. One job per connection.
+  - **What the job does:**
+    1. It looks for the user's older connections of the same app to the same account. "The same account" means the same account label, which is the email Composio gives for the account, in any letter case. A label we don't have yet is asked of Composio first, and kept.
+    2. For each one, it moves the user's app-event automations to the new connection: a new trigger on the new connection, the automation pointed at it, then the old trigger removed. Which automations watch the old connection is asked of Composio.
+    3. It removes the old connection at Composio, then in our database.
+  - **What it never removes:**
+    - a connection to another account of the app;
+    - any connection, when neither side has a label: it could be a second account;
+    - a newer connection;
+    - a connection still being set up;
+    - another app's connections.
+  - **Safe to re-run.** A run that finds nothing to do does nothing. If a run stops after making a new trigger but before saving it, the next run uses that trigger instead of making another. An old account Composio no longer has counts as removed. Runs for the same user wait for each other, with a short lock of their own (not the lock a turn holds).
+  - **The automations module does the moving** (`moveAppTriggers`). The integrations module never touches the automations table.
+- **Cost and speed:** a few Composio calls each time a connection becomes active: one or two to read account labels, and, when an old connection is replaced, two to list triggers, one per moved automation, and one to remove the old account. None of them is an app action. Fewer trigger events later: an old connection's triggers no longer run next to the new ones.
+- **Contracts:** none. `openapi.yaml` and `vm.proto` did not change.
+- **Database:** none. No new table or column.
+- **How it was checked:**
+  - New tests (15), in `test/connection-replace.test.ts`:
+    - Tex gets the newest of two active connections, never a pending one;
+    - a connection that becomes active queues exactly one job, and another status queues none;
+    - an automation moves to the new connection, the old trigger and old connection are removed, here and at Composio;
+    - an expired connection to the same account is replaced too, and its automation works again;
+    - a missing label is asked of Composio and kept;
+    - a second account is never removed, nor anything when there is no label, nor a newer, pending or other app's connection;
+    - a connection that is gone or not active is ignored;
+    - a second run finds nothing to do;
+    - Composio refusing to remove the old account fails the job, and the next try finishes without moving anything twice;
+    - an account Composio no longer has counts as removed;
+    - a trigger left by a run that stopped half-way is reused, even when Composio added a setting of its own to it;
+    - two runs for one user don't overlap, and the lock is given back;
+    - an admin's recheck that finds the connection active queues the job too.
+  - Changed: the stand-in for Composio now remembers which account each trigger watches, and which accounts were removed; one pull-request review test checks that field.
+  - Lint and the type check pass. The full backend run: 892 of 892 tests pass.
+  - Not yet run on the server.
+- **Still open:**
+  - **The label is Composio's email for the account.** Whether Composio gives it for every Google app is not confirmed. Where it doesn't, the old connection is kept, and Tex simply uses the newer one. The user can remove the old one with **Disconnect**.
+  - **Disconnecting a connection by hand still leaves its automations on it.** Unchanged here.
+  - **The web app doesn't yet ask users to connect again** when a connection is on an older setup (the "Reconnect" marker). It waits until we switch an app for everyone.
+- **Docs updated:** `composio.md` section 9 (step 6, "Switching an app that people already use") and section 11 (a row for two connections that stay); `backend-report.md` section 3 (the system queue), section 14 (a new part "Connecting the same account again", the agent's choice of connection, "What can go wrong"), section 18 (where an app-event trigger watches) and section 44; `hld-mvp.md` section 12.
+- **Commits:** `d19219e`, and the docs commit on the same branch.
+
+### 15 October 2026: a scope check in the ops script, before asking Google to review our sign-in app
+
+- **Where it is:** on `main` since 15 October. Not on the test server yet.
+- **Why:** a scope is one permission a sign-in screen asks for, such as "see and edit your calendar events". Google sorts scopes into four classes, and the class decides what Google wants before real users can allow our own Google sign-in app:
+
+  | Class | What Google wants | Example |
+  |---|---|---|
+  | Basic | Nothing beyond the brand check | Your name and email |
+  | Non-sensitive | Nothing beyond the brand check | `drive.file`: only files the app made or the user picked |
+  | Sensitive | Google's review: a demo video and a reason for each scope | Calendar, Docs, Sheets |
+  | Restricted | Google's review and a yearly outside security check (CASA), about US$675–855 a year | Reading Gmail, all of Drive |
+
+  Our server sets no scopes. Each app uses Composio's default set, and Composio does not publish it. So before you ask Google for a review, we need to know exactly which scopes each app asks for.
+- **What the user notices:** nothing. It is a command for us.
+- **Backend:**
+  - **A new command, `scopes`,** in `scripts/dev-user.ts`. Example: `scopes --app googlecalendar`. It prints, one line each:
+    - the setup the app uses (or would use for a given user, `--user` or `--email`), and whether it is Composio's shared sign-in or our own sign-in app;
+    - the scopes that setup names, or "Composio's default set" when it names none;
+    - the scopes Composio's sign-in for the app always asks for;
+    - Composio's recommendation for the app's actions: the narrowest set and the smallest set. `--tools` limits it to some actions. Composio marks this part as "beta", so it may say "not available";
+    - for a Google app, each scope's class at Google and what that class needs, then the hardest class of them all.
+  - **It only reads.** It makes no setup at Composio and starts no connection.
+  - **It prints no secret.** A setup at Composio keeps our sign-in app's client id and secret next to its scopes. The command reads the scope fields only, never the others.
+  - **Google's classes are a small table in our code,** from Google's own scope pages for Gmail, Drive, Docs and Sheets, read on 15 October. Google's Calendar page gives no classes; Google names reading calendar events as its own example of a sensitive scope. A scope that isn't in the table is printed as "look it up at Google", never guessed.
+- **Cost and speed:** none. Each run asks Composio up to four questions about setups and apps. None of them runs an action in an app.
+- **Contracts:** none. `openapi.yaml` and `vm.proto` did not change.
+- **Database:** none.
+- **How it was checked:**
+  - New tests (13), in `test/composio-scopes.test.ts`, all against a stand-in for Composio, never the live key:
+    - only the scope fields of a setup are read: a setup holding a client id and secret gives back its scopes and nothing else;
+    - scopes written as a list, or as text with commas or spaces, are read;
+    - the scopes Composio's sign-in always asks for are taken from its sign-in method;
+    - Google's classes: Gmail reading and Drive are restricted, sending mail alone is sensitive, Calendar, Docs and Sheets are sensitive, `drive.file` is non-sensitive, an unknown scope is not guessed;
+    - the command for our own Calendar app and a trial user prints exactly the expected lines, and makes and starts nothing;
+    - for Gmail on Composio's shared sign-in it prints "Composio's default set" and ends with "restricted";
+    - `--tools` asks about just those actions;
+    - an app with no setup says what would happen and makes none;
+    - Composio being down is reported, not a crash;
+    - an app that isn't Google gets no Google classes;
+    - an unknown app is refused.
+  - Lint and the type check pass. The full backend run: 877 of 877 tests pass.
+  - Not run against the live Composio key: the founder decides when. It is safe to run on the server: it only reads.
+- **Still open:** run it once on the server for each Google app before our own Google sign-in app is set up: `cd /opt/textcrew && ./dc --profile app exec -T api node --import tsx scripts/dev-user.ts scopes --app googlecalendar`.
+- **Docs updated:** `composio.md` section 9 ("What Google wants first", and step 3, part A); `backend-report.md` section 14 ("What can go wrong").
+- **Commits:** `59672a0`, and the docs commit on the same branch.
+
+### 15 October 2026: a trial switch, so only some users connect through our own Google sign-in app
+
+- **Where it is:** on `main` since 15 October. Not on the test server yet.
+- **Why:** when someone connects a Google app, Google's screen says "continue to Composio". To make it say Textcrew, each Google app needs our own sign-in app at Google. Google must review that app first. While it does, at most 100 people can ever use it, and each of them sees a "Google hasn't verified this app" warning. Until now an app had one setup for everyone, and there is only one server. So there was no way to let you and a few testers try our own sign-in app while everyone else stays on Composio's.
+- **What the user notices:** nothing, until the two new settings are filled in. Then:
+  - a user named in the trial list connects that app through our own sign-in app. Google's screen names Textcrew, and there is no Composio page on the way;
+  - everyone else connects as before;
+  - an app with only a trial setup shows a **Connect** button to trial users and "Not available yet" to everyone else.
+- **Backend:**
+  - **Two new settings.** `COMPOSIO_TRIAL_AUTH_CONFIGS` names a second setup per app, written like `COMPOSIO_AUTH_CONFIGS`, for example `{"googlecalendar":"ac_…"}`. `COMPOSIO_TRIAL_USERS` names who gets it: user ids, or email addresses, separated by commas.
+  - **An email counts only once it is verified.** Otherwise anyone could sign up with your address and be let in.
+  - **For a trial user, the trial setup comes first,** before every other setup of that app. Plan limits still apply first: a Free user gets no Pro app this way.
+  - **Both settings are checked when the api and the worker start.** A damaged value stops the start and says what is wrong: not JSON, not an app name, an id that doesn't start with `ac_`, or something that is neither a user id nor an email. The older `COMPOSIO_AUTH_CONFIGS` quietly turns every app off when damaged; this one cannot.
+  - **The ops script's `apps` command** shows a trial user's setup as coming from `COMPOSIO_TRIAL_AUTH_CONFIGS`.
+- **Cost and speed:** with no trial users, nothing changes. With some, one quick read of the user (from the short-lived copy) when the app list is shown or an app is connected, and only when the list holds an email.
+- **Contracts:** none. `openapi.yaml` and `vm.proto` did not change.
+- **Database:** none.
+- **How it was checked:**
+  - New tests (9), in `test/composio-trial.test.ts`:
+    - the two settings are read, and every kind of damaged value stops the start with its reason;
+    - a user named by verified email or by id is a trial user; an unverified email or anyone else is not;
+    - a trial user connects straight to the provider with the trial setup, while another user gets the usual shared setup;
+    - for a trial user, the trial setup wins over `COMPOSIO_AUTH_CONFIGS`, and other apps are untouched;
+    - an app with only a trial setup can be connected by trial users only, and nothing is made at Composio;
+    - plan limits still come first.
+  - Lint and the type check pass. The full backend run: 864 of 864 tests pass. One run before that had a single failure in `test/turn-billing.test.ts`, a test this change doesn't touch; it passed three times on its own, and the full run again after that.
+  - Not yet run on the server.
+- **Still open:** filling in the two settings is yours, once our own Google sign-in app exists. `composio.md`, section 9, has the steps.
+- **Docs updated:** `composio.md` section 9, rewritten (the four places, what Google wants, the plan, Google Calendar step by step, the trial switch in step 5, other apps), section 8 (the 100-user count), section 11 (three new rows) and section 13 (the pages read on 15 October); `backend-report.md` section 14 (the setup order, a new part "Trying our own sign-in app with a few users") and section 42 (the two settings); `hld-mvp.md` section 12 (the plan, and what you do by hand) and section 13.
+- **Commits:** `af46692`, and the docs commit on the same branch.
+
 ### 15 October 2026: deleting an account also removes the approvals and the activity log
 
 - **Where it is:** on `main` since 15 October. Not on the test server yet.

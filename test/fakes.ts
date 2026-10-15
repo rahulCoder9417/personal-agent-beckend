@@ -5,6 +5,7 @@ import { setLiteLLMClient } from '../src/modules/billing/litellm.ts';
 import { sha256Hex } from '../src/shared/crypto.ts';
 import { setTelegramApi } from '../src/modules/channels/adapters/telegram.ts';
 import type {
+  ToolkitScopes,
   AuthConfigInfo,
   ComposioAccount,
   ComposioTool,
@@ -398,6 +399,8 @@ export async function installFakeComposio() {
     slug: string;
     triggerId: string;
     config: Record<string, unknown>;
+    /** The connected account it watches (Composio picks the user's first one when none is given). */
+    connectedAccountId: string | undefined;
   }> = [];
   const state = {
     /** What Composio reports for a user's connected accounts (listAccounts, account). */
@@ -443,6 +446,14 @@ export async function installFakeComposio() {
     executeData: new Map<string, unknown>(),
     /** The next createTrigger throws this (used once). */
     triggerError: null as Error | null,
+    /** The next listTriggers throws this (used once). */
+    listTriggersError: null as Error | null,
+    /** Every listTriggers call, with its filter. */
+    triggerListings: [] as Array<{ triggerIds?: string[]; connectedAccountIds?: string[] }>,
+    /** Connected accounts deleted at Composio, in order. */
+    deletedAccounts: [] as string[],
+    /** The next deleteAccount throws this (used once). */
+    deleteAccountError: null as Error | null,
     /**
      * What Composio says about each setup (auth config). One not listed here is Composio's
      * shared sign-in, as the real setups made in the dashboard are by default.
@@ -465,11 +476,21 @@ export async function installFakeComposio() {
     linkError: null as Error | null,
     /** Setups the server made with Composio's shared sign-in, by toolkit. */
     managedSetups: [] as Array<{ toolkit: string; name: string; id: string }>,
+    /** The scopes each setup names (absent: none, so Composio's default set). */
+    setupScopes: new Map<string, string[]>(),
+    /** What Composio says each toolkit's sign-in asks for (absent: nothing, no recommendation). */
+    toolkitScopes: new Map<string, ToolkitScopes>(),
+    /** Every scope question asked: a setup's (by id) or a toolkit's (with its actions). */
+    scopeQuestions: [] as Array<{ setup: string } | { toolkit: string; tools: string[] }>,
+    /** The next authConfigScopes / toolkitScopes call fails with this (used once). */
+    scopesError: null as Error | null,
     /** The next setUpManagedAuthConfig fails with this (used once). */
     setupError: null as Error | null,
   };
   let n = 0;
-  const once = <K extends 'authConfigError' | 'directError' | 'linkError' | 'setupError'>(
+  const once = <
+    K extends 'authConfigError' | 'directError' | 'linkError' | 'setupError' | 'scopesError',
+  >(
     key: K,
   ) => {
     const err = state[key];
@@ -498,6 +519,18 @@ export async function installFakeComposio() {
       once('authConfigError');
       return state.authConfigs.get(authConfigId) ?? { composioManaged: true, authScheme: 'OAUTH2' };
     },
+    async authConfigScopes(authConfigId) {
+      state.scopeQuestions.push({ setup: authConfigId });
+      once('scopesError');
+      return state.setupScopes.get(authConfigId) ?? null;
+    },
+    async toolkitScopes(toolkit, tools) {
+      state.scopeQuestions.push({ toolkit, tools: [...tools] });
+      once('scopesError');
+      return (
+        state.toolkitScopes.get(toolkit) ?? { required: [], leastPrivilege: null, fewest: null }
+      );
+    },
     async setUpManagedAuthConfig(toolkit, name) {
       once('setupError');
       const id = `ac_made_${toolkit}_${n++}`;
@@ -524,9 +557,15 @@ export async function installFakeComposio() {
       return null;
     },
     async deleteAccount(accountId) {
-      const err = state.deleteAccountErrors.get(accountId);
+      const err = state.deleteAccountErrors.get(accountId) ?? state.deleteAccountError;
+      state.deleteAccountError = null;
       if (err) throw err;
       state.deletedAccounts.push(accountId);
+      for (const [userId, list] of state.accounts)
+        state.accounts.set(
+          userId,
+          list.filter((a) => a.id !== accountId),
+        );
     },
     async accessToken(accountId) {
       return `gho_fake_token_for_${accountId}`;
@@ -579,14 +618,34 @@ export async function installFakeComposio() {
       const data = state.executeData.has(slug) ? state.executeData.get(slug) : { ok: true };
       return { successful: true, data, error: null };
     },
-    async createTrigger(userId, slug, _connectedAccountId, config) {
+    async createTrigger(userId, slug, connectedAccountId, config) {
       const err = state.triggerError;
       state.triggerError = null;
       if (err) throw err;
       // Unique across installs, as Composio's are: a test file installs this fake more than once.
       const triggerId = `ti_${randomBytes(6).toString('hex')}`;
-      triggers.push({ userId, slug, triggerId, config });
+      triggers.push({ userId, slug, triggerId, config, connectedAccountId });
       return { triggerId };
+    },
+    async listTriggers({ triggerIds, connectedAccountIds }) {
+      state.triggerListings.push({ triggerIds, connectedAccountIds });
+      const err = state.listTriggersError;
+      state.listTriggersError = null;
+      if (err) throw err;
+      if (!triggerIds?.length && !connectedAccountIds?.length) return [];
+      return triggers
+        .filter(
+          (t) =>
+            (!triggerIds?.length || triggerIds.includes(t.triggerId)) &&
+            (!connectedAccountIds?.length ||
+              connectedAccountIds.includes(t.connectedAccountId ?? '')),
+        )
+        .map((t) => ({
+          id: t.triggerId,
+          connectedAccountId: t.connectedAccountId ?? '',
+          slug: t.slug,
+          config: t.config,
+        }));
     },
     async deleteTrigger(triggerId) {
       const i = triggers.findIndex((t) => t.triggerId === triggerId);

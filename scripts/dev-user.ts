@@ -18,6 +18,10 @@
 //   apps            --user <id>
 //                   (each app connection: our status, what Composio says, its account id and setup,
 //                   and what the agent sees in list_app_actions)
+//   scopes          --app <slug> [--user <id>] [--tools <ACTION,ACTION>]
+//                   (what the app's sign-in asks the provider for: the setup's own scopes, the ones
+//                   Composio always asks for, Composio's narrowest and smallest sets for the app's
+//                   actions, and for a Google app each scope's class at Google. Only reads)
 //   status          --user <id>
 //   browser         --user <id>                      (send Scout's browser switch for this user now)
 //   send            --user <id> --text <text> [--conversation <id>] [--timeout 900]
@@ -80,11 +84,24 @@ import { closeQueues } from '../src/modules/events/queues.ts';
 import { appActionsFor } from '../src/modules/integrations/agent-apps.ts';
 import {
   currentSetupFor,
+  isTrialUser,
   listConnections,
   refreshPendingConnections,
+  serverMaySetUp,
   startConnect,
 } from '../src/modules/integrations/apps.ts';
-import { composio, type ComposioAccount } from '../src/modules/integrations/composio.ts';
+import { findApp, type CatalogApp } from '../src/modules/integrations/catalog.ts';
+import {
+  authConfigInfo,
+  composio,
+  type ComposioAccount,
+} from '../src/modules/integrations/composio.ts';
+import {
+  fullGoogleScope,
+  googleScopeClass,
+  googleScopeNeeds,
+  type GoogleScopeClass,
+} from '../src/modules/integrations/google-scopes.ts';
 import { getAgentSettings } from '../src/modules/orchestrator/agent-settings.ts';
 import { decideApproval, listApprovals } from '../src/modules/orchestrator/approvals.ts';
 import { browserStatus, syncBrowser } from '../src/modules/orchestrator/browser.ts';
@@ -124,6 +141,7 @@ const USAGE = `usage: node --import tsx scripts/dev-user.ts <command> [flags]
   claude-complete --user <id> --login <loginId> --code <code>
   connect-app     --user <id> --app <slug>
   apps            --user <id>
+  scopes          --app <slug> [--user <id>] [--tools <ACTION,ACTION>]
   status          --user <id>
   browser         --user <id>
   send            --user <id> --text <text> [--conversation <id>] [--timeout 900]
@@ -296,6 +314,94 @@ function composioLine(acc: ComposioAccount | null | Error): string {
     `Composio: ${acc.status} (app ${acc.toolkit || '?'}, setup ${acc.authConfigId ?? '?'}` +
     `${acc.label ? `, ${shown(acc.label, 80)}` : ''})`
   );
+}
+
+const errorText = (err: unknown) => shown(err instanceof Error ? err.message : String(err), 200);
+
+/** Google's classes, the lightest first. */
+const GOOGLE_ORDER: GoogleScopeClass[] = ['basic', 'non-sensitive', 'sensitive', 'restricted'];
+
+/**
+ * What an app's sign-in asks the provider for, as lines. Only reads: nothing is made or changed at
+ * Composio. Of a setup, only its scopes are read (never its client id or secret).
+ */
+async function scopeLines(
+  app: CatalogApp,
+  user: { id: string; email: string } | undefined,
+  tools: string[],
+): Promise<string[]> {
+  const lines = [
+    `app ${app.slug} (${app.name}, signs in at ${app.provider}; Composio toolkit ${app.toolkit})`,
+  ];
+  if (user)
+    lines.push(
+      `for user ${user.id} (${user.email})${(await isTrialUser(user.id)) ? ', a trial user' : ''}`,
+    );
+  const named: string[] = [];
+
+  const setup = await currentSetupFor(app.slug, user?.id);
+  if (!setup) {
+    lines.push(
+      serverMaySetUp(app)
+        ? "setup none yet: the server makes one with Composio's shared sign-in on the first connect"
+        : "setup none: the app can't be connected on this server",
+    );
+  } else {
+    const info = await authConfigInfo(setup.id);
+    const kind = !info
+      ? 'Composio could not say which kind'
+      : info.composioManaged
+        ? "Composio's shared sign-in"
+        : 'our own sign-in app';
+    lines.push(`setup ${setup.id} (${setup.source}): ${kind}`);
+    try {
+      const own = await composio().authConfigScopes(setup.id);
+      if (own) named.push(...own);
+      lines.push(
+        own
+          ? `setup asks for ${own.join(' ')}`
+          : "setup asks for Composio's default set (it names no scopes of its own)",
+      );
+    } catch (err) {
+      lines.push(`setup scopes: could not ask Composio (${errorText(err)})`);
+    }
+  }
+
+  const what = tools.length ? `for ${tools.join(', ')}` : 'for every action of the app';
+  try {
+    const s = await composio().toolkitScopes(app.toolkit, tools);
+    named.push(...s.required, ...(s.leastPrivilege ?? []), ...(s.fewest ?? []));
+    lines.push(
+      `composio always asks for ${s.required.length ? s.required.join(' ') : 'no scope it names'}`,
+    );
+    if (s.leastPrivilege && s.fewest) {
+      lines.push(`composio's narrowest set ${what}: ${s.leastPrivilege.join(' ') || 'none'}`);
+      lines.push(`composio's smallest set ${what}: ${s.fewest.join(' ') || 'none'}`);
+    } else {
+      lines.push(`composio's recommendation ${what}: not available`);
+    }
+  } catch (err) {
+    lines.push(`composio: could not ask about ${app.toolkit} (${errorText(err)})`);
+  }
+
+  if (app.provider !== 'Google') return lines;
+  const scopes = [...new Set(named.map(fullGoogleScope))];
+  const classes = scopes.map((scope) => {
+    const cls = googleScopeClass(scope);
+    lines.push(`scope ${scope}: ${cls ?? 'unknown'} (${googleScopeNeeds(cls)})`);
+    return cls;
+  });
+  const known = classes.filter((c): c is GoogleScopeClass => c !== null);
+  if (known.length) {
+    const hardest = GOOGLE_ORDER[Math.max(...known.map((c) => GOOGLE_ORDER.indexOf(c)))]!;
+    lines.push(
+      `google: the hardest of these is ${hardest}: ${googleScopeNeeds(hardest)}` +
+        (known.length < classes.length ? '; some are not in our table' : ''),
+    );
+  } else if (scopes.length) {
+    lines.push('google: none of these is in our table: look them up at Google');
+  }
+  return lines;
 }
 
 /** One turn's timings as lines: what the turn was, each stage, the answer's wait, the biggest stage. */
@@ -514,7 +620,7 @@ export async function devUser(argv: string[]): Promise<string[]> {
       const setups = await Promise.all(
         [...new Set(rows.map((r) => r.app))].map(async (app) => ({
           app,
-          setup: await currentSetupFor(app),
+          setup: await currentSetupFor(app, user.id),
         })),
       );
       const agent = await appActionsFor(user.id, user.plan);
@@ -542,6 +648,19 @@ export async function devUser(argv: string[]): Promise<string[]> {
         ),
         ...(agent.note ? [`agent sees: ${agent.note}`] : []),
       ];
+    }
+    case 'scopes': {
+      // What an app's sign-in asks the provider for, and what that means at Google: for choosing
+      // and justifying the scopes of our own sign-in app. Only reads; prints no secret.
+      const slug = need(flags, 'app');
+      const app = findApp(slug);
+      if (!app) throw new UsageError(`unknown app ${slug}`);
+      const user = flags.user || flags.email ? await activeUser(flags) : undefined;
+      const tools = (flags.tools ?? '')
+        .split(',')
+        .map((t) => t.trim().toUpperCase())
+        .filter(Boolean);
+      return scopeLines(app, user, tools);
     }
     case 'status': {
       const user = await activeUser(flags);

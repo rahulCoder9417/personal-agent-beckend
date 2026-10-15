@@ -291,7 +291,7 @@ describe('the other chat apps', () => {
 
 describe('our own messages', () => {
   it('arrive exactly as they are written', async () => {
-    // A chat that is not linked: the link instructions (an address and "Settings → Channels").
+    // A chat that is not linked: the link instructions (the Integrations page's address).
     const stranger = chat();
     await tgPost(telegramUpdate(stranger, 'hi'));
     const instructions = await waitFor(async () => sentTo(stranger)[0]);

@@ -215,7 +215,7 @@ export async function unlink(userId: string, linkId: string): Promise<ChannelLin
 export type UnlinkBy = { actor: 'user' } | { actor: 'admin'; adminId: string; reason: string };
 
 /**
- * The unlink of Settings → Channels, also used by an admin: removes the link and writes the
+ * The unlink of Integrations → Chat apps, also used by an admin: removes the link and writes the
  * activity log entry (the channel and the name shown when it was linked, never the chat id). An
  * admin's entry also keeps the admin's id and reason, which the user's activity log does not show.
  */
@@ -299,7 +299,7 @@ export function maskChatId(link: Pick<ChannelLink, 'channel' | 'externalId'>): s
 }
 
 /**
- * What the user sees for a link (Settings → Channels), for admins: never the raw chat id. A
+ * What the user sees for a link (Integrations → Chat apps), for admins: never the raw chat id. A
  * Telegram chat with no username or name was saved under its id; it shows masked.
  */
 export function adminLinkLabel(link: ChannelLink): string {

@@ -450,8 +450,6 @@ export async function installFakeComposio() {
     listTriggersError: null as Error | null,
     /** Every listTriggers call, with its filter. */
     triggerListings: [] as Array<{ triggerIds?: string[]; connectedAccountIds?: string[] }>,
-    /** Connected accounts deleted at Composio, in order. */
-    deletedAccounts: [] as string[],
     /** The next deleteAccount throws this (used once). */
     deleteAccountError: null as Error | null,
     /**

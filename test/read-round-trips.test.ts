@@ -5,7 +5,8 @@
 // To see the time as well: `PERF_RTT_MS=260 PERF_CONNECT_MS=2000 PERF_OUT=perf.md pnpm vitest
 // run test/read-round-trips.test.ts` makes every query wait 260 ms and every new connection 2 s,
 // and writes a table to perf.md (without PERF_OUT it is printed). `PERF_SQL=<file>` also writes
-// the chat turn's queries, each with the moment it was sent.
+// the chat turn's queries, each with the moment it was sent, and then the queries of the turn's
+// billing job (which runs after the turn, once the user's lock is free).
 import { randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import type { Worker } from 'bullmq';
@@ -22,7 +23,8 @@ import { closeDb, db, pingDb } from '../src/shared/db/client.ts';
 import { wireModules } from '../src/wiring.ts';
 import { processors } from '../src/worker/processors.ts';
 import { startWorkers } from '../src/worker/runner.ts';
-import { installDbMeter, meter, setDbDelays } from './db-meter.ts';
+import { turnsBilled } from './billing-helpers.ts';
+import { installDbMeter, meter, queriesSoFar, setDbDelays } from './db-meter.ts';
 import { installFakeVm } from './fakes.ts';
 import { call, chatUser, waitFor } from './helpers.ts';
 
@@ -199,19 +201,36 @@ describe('whole pages', () => {
   });
 });
 
+/**
+ * After the reply is shown, the turn still saves what the next message depends on before it gives
+ * the user's lock back: the end of the agent's send (the conversation, the activity log), the
+ * engine's record and the message's last state (at once), the turn's timings and the event. The
+ * billing is a job of its own, after the lock (before 15 October: 19 trips in a row here, 12 of
+ * them the usage sync).
+ */
+const AFTER_REPLY_BUDGET = 8;
+
 describe('a chat turn', () => {
   it('from sending a web message to the reply, then to the end of the job', async () => {
     await warm();
     const inbound = workers.find((w) => w.name === 'inbound')!;
+    // The billing waits until the turn is over, so what follows the reply is the turn's own work.
+    const system = workers.find((w) => w.name === 'system')!;
+    await system.pause();
     // Waited for without asking the database, so the waiting adds no round trip.
     let replied!: () => void;
     const reply = new Promise<void>((r) => (replied = r));
+    let atReply = 0;
     const unsubscribe = await subscribe(user.id, (e) => {
-      if (e.type === 'message.created' && (e.data as { direction?: string }).direction === 'out')
+      if (e.type === 'message.created' && (e.data as { direction?: string }).direction === 'out') {
+        atReply = queriesSoFar();
         replied();
+      }
     });
     let toReply = 0;
     let toAccepted = 0;
+    let toFree = 0;
+    let afterReply = 0;
     const m = await measure('Chat turn: send to the end of the job', async () => {
       const start = performance.now();
       const res = await call('/v1/messages', {
@@ -234,9 +253,10 @@ describe('a chat turn', () => {
       await reply;
       toReply = Math.round(performance.now() - start);
       await done;
+      toFree = Math.round(performance.now() - start);
+      afterReply = queriesSoFar() - atReply;
     });
     unsubscribe();
-    if (process.env.PERF_SQL) writeFileSync(process.env.PERF_SQL, m.sql.join('\n'));
     report.push(
       {
         what: 'Chat turn: send until the api answers 202',
@@ -245,8 +265,27 @@ describe('a chat turn', () => {
         ms: toAccepted,
       },
       { what: 'Chat turn: send to the reply shown', queries: NaN, connects: NaN, ms: toReply },
+      {
+        what: 'Chat turn: the reply shown until the lock is free (the next message can start)',
+        queries: afterReply,
+        connects: NaN,
+        ms: toFree - toReply,
+      },
     );
     expect(m.queries).toBeGreaterThan(0);
+    expect(afterReply, m.sql.join('\n')).toBeLessThanOrEqual(AFTER_REPLY_BUDGET);
+
+    // Then the billing runs, on its own, with nobody waiting for it.
+    const billing = await measure("The turn's billing job (after the lock is free)", async () => {
+      system.resume();
+      await turnsBilled(user.id);
+    });
+    if (process.env.PERF_SQL)
+      writeFileSync(
+        process.env.PERF_SQL,
+        [...m.sql, '--- the billing job ---', ...billing.sql].join('\n'),
+      );
+    expect(billing.queries).toBeGreaterThan(0);
   }, 180_000);
 });
 

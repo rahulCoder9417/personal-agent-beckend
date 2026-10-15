@@ -424,7 +424,11 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - The desktop app. It is now a small window around the live web app (`https://app.textcrew.in`), so it always shows the same screens. It reaches the sign-in page, and Clerk's and Google's sign-in pages open inside the window. Nobody has signed in with a real account in it, and the tray icon, the shortcut and "start at login" have not been run. A Linux installer builds; Windows and Mac installers are not built.
 - Web search through Brave. The key works; the path through the app has not run.
 - Textcrew's own connect screen in the web app, and the page after a sign-in that says "connected" or "didn't connect". Checked in the web app's demo mode only.
-- Connecting straight to the provider's page with our own sign-in app (no Composio page), and `/oauth/callback`, the way back through our own address. No own sign-in app is registered yet.
+- Connecting straight to the provider's page with our own sign-in app (no Composio page), and `/oauth/callback`, the way back through our own address. No own sign-in app is registered yet. The way back answers on the server (checked on 15 October).
+- For our own Google sign-in app, built on 15 October on the branch `feat/composio-own-google-app` (not on `main` yet), with the automated tests only:
+  - **a trial switch:** two settings give a second setup per app to a few named users only, while Google reviews our app;
+  - **a scope check:** the ops script's `scopes` command prints what an app's sign-in asks for, and each scope's class at Google. It only reads;
+  - **one connection per account:** Tex uses the newest connection of an app. Connecting the same account again moves its automations to the new connection and removes the old one. A second account of the same app is kept.
 - The server setting up an app at Composio by itself on the first connect (`COMPOSIO_MANAGED_APPS`). Not switched on on the server.
 - A late run saying so, and the web app setting a new account's time zone from the browser. Built on 13 October after the founder's "every morning at 9" summary landed in an unrelated chat at 3:01 PM India time. Checked with the automated tests, and the web app's part in its demo mode.
 - The Automations chat: every run, verdict and automation notice answering there, pinned in the web app's chat list with a mark for a new run, and a copy of each answer on Telegram for an automation made there. Built on 13 October, after your decision for a separate automation chat. Checked with the automated tests, and the web app's part in its demo mode in a browser. No real run has gone through it yet. The conversations that automations made for themselves earlier that day stay as ordinary chats.
@@ -446,7 +450,6 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 
 - **The browser's Google contacts:** (a) use Playwright's smaller "headless shell" browser, which makes none of them, (b) block the two Google hosts in the browser's proxy rule, or (c) accept them.
 - **More apps than Gmail and GitHub:** every other app shows "Not available yet" in the web app, because the server has no Composio setup for it. One setting now switches them on: `COMPOSIO_MANAGED_APPS=all` (or a list, such as `googlecalendar,notion,slack`), then a restart. The server makes each app's setup at Composio on its first connect. These apps use Composio's shared sign-in, so the provider's "Allow" screen names Composio. `composio.md`, section 8.
-- **Composio's name on the connect pages:** the web app now shows its own connect screen first. What users still see of Composio depends on steps only you can do: our logo and name on Composio's connect page (a dashboard setting, five minutes), and our own GitHub sign-in app (no review needed, about twenty minutes). Google needs a review of several weeks before our own Google app can replace Composio's. `composio.md`, section 9, has every step.
 - **Old conversations:** keep Claude Code's 30-day clean-up of saved sessions (an older conversation then starts afresh when opened), or keep sessions for as long as the conversation exists (more disk per user).
 - **Codex and other engines:** see `engines-proposal.md`, section 10. A ChatGPT plan cannot be used yet; OpenAI must approve first.
 
@@ -466,6 +469,14 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 ### Also waiting on you
 
 - After the move to Clerk's production setup (15 October): sign up once in the web app, then make your new account an admin again (in Clerk's dashboard, the role "admin" in the user's public metadata). Your Max plan, extra credits and Telegram link stay on the old account; an admin moves them by hand, and unlinks Telegram on the old account first.
+- **Textcrew, not Composio, on Google's screen when a user connects a Google app** (decided on 15 October). Google Calendar goes first, on our own Google sign-in app: its scope is "sensitive", so Google's review is free and takes about 2 weeks. Gmail, Drive, Docs and Sheets stay on Composio's shared sign-in during the beta. They move later, together, because Gmail and Drive are "restricted": 6 weeks or more, and a yearly security check by an outside lab (CASA), about US$675–855 a year. What you do by hand, in order:
+  1. Our logo and name on Composio's connect page (5 minutes), and our own GitHub sign-in app (about 20 minutes).
+  2. Google's "Limited Use" statement on the privacy page, and a terms page (`/terms` answers "not found" today).
+  3. Once the brand check below has passed: switch on the Google Calendar API, add its scope, make a second Google sign-in app whose way back is `https://api.textcrew.in/oauth/callback`, make its setup in Composio, and try it on yourself with the trial switch. Claude runs the scope check first and puts the two settings on the server.
+  4. Record the demo video and send the app to Google for review.
+  5. After Google's approval, switch Google Calendar for everyone, and tell users who connected it before to connect it again.
+
+  `composio.md`, section 9, has every click.
 - Google's brand check for the sign-in app: the logo is uploaded (15 October) and textcrew.in is proven ours in Google Search Console. From 16 October (Google asks for a 24-hour wait), in Google Cloud → Textcrew → Branding → View issues, choose "I have fixed the issues" and press Proceed. The check takes a few days. Until it passes, Google shows the name without the logo.
 - A repo to test pull-request review on.
 - How Free credits should run out sooner (section 7).
@@ -594,5 +605,6 @@ The VPS that was planned:
 - Backups outside the server, with a tested restore.
 - An alert channel.
 - A size limit on each user's files.
-- The legal pages, Anthropic's written OK for the Claude plan option, and Google's verification for Gmail beyond 100 users.
+- The legal pages, and Anthropic's written OK for the Claude plan option.
+- Google's review of our own Google sign-in app: Google Calendar first (free), then Gmail and Drive with the yearly security check (CASA). Until then those apps use Composio's shared sign-in, whose name shows on Google's screen.
 - Joining the landing page's waitlist to the backend, so the 50% waitlist discount works.

@@ -101,8 +101,8 @@ Each entry has a heading with the date and the name of the feature, then the par
   - **The label is Composio's email for the account.** Whether Composio gives it for every Google app is not confirmed. Where it doesn't, the old connection is kept, and Tex simply uses the newer one. The user can remove the old one with **Disconnect**.
   - **Disconnecting a connection by hand still leaves its automations on it.** Unchanged here.
   - **The web app doesn't yet ask users to connect again** when a connection is on an older setup (the "Reconnect" marker). It waits until we switch an app for everyone.
-- **Docs updated:** see the docs entry for this branch, above.
-- **Commits:** `d19219e`.
+- **Docs updated:** `composio.md` section 9 (step 6, "Switching an app that people already use") and section 11 (a row for two connections that stay); `backend-report.md` section 3 (the system queue), section 14 (a new part "Connecting the same account again", the agent's choice of connection, "What can go wrong"), section 18 (where an app-event trigger watches) and section 44; `hld-mvp.md` section 12.
+- **Commits:** `d19219e`, and the docs commit on the same branch.
 
 ### 15 October 2026: a scope check in the ops script, before asking Google to review our sign-in app
 
@@ -147,8 +147,8 @@ Each entry has a heading with the date and the name of the feature, then the par
   - Lint and the type check pass. The full backend run: 877 of 877 tests pass.
   - Not run against the live Composio key: the founder decides when. It is safe to run on the server: it only reads.
 - **Still open:** run it once on the server for each Google app before our own Google sign-in app is set up: `cd /opt/textcrew && ./dc --profile app exec -T api node --import tsx scripts/dev-user.ts scopes --app googlecalendar`.
-- **Docs updated:** see the docs entry for this branch, above.
-- **Commits:** `59672a0`.
+- **Docs updated:** `composio.md` section 9 ("What Google wants first", and step 3, part A); `backend-report.md` section 14 ("What can go wrong").
+- **Commits:** `59672a0`, and the docs commit on the same branch.
 
 ### 15 October 2026: a trial switch, so only some users connect through our own Google sign-in app
 
@@ -178,8 +178,8 @@ Each entry has a heading with the date and the name of the feature, then the par
   - Lint and the type check pass. The full backend run: 864 of 864 tests pass. One run before that had a single failure in `test/turn-billing.test.ts`, a test this change doesn't touch; it passed three times on its own, and the full run again after that.
   - Not yet run on the server.
 - **Still open:** filling in the two settings is yours, once our own Google sign-in app exists. `composio.md`, section 9, has the steps.
-- **Docs updated:** see the docs entry for this branch, above.
-- **Commits:** `af46692`.
+- **Docs updated:** `composio.md` section 9, rewritten (the four places, what Google wants, the plan, Google Calendar step by step, the trial switch in step 5, other apps), section 8 (the 100-user count), section 11 (three new rows) and section 13 (the pages read on 15 October); `backend-report.md` section 14 (the setup order, a new part "Trying our own sign-in app with a few users") and section 42 (the two settings); `hld-mvp.md` section 12 (the plan, and what you do by hand) and section 13.
+- **Commits:** `af46692`, and the docs commit on the same branch.
 
 ### 15 October 2026: sign-in moves to Clerk's production setup, with Textcrew's own Google sign-in
 

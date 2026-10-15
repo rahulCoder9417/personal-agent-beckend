@@ -48,6 +48,62 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 15 October 2026: connecting the same account again replaces the old connection, and its automations move over
+
+- **Where it is:** on the branch `feat/composio-own-google-app`, waiting for review. Not on `main`, not on the test server.
+- **Why:** to move a user from Composio's shared Google sign-in app to our own, the user connects the app again. That made a second connection next to the old one, which caused three problems:
+  - **Tex picked either one.** The server took "an active connection" with no order, so which one Tex used was not defined.
+  - **Automations stayed on the old connection.** An automation of the kind "when an email arrives" watches the connection it was made on. Removing the old connection would stop it without a word.
+  - **The old connection stayed.** The user kept seeing it, and Google kept listing Composio's app in their Google account.
+
+  The same happened after **Reconnect** on a connection that had expired: its automations stayed on the dead connection.
+- **What the user notices:**
+  - **After connecting the same account again,** the Apps page shows one connection for it, the new one, a few seconds later.
+  - **Automations keep working,** now on the new connection. One that stopped because its connection expired works again after Reconnect.
+  - **A second account of the same app is kept.** "Add account" (two Gmail addresses, for example) works as before.
+- **Backend:**
+  - **Tex uses the newest active connection** of an app. New automations and the git gateway use the same one.
+  - **A new job, `settle-connection`, in the system queue.** It is added whenever a connection becomes active, in any of the four ways: the app list, the check job, Composio's webhook, or an admin's recheck. One job per connection.
+  - **What the job does:**
+    1. It looks for the user's older connections of the same app to the same account. "The same account" means the same account label, which is the email Composio gives for the account, in any letter case. A label we don't have yet is asked of Composio first, and kept.
+    2. For each one, it moves the user's app-event automations to the new connection: a new trigger on the new connection, the automation pointed at it, then the old trigger removed. Which automations watch the old connection is asked of Composio.
+    3. It removes the old connection at Composio, then in our database.
+  - **What it never removes:**
+    - a connection to another account of the app;
+    - any connection, when neither side has a label: it could be a second account;
+    - a newer connection;
+    - a connection still being set up;
+    - another app's connections.
+  - **Safe to re-run.** A run that finds nothing to do does nothing. If a run stops after making a new trigger but before saving it, the next run uses that trigger instead of making another. An old account Composio no longer has counts as removed. Runs for the same user wait for each other, with a short lock of their own (not the lock a turn holds).
+  - **The automations module does the moving** (`moveAppTriggers`). The integrations module never touches the automations table.
+- **Cost and speed:** a few Composio calls each time a connection becomes active: one or two to read account labels, and, when an old connection is replaced, two to list triggers, one per moved automation, and one to remove the old account. None of them is an app action. Fewer trigger events later: an old connection's triggers no longer run next to the new ones.
+- **Contracts:** none. `openapi.yaml` and `vm.proto` did not change.
+- **Database:** none. No new table or column.
+- **How it was checked:**
+  - New tests (15), in `test/connection-replace.test.ts`:
+    - Tex gets the newest of two active connections, never a pending one;
+    - a connection that becomes active queues exactly one job, and another status queues none;
+    - an automation moves to the new connection, the old trigger and old connection are removed, here and at Composio;
+    - an expired connection to the same account is replaced too, and its automation works again;
+    - a missing label is asked of Composio and kept;
+    - a second account is never removed, nor anything when there is no label, nor a newer, pending or other app's connection;
+    - a connection that is gone or not active is ignored;
+    - a second run finds nothing to do;
+    - Composio refusing to remove the old account fails the job, and the next try finishes without moving anything twice;
+    - an account Composio no longer has counts as removed;
+    - a trigger left by a run that stopped half-way is reused, even when Composio added a setting of its own to it;
+    - two runs for one user don't overlap, and the lock is given back;
+    - an admin's recheck that finds the connection active queues the job too.
+  - Changed: the stand-in for Composio now remembers which account each trigger watches, and which accounts were removed; one pull-request review test checks that field.
+  - Lint and the type check pass. The full backend run: 892 of 892 tests pass.
+  - Not yet run on the server.
+- **Still open:**
+  - **The label is Composio's email for the account.** Whether Composio gives it for every Google app is not confirmed. Where it doesn't, the old connection is kept, and Tex simply uses the newer one. The user can remove the old one with **Disconnect**.
+  - **Disconnecting a connection by hand still leaves its automations on it.** Unchanged here.
+  - **The web app doesn't yet ask users to connect again** when a connection is on an older setup (the "Reconnect" marker). It waits until we switch an app for everyone.
+- **Docs updated:** see the docs entry for this branch, above.
+- **Commits:** `d19219e`.
+
 ### 15 October 2026: a scope check in the ops script, before asking Google to review our sign-in app
 
 - **Where it is:** on the branch `feat/composio-own-google-app`, waiting for review. Not on `main`, not on the test server.

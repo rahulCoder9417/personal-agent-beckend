@@ -48,6 +48,63 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 15 October 2026: where a sign-in's seconds go, and a new account's first page one trip shorter
+
+- **Where it is:** on the branch `perf/sign-in-speed` in the backend and in the web app, waiting for your review. Not on `main` and not on the test server yet.
+- **Why:** you signed up and signed in on `app.textcrew.in` with Google on 15 October and said it took too long. Each step was measured: the server's request log from your sign-up, the sign-in pages loaded in a headless browser from a laptop in India (no account made, nothing typed), and the backend's own tests with every database trip slowed to Neon's distance.
+- **Where the seconds go** for someone new who uses "Continue with Google" on the sign-in page. "Ours" means our code or our setup; "Clerk" is the sign-in service, whose servers are in the US, about 0.5 s away per request from India.
+
+    | Step | Time | Whose |
+    |---|---|---|
+    | Opening `app.textcrew.in` signed out: the proxy sends the browser to `/sign-in` | 0.45 s, first time | Ours, needed |
+    | The sign-in page shows | 0.6 to 1.0 s first time, 0.15 s after | Ours (Vercel, Mumbai) |
+    | Clerk's script is ready (two requests to Clerk) | 1.2 to 1.7 s after opening, first time | Clerk |
+    | **The click on "Continue with Google" until Google's page** | **3.3 to 6.4 s (middle value 4.5 s, 9 tries) when clicked as soon as the page is ready; 1.0 to 1.5 s when clicked 8 s later** | **Clerk.** Clerk's "Protect" check holds the click until its script has loaded: 1.7 to 4.3 s, and once the full 5 s Clerk waits at most. Its script comes from AWS in Oregon, on the US west coast, and its address is never cached (time to live 0): 1.4 s even from our Mumbai server, 2.3 to 4.8 s from the laptop. Then Clerk's sign-in request, 0.5 s. The development setup didn't have this check; the production setup (from 15 October) does |
+    | Choosing the Google account (and agreeing, the first time) | The person's time, plus about 0.5 s a page | Google |
+    | Google to Clerk to our `/sso-callback` page | About 0.5 to 1 s, not measured | Clerk and Google |
+    | `/sso-callback` loads and Clerk's script is ready again | 2.2 s with nothing cached; about 0.8 s with the sign-in page's files already in the browser | Ours (the page) and Clerk (two requests) |
+    | Turning the sign-in into a new account: Cloudflare's robot check, creating the account, making the session active | About 1.5 to 3 s, not measured: three requests to Clerk, plus the robot check | Clerk and Cloudflare; only for a new account |
+    | Clerk's webhook makes our account row | About 0.4 s, alongside the steps above, not in the way | Ours |
+    | **The home screen asks the API for the account, then moves on to the welcome flow** | **0.86 s in your sign-up** (from the first request at 12:09:45.3 to the welcome flow's requests) | **Ours: fixed in the web app** |
+    | **The first page's requests each look the user up in the database** | **About 0.2 to 0.26 s** | **Ours (Neon's distance): fixed here** |
+    | The first requests after 5 quiet minutes fetch Clerk's keys | 0.31 to 0.33 s, measured from the server | Ours: a setting (see "Still open") |
+    | The welcome flow's requests | 0.2 to 0.4 s each on the server in your sign-up, plus about 0.1 s through Vercel | Ours (Neon's distance) |
+
+    Someone who already has an account skips the new-account steps. Google sends them straight to the home screen, where Clerk's check of the new session makes one more stop at Clerk (about 0.5 to 1 s, not measured). The Protect check holds their click just the same.
+
+- **What the user notices:** a new account opens the welcome flow about a second sooner: about 0.86 s from the web app's change and about 0.2 s from the backend's. The rest of the wait above is Clerk's and Google's, and changes only with the settings under "Still open". Nothing else changes.
+- **Backend:**
+  - **A new account's copy is ready at once.** When Clerk's webhook creates the account (in your sign-up, 3 seconds before the web app's first request), the worker also puts the user's copy in Redis, the one every signed-in request reads (section 4 of `backend-report.md`, "Keeping reads fast"). Before, each of the first page's requests found no copy and looked the user up in the database first. The same happens when the first request creates the account.
+  - **Clerk saying again what we have writes nothing.** Clerk's "user updated" comes for changes we don't keep, such as a new picture or name, and for a new account its webhook may come after the first requests. Each of those used to write the row again, which drops the user's copy and keeps none for 30 seconds, so every request in that time made one more trip. Now the row is written only when Clerk's email, its verified state or the role differ from ours. A real change still counts from the very next request.
+  - **Requests that come before the webhook share one look-up.** If the web app's first requests arrive before Clerk's webhook, each of them used to ask Clerk for the user and try to create the account; all but one then wrote the row a second time. Now they share one request to Clerk and one new row.
+- **Web app** (in its own repo, on the same branch name): a new account now lands on the welcome flow straight from the sign-up, without the stop on the home screen. That covers email sign-up, Google from the sign-up page, and Google from the sign-in page. Someone sent to sign up from another page lands on that page, as before. The web app's README says so.
+- **Cost and speed:**
+  - Measured with the new test (`test/new-account-sign-in.test.ts`), every database trip slowed to 260 ms. The "before" numbers come from the same test run on the code before this change.
+
+    | | Before | After |
+    |---|---|---|
+    | The welcome flow's four first requests, account made by the webhook | 10 trips, 0.54 s | 6 trips, 0.34 s |
+    | The chat page's eight first requests, arriving before the webhook | 29 trips, 1.13 s, Clerk asked 8 times, then 30 s of one more trip per request | 15 trips, 0.92 s, Clerk asked once, nothing extra after |
+    | Clerk's webhook arriving with nothing new | The row written, then 30 s of one more trip per request | One read, nothing written |
+
+  - In your own sign-up the first page's requests took 0.26 to 0.66 s each on the server. A new account now saves one trip there.
+  - No change to credits or to our bills.
+- **Contracts:** none. `openapi.yaml` and `vm.proto` did not change.
+- **Database:** none.
+- **How it was checked:**
+  - The new test file has 6 tests: the copy is ready after the webhook (the first request makes no database trip of its own), the welcome flow's first requests make only their own trips, the same details again write nothing and keep the copy, a real role or email change counts at once, eight requests before the webhook make one request to Clerk and one row, and an account Clerk doesn't know is refused and asked about again next time. Run on the old code, 5 of the 6 fail, as they should.
+  - The whole backend: lint and type-check clean, 70 test files and 861 tests passed.
+  - The web app: lint and type-check clean, 47 test files and 676 tests passed, and a production build in Clerk mode.
+  - Not run on the test server yet.
+- **Still open, for you to decide:**
+  - **Clerk's Protect check** (production setup only) is the largest part of the wait: 1.7 to 4.3 s on the click on "Continue with Google", or on any sign-in or sign-up button, when the person clicks within a few seconds of the page opening. It shows in the setup's public settings as `protect_config`, with a script from `cdn.protect.clerk.com`. Switching it off in Clerk's dashboard would save about 2 to 4 s on that click. Sign-ups would still have Cloudflare's robot check. If you want to keep it, ask Clerk whether it can be served from nearer India.
+  - **Cloudflare's robot check on Google sign-ups.** Clerk runs it on every new account, Google ones included (the setting `captcha_oauth_bypass` is empty). Letting Google sign-ups skip it should save about 1 to 2 s on a new account's `/sso-callback` page (not measured). Google has already checked the person.
+  - **`CLERK_JWT_KEY` with the production key,** on the server (`beckend/.env`) and on Vercel (the web app's production settings). Both were emptied on 15 October because they held the development key. Without it the api fetches Clerk's keys every 5 minutes (0.31 to 0.33 s, and every request of a page waiting at that moment fetches them at once), and so does each new copy of the web app's proxy on Vercel. The key is public: Clerk's dashboard shows it under API keys. If Clerk's key ever changes, both places need the new one.
+  - **The database's distance.** Every trip to Neon in Ohio takes about 260 ms from Mumbai. A Neon region nearer Mumbai (Singapore is one) would make every page faster, not only sign-in. It is a bigger move: the data has to be copied over.
+  - **A smaller one in our code, for later:** the web app sets a new account's time zone on its first page, and that change drops the user's copy for 30 seconds. The welcome flow's requests in that time each make one more trip (about 0.2 s). Taking the time zone at sign-up would avoid it.
+- **Docs updated:** `backend-report.md` section 4 ("The sign-in check" and "Keeping reads fast") and section 6 ("The steps" and "Other paths").
+- **Commits:** backend `40874d0` (the code and its test) and the docs commit that adds this entry, on `perf/sign-in-speed`. Web app `c61d19b` on `perf/sign-in-speed`.
+
 ### 15 October 2026: sign-in moves to Clerk's production setup, with Textcrew's own Google sign-in
 
 - **Where it is:** live on the test server and the web app since 15 October.

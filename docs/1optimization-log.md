@@ -50,7 +50,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 15 October 2026: an approval holds exactly what runs, and a request asked again shows as "replaced"
 
-- **Where it is:** on `main` (backend) and live in the web app since 15 October. The backend part is not on the test server yet.
+- **Where it is:** on `main` and on the test server (backend), and live in the web app, since 15 October.
 - **Why:** on 15 October your test email from web chat ("Email rahulkum94l94@gmail.com: subject Test, body Hello.") was never sent, and you were asked twice. What happened, from the server's logs, the approvals table, the activity log and Tex's own record of the turn (times in India time):
   1. **9:16 PM.** Tex asked to approve Gmail's send action with four inputs: `to`, `subject`, `body`, `user_id`. Gmail's send action at Composio has no `to`: the address goes in `recipient_email`. Tex never looked at the action's list of inputs in that turn; it guessed. The card showed "To". Tex then said it was waiting for your OK, which was true at that moment. (Since the approval question change below, Tex no longer writes that line.)
   2. **9:26:51 PM.** You pressed Approve in the web app, about 11 minutes later. The card has said "You approved this" since then, which is why the waiting message above it now reads oddly.
@@ -103,7 +103,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 15 October 2026: Telegram replies: where the time goes, "typing…" while the agent works, and fewer waits
 
-- **Where it is:** on `main` in the backend and in the vm-manager since 15 October. Not on the test server yet.
+- **Where it is:** on `main` and on the test server, in the backend and in the vm-manager, since 15 October.
 - **Why:** you said replies from your agent on Telegram take too long, and asked which AI model it uses and whether the "high/low" setting is right. So the last Telegram turns on the test server were taken apart, stage by stage, from their stage times and the logs.
 
   **Where the time went.** There are two Telegram turns in the stage times, one on each of your accounts. Both woke a sleeping container. Both ran on Claude Code, on your Claude plan, with the model and effort you chose in Settings: Sonnet 4.6, effort "low".
@@ -199,7 +199,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 15 October 2026: when Tex asks for an OK, it says what it wants to do, and the "working" sign stops
 
-- **Where it is:** on `main` (backend) and live in the web app since 15 October. The backend part is not on the test server yet.
+- **Where it is:** on `main` and on the test server (backend), and live in the web app, since 15 October.
 - **Why:** the founder tested an email in web chat at 21:15 IST. The question said only "Approval needed: <summary>", and under its card the chat kept showing "Tex is working…" until the agent's own line ("I've asked for your OK…") came about 3 seconds later. After he tapped Approve, nothing showed Tex at work until its answer, which took 25 seconds with a cold container. He wants Tex to say plainly what it wants to do and that it waits for his Approve, and the "working" sign to stop while Tex only waits for him.
 - **What the user notices:**
   - Tex's question reads like Tex: "I'd like to send an email to x@acme.com with subject "Test". Approve or Deny below." In web chat the Approve / Deny card sits right under it. On Telegram (and WhatsApp) the two buttons say ✅ Approve and ❌ Deny. On iMessage the line under it says "Reply YES to approve or NO to deny."
@@ -225,7 +225,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 15 October 2026: the bot and Tex point to Integrations, and the user sees more about each linked chat
 
-- **Where it is:** on `main` (backend) and live in the web app since 15 October. The backend part is not on the test server yet.
+- **Where it is:** on `main` and on the test server (backend), and live in the web app, since 15 October.
 - **Why:** the web app now has one Integrations page (`/integrations`), with tabs for the chat apps, the apps (`/integrations/apps`) and the user's own MCP servers. Settings → Channels is gone and `/apps` only redirects, but the backend still sent people to both. Also, an admin could see for each linked chat its masked chat id, when it last wrote and whether the user blocked the bot. The user could not see this about their own chats.
 - **What the user notices:**
   - **A chat that is not linked** gets: "Open Integrations at https://app.textcrew.in/integrations and send me the code you get there", instead of "go to Settings → Channels".

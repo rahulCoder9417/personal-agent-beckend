@@ -103,6 +103,12 @@ export async function getUserByClerkIdCached(clerkId: string): Promise<User | un
 /**
  * Creates the user row (idempotent on clerk_id). `created` is true only for the call that
  * inserted it, so the caller can run one-time onboarding (sign-up grant, sandbox).
+ *
+ * When the row exists, it is written only if Clerk's email, its check or the role differ from
+ * ours. Clerk says "user updated" for many changes we don't keep (a picture, a name, metadata),
+ * and the first calls of a new account may race its webhook; a write each time would drop the
+ * user's copy and keep none for 30 seconds (user-cache.ts), so every call in that time would
+ * read the row from the database again.
  */
 export async function upsertUserFromClerk(
   data: ClerkUserData,
@@ -120,6 +126,15 @@ export async function upsertUserFromClerk(
     .onConflictDoNothing({ target: users.clerkId })
     .returning();
   if (inserted) return { user: inserted, created: true };
+  const current = await getUserByClerkId(data.clerkId);
+  if (
+    current &&
+    current.email === data.email &&
+    current.emailVerified === data.emailVerified &&
+    current.role === data.role
+  ) {
+    return { user: current, created: false };
+  }
   const [updated] = await db()
     .update(users)
     .set({ email: data.email, emailVerified: data.emailVerified, role: data.role })

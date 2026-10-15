@@ -112,8 +112,12 @@ export const REFRESH_AT_MOST = 10;
  * list of accounts: Composio answers that in pages, so a user with many accounts (other apps, old
  * attempts) could have the new one on a later page, and it would stay pending for good.
  */
-export async function refreshPendingConnections(userId: string): Promise<void> {
-  const pending = (await listConnections(userId))
+export async function refreshPendingConnections(
+  userId: string,
+  /** The user's connections, when the caller has just read them (saves a second read). */
+  rows?: Connection[],
+): Promise<boolean> {
+  const pending = (rows ?? (await listConnections(userId)))
     .filter((r) => r.status === 'pending')
     .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
     .slice(0, REFRESH_AT_MOST);
@@ -146,6 +150,7 @@ export async function refreshPendingConnections(userId: string): Promise<void> {
       }
     }),
   );
+  return pending.length > 0;
 }
 
 /** The web app's Apps page, where the user connects apps. */
@@ -294,8 +299,11 @@ export function connectReturnUrl(appSlug: string, returnUrl?: string): string {
  * for it, so the web app shows "Not available yet" instead of a Connect button.
  */
 export async function appCatalogFor(userId: string, plan: PlanId) {
-  await refreshPendingConnections(userId);
-  const [rows, setups] = await Promise.all([listConnections(userId), appSetups()]);
+  const [read, setups] = await Promise.all([listConnections(userId), appSetups()]);
+  // Read again only when a pending connection was asked about (it may have just finished).
+  const rows = (await refreshPendingConnections(userId, read))
+    ? await listConnections(userId)
+    : read;
   return CATALOG.map((app) => ({
     slug: app.slug,
     name: app.name,

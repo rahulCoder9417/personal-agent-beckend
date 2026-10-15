@@ -34,16 +34,16 @@ export const chatRoutes = [
     const userId = c.get('user').id;
     let conversationId = query.conversationId;
     let nothingToList = false;
-    if (conversationId) {
-      if (!(await getConversation(userId, conversationId)))
-        throw notFound('Conversation not found');
-    } else if (query.channel === 'web') {
+    if (!conversationId && query.channel === 'web') {
       const active = await findActiveConversation(userId, 'web');
       if (active) conversationId = active.id;
       // Web chat has no conversation yet, so it has no message either.
       else nothingToList = true;
     }
-    const [page, chatStartedAt] = await Promise.all([
+    // A named conversation must be this user's (404 otherwise). The check runs beside the reads,
+    // which are filtered by the user too, so a page waits for one round trip instead of two.
+    const [found, page, chatStartedAt] = await Promise.all([
+      query.conversationId ? getConversation(userId, query.conversationId) : true,
       nothingToList
         ? { items: [], nextCursor: null }
         : listMessages(userId, {
@@ -54,6 +54,7 @@ export const chatRoutes = [
           }),
       webChatStartedAt(userId),
     ]);
+    if (!found) throw notFound('Conversation not found');
     return c.json(
       {
         items: page.items.map(toApiMessage),

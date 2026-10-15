@@ -48,6 +48,102 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 15 October 2026: Telegram replies: where the time goes, "typing…" while the agent works, and fewer waits
+
+- **Where it is:** on the branch `perf/telegram-reply-speed` in the backend and in the vm-manager, waiting for your review. Not merged, not on the test server.
+- **Why:** you said replies from your agent on Telegram take too long, and asked which AI model it uses and whether the "high/low" setting is right. So the last Telegram turns on the test server were taken apart, stage by stage, from their stage times and the logs.
+
+  **Where the time went.** There are two Telegram turns in the stage times, one on each of your accounts. Both woke a sleeping container. Both ran on Claude Code, on your Claude plan, with the model and effort you chose in Settings: Sonnet 4.6, effort "low".
+
+  | Stage | Your new account, 15:33 | Your old account, 15:14 | What it is |
+  |---|---|---|---|
+  | Telegram to our server, until the job is queued | about 0.5 s | about 0.5 s | The webhook: find the chat, save the event, queue the job. Not in the totals below |
+  | Waiting for the worker and the lock | 0.00 s | 0.00 s | Nothing was waiting |
+  | Reading and saving the message | 1.6 s | 1.5 s | 6 to 7 trips to the database, one after another |
+  | Credits and the route | 0.23 s | 0.21 s | One trip. No router on the server, and a Claude-plan turn skips it anyway |
+  | Waking the container | 3.0 s (from sleep) | 4.7 s (made again, a new image) | The vm-manager: room under the awake limit 0.43 s, start 0.38 s, Bridge ready 0.56 s. The rest is our own and the vm-manager's trips to the database |
+  | Memory and the recap | 0.46 s | 0.21 s | Read after the wake |
+  | Handing the message to the Bridge | 0.66 s | 0.67 s | The vm-manager's trips to its database, then the Bridge takes it |
+  | Claude Code starting | 2.2 s | 3.7 s | The program starts and connects to our tools. About 1 s in a container that is already awake |
+  | The model, until its first words | 5.1 s | 2.8 s | Sonnet 4.6. The prompt cache was cold: 0 tokens read, 15 to 20 thousand written |
+  | Tool calls and later rounds | 0.07 s | 0.03 s | One model round, no tool |
+  | The reply, until it is on Telegram | 1.5 s | 1.4 s | `send_message` alone took 1.36 s on our server (5 trips), then the outbound job sends it |
+  | **The answer, after** | **14.9 s** | **15.1 s** | |
+  | Ending the turn, after the answer | 0.42 + 0.23 s | 0.46 + 0.22 s | The user already has the answer. The billing is a job of its own after this (no wait) |
+
+  For comparison, your web chat turns of the same afternoon with the container already awake took 6.3 to 6.5 s for a short answer, of which the model was 1.3 to 1.9 s (cache warm, 14 to 19 thousand tokens read). A Telegram turn with the container awake pays the same plus about 1.3 s more for reading and saving the message: about 8 s, which matches the 8.5 s measured earlier.
+
+  So in a warm Telegram turn about 5 s of the 8 is the database at Neon's distance: about 20 trips one after another, 0.2 to 0.26 s each (2 in the webhook, 7 reading and saving the message, 6 around the wake and the hand-over, 5 for the reply). About 1 s is Claude Code starting, and 1.5 to 2 s is the model. From sleep, the wake (3 to 4.7 s), a slower first start of Claude Code (2 to 4 s) and a cold prompt cache come on top.
+- **The model and the effort.**
+  - **Which engine ran:** Claude Code on your own Claude plan, on both accounts. Hermes did not run: the server has no provider key for Textcrew AI and no key for the router (Jev).
+  - **Which model and effort:** `claude-sonnet-4-6` with effort `low`, on both accounts. You chose them in the web app's AI settings (on the new account at 14:21 today). They are kept in the agent settings, travel with every Claude Code turn, and the Bridge starts Claude Code with `--model` and `--effort`. Effort low is right for chat: the model thinks little before it answers. One web turn at 14:19, just before you set "low", thought for 14 seconds before its first word.
+  - **When "Default" is left:** Claude Code picks. On a Max plan that is Opus 5.5 at effort medium (seen in the vm-manager's checks of Claude Code); Sonnet 4.6's own default is high. The platform sets no default model of its own (`BRIDGE_CLAUDE_MODEL` is not set). The crew uses the lead's model and effort.
+  - **A cheaper, faster choice:** Sonnet 4.6 is an older model. For short chat, Haiku 5.5 at "low" is likely the quickest; Sonnet 5.5 is the current Sonnet. Not measured here. You can switch in Settings at any time.
+  - **Prompt caching:** Claude Code uses Anthropic's prompt cache by itself, and it works: turns a few minutes apart read 14 to 51 thousand tokens from it. The two Telegram turns came more than an hour after the last one, so the cache had expired.
+  - **The size of the prompt:** about 15 to 20 thousand tokens at the start of a conversation: Claude Code's own instructions and tools, the three crew members, our 15 platform tools and our instructions. Normal for Claude Code; it is cached between turns.
+  - **Hermes (not running today):** Textcrew AI uses `cheap` (Llama 3.3 70B through OpenRouter) on Free and for quick replies, and `claude` (Claude Sonnet 5) on Pro and Max (`infra/litellm/config.yaml`). Neither our Hermes settings nor LiteLLM set a reasoning effort, so Hermes's own default applies; Hermes's source could not be checked from here. LiteLLM is not set to add prompt-cache marks, and the container asks for the name `agent-default`, so Hermes likely sends none: every model call would pay for its whole prompt again. Both are worth checking once a provider key works (see "Still open").
+- **What the user notices:**
+  - **"typing…" in Telegram** within about a second of sending, kept up while the agent works, gone with the answer. Before, the chat showed nothing for 8 to 15 seconds.
+  - **Replies come about 1.5 to 2 s sooner** (estimate for the server, see "Cost and speed").
+  - Nothing else changes: the same answers, the same credits.
+- **Backend:**
+  - **"typing…" on Telegram.** As soon as a message is known to be for the agent (after the special cases: link codes, `/new`, approval answers, coupons), the worker sends Telegram's "typing…" to the chat, and again every 4 seconds until the turn is over (Telegram keeps it about 5 seconds). The same for the agent's answer to an approval asked in a Telegram chat.
+    - Just before any message goes to a Telegram chat, the sender notes it in Redis. "typing…" then waits 6 seconds, so it never comes back under the answer while the turn ends (about 1 to 2 s on the server). If the turn goes on after a message, "typing…" comes back.
+    - It never holds up or fails a turn: a failed call is logged and the next one tried at the usual time.
+    - A new setting, `TELEGRAM_TYPING`, turns it off (`false`). It is on by default and shown on the admin settings page. Web chat, WhatsApp and iMessage are unchanged.
+  - **Reading and saving a Telegram message: 2 trips fewer.** The chat's "last message" time (which also clears the "blocked" mark) is written beside the next steps instead of before them; the turn starts only once it is saved, and a failed write still fails the job, which then runs again. Saving the message reads "already saved?" and the chat's active conversation at once.
+  - **The turn: 1 to 2 trips fewer.** Whether the user's container exists is read with the turn's first reads (credits, settings, conversation), not after the route. The memory block and which engine had the conversation are read while the container wakes, not after it. Only reads; the user's lock keeps any other turn from changing them meanwhile.
+  - **The reply: 2 trips fewer before it reaches Telegram.**
+    - `send_message` checks that the chat is the user's and reads the turn's conversation at once; the conversation is not read a second time when the message is saved.
+    - The send is queued as soon as the message is saved; the conversation's last-message time (the order of the chat list) is saved after it. That write no longer fails a message that is already on its way: before, a failure there made the Bridge send the answer again.
+    - A crew job's report is saved beside the message.
+- **vm-manager:**
+  - **Delivering a message: 1 trip fewer.** The turn's start is written as activity beside the hand-over to the Bridge, not before it. Nothing needs it first: the delivery counts as in flight, so neither the idle check nor the awake limit can stop the container, and the turn's end writes the activity again. A failed write is logged.
+  - **Waking from sleep: 1 trip fewer.** "Awake" and the time of last activity are written in one statement instead of two.
+- **Cost and speed:**
+  - Measured with the test `read-round-trips.test.ts` (every query waits 260 ms, every new connection 2 s; the vm-manager and the AI are fakes that take no time, so only our own work is in it), on the code before and after:
+
+    | A Telegram message | Before | After |
+    |---|---|---|
+    | The webhook answers Telegram | 0.79 s | 0.79 s |
+    | The first "typing…" | none | 1.05 s |
+    | The reply reaches Telegram | 5.04 s | 3.68 s |
+    | The job ends | 6.09 s | 4.74 s |
+
+    On the server the memory read also hides behind the wake (here the wake takes no time), about 0.25 s more.
+  - The vm-manager's two changes save one trip each to its database, about 0.2 s: on every turn, and again on every wake from sleep. Not measured on the server.
+  - **Expected on the server:** a Telegram reply with the container awake about 1.8 s sooner (8 s to about 6 s); from sleep about 2 s sooner (15 s to about 13 s). Not measured yet.
+  - **Telegram:** one extra Bot API call ("typing…") every 4 seconds while a turn runs. Free, and far under Telegram's limits.
+  - **Redis:** one short note per message sent to a Telegram chat, gone after 6 seconds.
+  - Credits: no change.
+- **Contracts:** none. `openapi.yaml` and `vm.proto` did not change. One new setting, `TELEGRAM_TYPING` (in `.env.example`). Inside the vm-manager its store has one new write (`MarkAwake`); nothing outside it changes.
+- **Database:** none. No new table, column or index, in either service.
+- **How it was checked:**
+  - Backend, new tests:
+    - `test/telegram-typing.test.ts` (6): "typing…" goes out before the agent has the message, is kept up while it works, and never comes after the answer; after a message in the middle of a turn it pauses, then comes back while the work goes on; the agent's answer to an approval asked in a Telegram chat gets it too; a failing "typing…" never holds up the turn; `TELEGRAM_TYPING=false` sends none; nothing for web chat, nothing for a chat that is not linked.
+    - `test/telegram-reply-speed.test.ts` (7): a chat marked blocked that writes again has the mark cleared before the agent answers; a failed write of the chat's last message time fails the job and the next try answers once; with every query delayed, at most 8 rounds of queries before the agent gets the message (11 before) and 3 from its answer to Telegram (5 before); `send_message` reads the chat and the conversation at the same moment, and the conversation once; a reply goes out once even when the conversation's last message time can't be saved (before: never sent); whether the container exists is read with the turn's first reads; memory and the engine record are read while the container wakes, and the memory still reaches the agent.
+    - Each new test was also run on the code before the change: the ones about speed and the one about the failed write fail there, as they should.
+    - `test/read-round-trips.test.ts` now also follows a Telegram message (the table above). The test database meter can now make one query fail, and count rounds of queries.
+  - vm-manager, new tests (`internal/sandbox/fewer_waits_test.go`, and the store suite on memory and on real Postgres): a wake from sleep writes "awake" and the activity once, a warm wake writes neither; a delivery reaches the Bridge while the activity write is still held, the write then lands, and a failing write does not fail the delivery; `MarkAwake` never moves the last activity backwards. Both sandbox tests fail on the code before.
+  - Results: see "Test results" below.
+  - Not yet run on the server.
+- **Test results:**
+  - Backend: lint and the type check pass. The full run: 916 of 916 tests pass (76 files).
+  - vm-manager: `go vet` is clean, the linter finds 0 issues, and `go test -race ./...` passes in every package, the store suite on real Postgres included. The Bridge's tests (unchanged): 239 pass, 1 skipped (the real browser).
+  - On this laptop the test runs kept their temporary files on the main disk, because `/tmp` was full with other test runs. One Bridge test (the browser meter reached through a link) fails when the temporary folder's path has a space in it; it passes with the usual `/tmp`, on this branch and on `main`. Inside a container the paths have no spaces.
+- **Still open (your decisions):**
+  - **Moving Neon closer.** The biggest share of a warm reply is still trips to the database in Ohio: about 13 in a row after this change (20 before), 0.2 to 0.26 s each. Neon in Singapore (about 50 ms from Mumbai) would take about 2.5 s more off every Telegram turn, and the vm-manager's trips too. Same plan price; it needs a move of both databases with a short stop.
+  - **Keeping containers awake longer.** A message after more than 3 idle minutes pays the wake (3 to 5 s), a slower first Claude Code start (1 to 3 s more) and often a cold prompt cache (2 to 3 s more). An idle stop at 10 or 15 minutes would spare that for messages in that window. Cost: the awake time is charged to users in credits, and each awake container holds about 600 MB of the server's memory (the test server allows 3 at once).
+  - **A default model for chat.** With "Default" left in Settings, a Claude-plan user runs Claude Code's own choice: Opus 5.5 at medium on Max, which thinks longer than a chat reply needs. A platform default (for example Sonnet 5.5 or Haiku 5.5 at "low") would be faster. It is the user's plan and the answers' quality, so it is your call. For your own account: Haiku 5.5 or Sonnet 5.5 at "low" in Settings is worth a try.
+  - **Hermes, once a provider key works:** turn on prompt caching for the Anthropic model in LiteLLM (it can add the cache marks itself), set Hermes's reasoning effort explicitly (low for chat), and check the models: Llama 3.3 70B for Free is weak with tools.
+  - **Claude Code starts for every turn** (about 1 s awake, 2 to 4 s after a wake). Keeping one Claude Code running per conversation between turns would save most of it. A larger change in the Bridge; it needs a design first.
+  - **Answers streamed on Telegram.** Telegram gets the answer in one piece. Showing it as it is written (editing the message) costs many Bot API calls and helps mainly long answers; "typing…" covers the wait for short ones.
+  - **"typing…" half a second sooner.** The worker reads the event and the chat's link before it knows where to send "typing…" (2 trips). The job could carry the chat from the webhook. Small; not done.
+  - **The vm-manager's end of a turn** writes 3 times to its database before it tells the backend the turn is over (about 0.6 s before the next message can start). It could tell first; that needs care with the "busy" state. Not changed.
+  - The 16.4 s and 8.5 s turns measured earlier are no longer in the stage times of your two accounts, so the table above uses the two Telegram turns that are.
+- **Docs updated:** `backend-report.md` section 4 ("Keeping reads fast"), section 9 (what the turn reads at once, a new part "\"typing…\" in the chat"), section 10 (the path), section 33 (waking, delivering) and section 42 (the new setting); `hld-mvp.md` section 5.2, step 7.
+- **Commits:** backend `ef701b8` (the measuring test), `851ba42` (fewer trips for a Telegram message), `7b89896` (the turn's early reads), `2438629` ("typing…"), and the docs commit that adds this entry; vm-manager `c6611b6`.
+
 ### 15 October 2026: connecting the same account again replaces the old connection, and its automations move over
 
 - **Where it is:** on `main` and on the test server since 15 October.

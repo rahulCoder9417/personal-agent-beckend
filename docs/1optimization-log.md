@@ -75,7 +75,7 @@ Each entry has a heading with the date and the name of the feature, then the par
   - **The privacy page and the backups.** The page says backups are "14 days rolling" and "fully cleared within 30 days". The backend keeps its database dumps 7 days (`BACKUP_KEEP_DAYS`, 7 by default and in `.env.example`; the server's own value was not read: the admin Settings page shows it). The archives of users' files are never deleted, so a deleted user's files stay in them. The nightly backup has also not been seen to work on the server yet (`aws-setup.md`). Neon keeps its own history of the database too.
   - **Other things the page promises:** raw incoming events "30 days", but a failed event is never removed. A deleted account's `users` row keeps the email and the name.
 - **Docs updated:** `backend-report.md` sections 6, 13, 14, 15, 31, 33 (the steps, a Composio failure, and a new table of what stays), 37 and 43; `hld-mvp.md` section 12 (built, never run for real; and a new open question on the privacy page).
-- **Commits:** `86ed5e3` (code and tests), and the docs commit after it.
+- **Commits:** `86ed5e3` (code and tests) and `d497871` (docs).
 
 ### 15 October 2026: sign-in moves to Clerk's production setup, with Textcrew's own Google sign-in
 

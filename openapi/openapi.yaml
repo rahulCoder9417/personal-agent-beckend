@@ -19,7 +19,11 @@ info:
     - Auth: Clerk session JWT as `Authorization: Bearer <token>` on every `/v1` route.
     - Lists use cursor pagination (`cursor`, `limit`); responses carry `nextCursor` (null at the end).
     - Money is in US cents; credits are integers (1 credit = $0.01 of price).
-    - Errors always use the `Error` schema.
+    - Errors always use the `Error` schema. A 500 `internal` error gives the request id as
+      `details.requestId`, so a report can quote it.
+    - Every answer carries an `X-Request-Id` header: the id the server logs this request under.
+      A caller may send its own `X-Request-Id` (up to 64 letters, digits, `_` or `-`); it is kept,
+      otherwise the server makes one. Not repeated under each route.
     - Any signed-in route can answer 403 `account_suspended` while an admin has suspended the
       account (see `POST /v1/admin/users/{userId}/suspend`), and 429 `rate_limited` from the
       per-address limit. Neither is repeated under each route.

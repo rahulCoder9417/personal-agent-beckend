@@ -37,6 +37,7 @@ export function mountMcp(app: Hono<AppEnv>): void {
         401,
       );
     }
+    c.set('containerUserId', userId);
     // Suspended by an admin: a turn that was running keeps no tools; the container is stopped.
     if (await isSuspended(userId)) {
       return c.json(

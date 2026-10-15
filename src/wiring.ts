@@ -1,7 +1,7 @@
 // Composition root: connects modules through their exported hooks. Imported by api and worker.
 import { toBalance } from './api/billing-presenters.ts';
 import { markBlocked } from './modules/auth/links.ts';
-import { getActiveUser } from './modules/auth/users.ts';
+import { getActiveUserCached } from './modules/auth/users.ts';
 import {
   deleteUserAutomations,
   pauseAllForCredits,
@@ -134,7 +134,7 @@ export function wireModules(): void {
 
   // Max plan: priority in the inbound queue (lower number runs first; FIFO within a priority).
   setInboundPriority(async (userId) => {
-    const plan = (await getActiveUser(userId))?.plan;
+    const plan = (await getActiveUserCached(userId))?.plan;
     return plan === 'max' ? 1 : plan === 'pro' ? 2 : 3;
   });
 

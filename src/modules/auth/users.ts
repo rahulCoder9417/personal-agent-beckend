@@ -4,6 +4,7 @@ import { config } from '../../shared/config.ts';
 import { db, type Tx } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import { users } from './schema.ts';
+import { forgetUser, keepUser, keepUserId, knownUserId, readUser } from './user-cache.ts';
 
 export type User = typeof users.$inferSelect;
 export type PlanId = User['plan'];
@@ -70,6 +71,34 @@ export async function getUserByClerkId(clerkId: string): Promise<User | undefine
   return row;
 }
 
+// --- reads from the short-lived copy (user-cache.ts) --------------------------------------------
+// For the reads made on almost every request. Every change below drops the copy, so these are as
+// fresh as a database read except for a moment around a change; anything that changes a user's
+// row reads it with the functions above.
+
+/** The user's row (deleted ones too), from the copy when there is a fresh one. */
+export async function getUserCached(userId: string): Promise<User | undefined> {
+  return readUser(userId, () => getUser(userId));
+}
+
+/** The user, unless deleted, from the copy when there is a fresh one. */
+export async function getActiveUserCached(userId: string): Promise<User | undefined> {
+  const user = await getUserCached(userId);
+  return user && !user.deletedAt ? user : undefined;
+}
+
+/** The user signed in with this Clerk id (deleted ones too), from the copy when there is one. */
+export async function getUserByClerkIdCached(clerkId: string): Promise<User | undefined> {
+  const known = await knownUserId(clerkId);
+  if (known) {
+    const user = await getUserCached(known);
+    if (user?.clerkId === clerkId) return user;
+  }
+  const row = await getUserByClerkId(clerkId);
+  if (row) await Promise.all([keepUserId(clerkId, row.id), keepUser(row)]);
+  return row;
+}
+
 /**
  * Creates the user row (idempotent on clerk_id). `created` is true only for the call that
  * inserted it, so the caller can run one-time onboarding (sign-up grant, sandbox).
@@ -95,6 +124,7 @@ export async function upsertUserFromClerk(
     .set({ email: data.email, emailVerified: data.emailVerified, role: data.role })
     .where(eq(users.clerkId, data.clerkId))
     .returning();
+  await forgetUser(updated!.id);
   return { user: updated!, created: false };
 }
 
@@ -104,6 +134,7 @@ export async function markUserDeleted(clerkId: string): Promise<User | undefined
     .set({ deletedAt: new Date() })
     .where(and(eq(users.clerkId, clerkId), isNull(users.deletedAt)))
     .returning();
+  if (row) await forgetUser(row.id);
   return row;
 }
 
@@ -117,6 +148,7 @@ export async function updateProfile(
     .set({ ...patch, ...(patch.timezone !== undefined ? { timezoneSet: true } : {}) })
     .where(eq(users.id, userId))
     .returning();
+  await forgetUser(userId);
   return row!;
 }
 
@@ -127,6 +159,7 @@ export async function setPlan(userId: string, plan: PlanId, tx: Tx = db()): Prom
     .set({ plan })
     .where(and(eq(users.id, userId), ne(users.plan, plan)))
     .returning({ id: users.id });
+  if (rows.length) await forgetUser(userId);
   return rows.length > 0;
 }
 
@@ -140,6 +173,7 @@ export async function setRole(userId: string, role: User['role'], tx: Tx = db())
     .set({ role })
     .where(and(eq(users.id, userId), ne(users.role, role)))
     .returning({ id: users.id });
+  if (rows.length) await forgetUser(userId);
   return rows.length > 0;
 }
 
@@ -159,19 +193,25 @@ export async function setAccountStatus(
     .set({ status, suspendedAt: status === 'suspended' ? new Date() : null })
     .where(and(eq(users.id, userId), isNull(users.deletedAt), ne(users.status, status)))
     .returning();
-  if (row) return { user: row, changed: true };
+  if (row) {
+    await forgetUser(userId);
+    return { user: row, changed: true };
+  }
   const user = await getActiveUser(userId, tx);
   return user ? { user, changed: false } : undefined;
 }
 
-/** An admin suspended this account: no signed-in call, no answer, no wake until it is lifted. */
+/**
+ * An admin suspended this account: no signed-in call, no answer, no wake until it is lifted. From
+ * the copy (suspending drops it, so the answer changes at once).
+ */
 export async function isSuspended(userId: string): Promise<boolean> {
-  const [row] = await db().select({ status: users.status }).from(users).where(eq(users.id, userId));
-  return row?.status === 'suspended';
+  return (await getUserCached(userId))?.status === 'suspended';
 }
 
 export async function flagUser(userId: string): Promise<void> {
   await db().update(users).set({ flagged: true }).where(eq(users.id, userId));
+  await forgetUser(userId);
 }
 
 // --- admin reads (counts and lists; never anything a user wrote) ------------------------------

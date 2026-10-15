@@ -5,7 +5,7 @@ import { logger } from '../../shared/logger.ts';
 import { redis } from '../../shared/redis.ts';
 import { alert } from '../admin/alerts.ts';
 import { audit } from '../admin/audit.ts';
-import { getActiveUser, isSuspended } from '../auth/users.ts';
+import { getActiveUserCached, isSuspended } from '../auth/users.ts';
 import { conversationFor, isAutomationsChat } from '../channels/conversations.ts';
 import { signedFileUrl } from '../channels/files.ts';
 import { setMessageStatus } from '../channels/messages.ts';
@@ -381,7 +381,7 @@ interface Woken {
 
 /** Makes sure the container exists and wakes it. Null: the user is gone, or suspended. */
 async function wakeContainer(userId: string, timer: TurnTimer): Promise<Woken | null> {
-  const user = await getActiveUser(userId);
+  const user = await getActiveUserCached(userId);
   // A suspended account's container is never woken (an admin's decision).
   if (!user || user.status === 'suspended') return null;
   await ensureSandbox(userId);

@@ -1,7 +1,7 @@
 import { addJob } from '../events/queues.ts';
 import {
   fetchClerkUser,
-  getUserByClerkId,
+  getUserByClerkIdCached,
   upsertUserFromClerk,
   type ClerkUserData,
   type User,
@@ -28,7 +28,7 @@ export async function provisionUser(data: ClerkUserData): Promise<User> {
  * webhook, the user is provisioned from Clerk's API (same idempotent path as the webhook).
  */
 export async function resolveSessionUser(clerkId: string): Promise<User | undefined> {
-  const existing = await getUserByClerkId(clerkId);
+  const existing = await getUserByClerkIdCached(clerkId);
   if (existing) return existing.deletedAt ? undefined : existing;
   const data = await fetchClerkUser(clerkId).catch(() => undefined);
   if (!data) return undefined;

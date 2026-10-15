@@ -331,7 +331,7 @@ export async function reverseTurn(
     });
     return usage.restored + appActions + paidTools;
   });
-  if (restored > 0) await afterCreditsAdded(userId);
+  if (restored > 0) await afterCreditsAdded(userId, { litellm: readAi });
   return aiSkipped ? { restored, aiSkipped: true } : { restored };
 }
 

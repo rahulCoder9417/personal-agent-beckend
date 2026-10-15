@@ -68,6 +68,8 @@ export class FakeLiteLLM implements LiteLLMClient {
   spendLogFailures: number | 'always' = 0;
   /** Every spend-log read, failed ones too. */
   spendLogReads = 0;
+  /** Every read of a key's total spend (`/key/info`), failed ones too. */
+  keySpendReads = 0;
 
   private check(op: string) {
     if (this.down) throw new Error(`LiteLLM POST /${op} failed: 503`);
@@ -94,6 +96,7 @@ export class FakeLiteLLM implements LiteLLMClient {
     this.calls.push('delete');
   }
   async getKeySpend(key: string): Promise<KeySpend> {
+    this.keySpendReads++;
     this.check('key/info');
     return this.sum(this.get(key), -Infinity, Infinity);
   }

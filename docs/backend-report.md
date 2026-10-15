@@ -123,7 +123,7 @@ There are two because some work is slow. One agent turn can take up to 15 minute
 | Service | What it is for |
 |---|---|
 | Postgres | The database. Keeps what must last: users, messages, events, credits. On the laptop it is a container. On the server it moves to Neon, a managed Postgres in Ohio (section 40). |
-| Redis | A fast store in memory. Holds the job queues, locks, counters and live updates. |
+| Redis | A fast store in memory. Holds the job queues, locks, counters and live updates, and short-lived copies of what almost every request reads (section 4, "Keeping reads fast"). |
 | vm-manager | Our Go service. The only one that may create, wake or delete containers. |
 | LiteLLM | A gateway to the AI models. Gives each user a key with a spending limit. |
 | Caddy | The web server at the front. Handles HTTPS and forwards requests to the api. |
@@ -225,8 +225,40 @@ This section follows one request from the web app through the api, check by chec
 The web app signs the user in with Clerk. Clerk gives the browser a session token, a signed text that proves who the user is. The web app sends it with every request.
 
 1. The api checks the token's signature with Clerk's key. A missing, old or forged token is refused.
-2. The token holds Clerk's id of the user. The api finds the matching row in `users`. A deleted account is refused. A suspended account is refused with `account_suspended` (section 31).
+2. The token holds Clerk's id of the user. The api finds the matching row in `users`, from the short copy in Redis when there is one (below). A deleted account is refused. A suspended account is refused with `account_suspended` (section 31).
 3. If there is no row yet, the api reads the user from Clerk and creates the account. This covers a user who arrives before Clerk's sign-up webhook.
+
+### Keeping reads fast
+
+The database is on Neon, in Ohio, and the server is in Mumbai. Each trip to the database takes about 260 ms there and back, and opening a new connection to it about 1.5 to 2.5 seconds. So the time a page takes is mostly the number of trips it waits for, one after another, plus any connection it has to open. Since 15 October 2026 the backend cuts both.
+
+**The connections stay open.** The api and the worker each keep 10 connections to the database open at all times (`DB_POOL_MIN`), however long nothing happens. They open them when they start, and every minute (`DB_PING_SECONDS`) each idle one is checked with a tiny query. A connection that died, because Neon restarted or the network dropped it, is replaced then, so a user's request does not pay for opening it. More connections are opened when needed, up to 20, and those close again after 5 minutes idle. Before, every connection closed after 5 minutes idle, so the first page after a quiet spell opened about 8 at once and waited 2 to 5 seconds for them.
+
+**A dropped connection no longer stops the program.** Before, a connection that died while idle raised an error nothing listened to, and Node ends a program on such an error. The api or the worker then restarted. Now the error is written to the log and the connection replaced.
+
+**A short copy of the user's row in Redis.** Who is signed in (every web app call), whether the account is suspended (every turn and every tool call of the agent) and the plan (the queue's priority, the wake) all come from the user's row in `users`. Each read was a trip to Neon. They now read a copy kept in Redis, on the same server:
+
+- The copy is used for 60 seconds at most.
+- Every change to a user's row drops the copy at once: a suspension or its lifting, a new plan, a new role, a deletion, a new name or time zone, the first-run marks (also an admin's reset), a chargeback mark, and Clerk's updates. For the next 30 seconds no new copy is kept, and reads go to the database. A change made inside a longer transaction is saved within that time, so a read that saw the old row just before can't keep it.
+- If Redis can't be reached, every read goes to the database, as before.
+- Which user a Clerk id belongs to never changes, so that is kept for a day.
+
+Example: an admin suspends Ravi while he has the web app open. His next request is refused with `account_suspended`, not up to a minute later.
+
+**Who a container token belongs to** is kept in Redis for 10 minutes (section 13).
+
+**Reads that don't depend on each other run at the same time.** Examples: opening a conversation reads its messages, checks that it is the user's and reads when web chat started, all at once. The balance shown in the web app is one read of the grants (section 23). Sending a message checks the credits, the files and whether it was already sent, all at once.
+
+What this means, measured with every query made to wait 260 ms and every new connection 2 seconds (the test `read-round-trips.test.ts` does this on request):
+
+| | Before | After |
+|---|---|---|
+| A simple page call (the profile, the approvals, a list) | 0.53 s | 0.27 s |
+| Opening a conversation's messages | 0.79 s | 0.26 s |
+| The chat page, all its calls, then the messages | 1.33 s | 0.54 s |
+| The chat page after a few quiet minutes | 3.3 to 5.4 s | 0.54 s |
+| Sending a message, until the api answers | 2.9 s | 1.8 s |
+| Sending a message, until the reply shows (not counting the AI's own time) | 6.1 s | 3.2 s |
 
 ### The error shape
 
@@ -555,7 +587,7 @@ Three things run side by side, so a quick answer does not wait for each step in 
 
 - **The quick reply is written while Jev decides.** For a message of up to 200 characters, the worker asks the cheap model for its reply at the same moment it asks Jev. The reply is used only if Jev says "simple" and the model did not pass it on. Otherwise the request to the model is stopped and the reply is dropped. A longer message is rarely simple, so its quick reply is asked for only after Jev says "simple". Example: Rahul writes "hlo". Before, he waited for Jev, then for the model. Now he waits for whichever of the two is slower.
 - **The container starts waking while Jev decides.** As soon as the message is one Jev will judge, the worker starts the wake of steps 11 and 12. A task then waits for the slower of the routing and the wake, not for both. A message that turns out simple or spam leaves the container awake but idle, and the idle check stops it after 3 minutes. That awake time is charged as usual (section 24), about a third of a credit. The setting `WAKE_WHILE_ROUTING` switches this off.
-- **The user's agent settings are read while the container wakes,** once per turn.
+- **What the turn needs is read at once.** At the start of the turn the worker reads the conversation, whether the user has credits and the user's agent settings together, and reads the settings only once per turn. While the container wakes it reads what the agent has saved about the user and the recap of step 13 together. Only reads move earlier: each decision is still made at its place in the steps.
 
 A user whose Claude plan pays never reaches Jev: the turn goes straight to the wake.
 
@@ -830,7 +862,7 @@ The Platform MCP is the platform's tool server. MCP is a standard way for an AI 
 1. The vm-manager creates a user's container. It also creates a token: a long random secret, placed inside that container.
 2. The backend gets only a hash of the token. A hash is a one-way fingerprint: nobody can turn it back into the token.
 3. The backend saves the hash next to the user id, in the table `sandbox_tokens`.
-4. On every call, the container sends its token. The api makes its hash and looks it up.
+4. On every call, the container sends its token. The api makes its hash and looks it up. Which user a hash belongs to is kept in Redis for 10 minutes, so the agent's tool calls don't each wait for the database. When the user's container record is removed, that copy goes with it, and the token stops working at once.
 5. Found: the call runs as that user. Not found: the call is refused. Found, but an admin suspended the account: the call is refused too (section 31).
 6. The user id always comes from this lookup. No tool has an input for a user id. So an agent cannot act as another user, whatever a web page tells it.
 
@@ -1497,6 +1529,8 @@ The ledger is the list of every change to a user's credits. It is the table `cre
 A single stored balance goes wrong easily. Two jobs change it at the same moment, and one change is lost. A job runs twice and changes it twice. The number looks wrong, and nothing shows how it got there.
 
 So the system stores only grants and ledger rows, and works the balance out each time. Every credit change for one user runs alone: the database holds a lock for that user until the change is saved. The total of a user's ledger rows always equals the total left in their grants.
+
+The balance the web app shows is worked out the same way, in a single read of the user's grants, together with what it needs beside it (when the next credits expire, or the grants themselves). It is never kept in Redis or anywhere else. A charge does not use it: it reads the grants again, under the user's lock.
 
 ### The balance and the order of spending
 
@@ -2846,7 +2880,7 @@ This section lists every table of the backend's database, grouped by the module 
 There are three databases: the backend's, the vm-manager's and LiteLLM's. Each program has its own and none reads another's.
 
 - **On the laptop** they are in one `postgres` container, which starts only when Docker Compose is given the `localdb` profile.
-- **On the server** they move to Neon, a managed Postgres, decided on 14 October 2026. The Neon project is in Ohio while the server is in Mumbai, so each query takes about 260 ms there and back. You chose Ohio knowing this. Opening a new connection takes longer, about 1.5 to 2.5 seconds, so the backend keeps its idle connections open for 5 minutes instead of 10 seconds. The move itself is a script still to be run on the server (`aws-setup.md`, section 8).
+- **On the server** they moved to Neon, a managed Postgres, on 14 October 2026. The Neon project is in Ohio while the server is in Mumbai, so each query takes about 260 ms there and back. You chose Ohio knowing this. Opening a new connection takes longer, about 1.5 to 2.5 seconds, so the api and the worker each keep 10 connections open at all times and check them every minute (section 4, "Keeping reads fast").
 - The server's addresses come from three settings in `compose.env`: `BACKEND_DATABASE_URL`, `VM_MANAGER_DATABASE_URL` and `LITELLM_DATABASE_URL`. All three use Neon's direct address, not its pooled one: LiteLLM's table set-up and the vm-manager's migration lock do not work through the pooler, and the nightly copy needs the direct address too.
 - The backend's database on Neon is called `agent`, like today. Neon's ready-made `neondb` belongs to the landing page's waitlist.
 - The connection is encrypted and the server's certificate is checked. The admin settings page says only whether the database address is set, never the address itself.
@@ -2929,6 +2963,8 @@ This section lists the backend's settings by group. They are environment setting
 | Addresses | `PUBLIC_API_URL`, `WEB_APP_URL` | The public addresses of the api and the web app, used in links sent to users | Local test addresses |
 | | `TRUST_PROXY` | Trusts the visitor address that Caddy passes on | All visitors count as one address for rate limits |
 | Database and queue | `DATABASE_URL`, `REDIS_URL` | Where the database and Redis are | The backend does not start |
+| | `DB_POOL_MIN` | Database connections the api and the worker each keep open even when idle (at most 20) | 10. With 0, none are kept |
+| | `DB_PING_SECONDS` | How often those idle connections are checked with a tiny query, and any that died replaced | 60. With 0, never |
 | | `ENCRYPTION_KEY` | Encrypts the secret columns. 32 random bytes | The backend does not start |
 | Sign-in | `CLERK_SECRET_KEY` | Checks the web app's sessions with Clerk, the sign-in service | No signed-in call works, unless `CLERK_JWT_KEY` is set |
 | | `CLERK_WEBHOOK_SECRET` | Checks Clerk's webhooks | Every Clerk webhook is refused |

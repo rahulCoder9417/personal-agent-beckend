@@ -48,6 +48,66 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 15 October 2026: pages and replies wait for fewer trips to the database
+
+- **Where it is:** on `main`, not yet on the server. Its database update (`0024_messages_event_id`, one index) runs on Neon at the next deploy.
+- **Why:** you said opening chats, lists and the app's pages, and replies, take far too long. Since 14 October the database is on Neon in Ohio and the server in Mumbai: each trip to the database takes about 260 ms, and opening a new connection 1.5 to 2.5 seconds. So a page's time is mostly how many trips it waits for, one after another, plus the connections it has to open. Where the time went, measured:
+  - **Every signed-in call first read the user's row:** one trip before the call's own work. Most calls waited for 2 trips (0.53 s), opening a conversation for 3 (0.79 s), the app list for 3.
+  - **Connections closed after 5 minutes idle.** The first page after a quiet spell asks for about 8 things at once, so it opened about 8 connections: the chat page took 3.3 to 5.4 seconds instead of 1.3.
+  - **Sending a web chat message** waited for 11 trips one after another before the api answered (2.9 s), and about 23 before the reply showed (6.1 s, not counting the AI's own time or a cold container).
+  - **Each tool call of the agent** made 2 trips (whose token is this, is the account suspended) before doing anything.
+  - **Every incoming Telegram message** was looked up by its event with no index for it, so each lookup read the whole messages table. Small today; it grows with every message.
+  - **Found on the way:** the connection pool had nothing listening for errors. A connection that died while idle (Neon restarted, the network dropped it) would have ended the api or the worker, which then restarted.
+- **What the user notices:** pages open and replies come faster. The chat page after a quiet spell opens in about half a second instead of 3 to 5 seconds. A reply shows about 3 seconds sooner. See "Cost and speed".
+- **Backend:**
+  - **Connections stay open.** The api and the worker each keep 10 database connections open at all times (new setting `DB_POOL_MIN`), open them when they start, and check each idle one every minute with a tiny query (`DB_PING_SECONDS`). One that died is replaced then, so a user's request does not pay for opening it. Extra connections, up to 20, still close after 5 minutes idle.
+  - **A dropped connection no longer ends the program.** It is written to the log and replaced.
+  - **A short copy of the user's row in Redis.** Who is signed in, whether the account is suspended and the plan are read from a copy kept in Redis, on the same server, instead of from Neon. The copy lives 60 seconds at most. Every change to a user's row drops it at once (a suspension or its lifting, a plan, a role, a deletion, a name or time zone, the first-run marks including an admin's reset, a chargeback mark, Clerk's updates), and for 30 seconds after a change no new copy is kept, so a read made just before a transaction is saved can't keep the old row. If Redis is down, reads go to the database as before. A suspension still refuses the very next call.
+  - **Which user a container token belongs to** is kept in Redis for 10 minutes, by the token's hash (never the token). Removing the user's container record drops it, so the token stops at once.
+  - **Reads that don't depend on each other run at the same time.** Opening a conversation reads its messages, checks it is the user's and reads when web chat started, all at once (a missing one still answers 404). The app list reads the user's connections once instead of twice. Sending a message checks the credits, the files and whether it was already sent at once, and reads a named conversation once instead of twice. The turn reads the conversation, the credit check and the agent settings at once (the settings once, not twice), and the saved memory with the recap.
+  - **The balance shown in the app is one read of the grants.** `GET /v1/me`, `GET /v1/credits` and the live balance after a turn each used two queries; now one, with the same numbers. Nothing about credits is cached, and charges are untouched: they still read the grants under the user's lock.
+  - **An index on messages by event**, for the Telegram lookup above.
+  - Everything else stays as it was: every user query is filtered by the user's id, modules still call each other's functions only, every job is still safe to run twice, errors keep their shape.
+- **Cost and speed:**
+  - Measured with a test that makes every database query wait 260 ms and every new connection 2 seconds (`test/read-round-trips.test.ts`, which prints this table on request). The same test ran on the code before and after this change. The AI's own time and the container's wake are not in it: the vm-manager and the models are fakes there.
+
+    | | Trips before | Trips after | Time before | Time after |
+    |---|---|---|---|---|
+    | `GET /v1/me` (profile and balance) | 3 | 1 | 0.53 s | 0.27 s |
+    | `GET /v1/approvals`, `/v1/conversations`, `/v1/channels`, `/v1/activity`, `/v1/automations`, `/v1/memories`, `/v1/crew-jobs` and the other lists | 2 | 1 | 0.53 s | 0.27 s |
+    | `GET /v1/agent/status`, `/v1/crew` | 1 | 0 | 0.27 s | 0.00 s (plus the vm-manager's own time) |
+    | `GET /v1/messages` (open a conversation) | 4 | 3, all at once | 0.79 s | 0.26 s |
+    | `GET /v1/apps` | 4 | 2, at once | 0.79 s | 0.26 s |
+    | `GET /v1/credits` | 3 | 1 | 0.53 s | 0.26 s |
+    | `GET /v1/agent/settings`, `/v1/byok` | 3 | 2, at once | 0.53 s | 0.26 s |
+    | The chat page: 8 calls at once, then the messages | 17 | 8 | 1.33 s | 0.54 s |
+    | The chat page after a few quiet minutes | 17, and about 8 new connections | 8, no new connection | 3.3 to 5.4 s | 0.54 s |
+    | The chat page with no connection open (right after a start) | 17, and about 8 new connections | 8, and 5 new connections | 3.3 to 5.4 s | 2.6 s |
+    | The credits page: 8 calls at once | 14 | 5 | 0.54 s | 0.27 s |
+    | Sending a web message, until the api answers | 11 in a row | 7 in a row | 2.9 s | 1.8 s |
+    | Sending a web message, until the reply shows | about 23 in a row | about 12 in a row | 6.1 s | 3.2 s |
+    | The whole turn, until the job ends and the next message can start | 52 | 42 | 11.0 s | 8.1 s |
+
+  - **Moving Neon to Singapore** (about 40 to 60 ms a trip) would come on top. At 50 ms a trip, with this change: about 0.05 s for a simple page call, 0.1 s for the chat page, about 0.6 s until a reply shows, about 1.6 s for the whole turn, and roughly 0.3 s to open a connection. Without this change the reply would still wait about 1.2 s there.
+  - **Neon:** 10 connections kept per process, 20 in all, well under Neon's limit. The check every minute sends one tiny query per idle connection. It adds no compute time: the vm-manager already asks its own database, on the same Neon project, every 30 seconds, so the database is kept awake already.
+  - **Redis:** one small copy per active user (a few KB) and one short line per container token, each removed by Redis after 60 seconds or 10 minutes.
+  - Credits: no change. The index makes each new message a little slower to save, too little to measure.
+- **Contracts:** none. `openapi.yaml` and `vm.proto` did not change.
+- **Database:** no new table. One new index, `messages_event_id_index` (database update `0024_messages_event_id`).
+- **How it was checked:**
+  - New tests: the round trips of every read the web app makes, each with a budget, a whole page opening no new connection with the pool warm, and the Telegram lookup using the new index (25); the pool keeping its connections, using them, replacing one that was killed, and not pinging busy ones (4); the user's copy used, dates kept, Redis down falling back to the database, and each kind of change showing on the very next call: a suspension and its lifting, a change inside a transaction, a plan, a name and time zone, the first-run marks from the user and from an admin's reset, a role from Clerk, a deletion (11); the token owner kept and dropped when the record goes, a made-up token never kept (2); the one-read balance giving exactly the two-read numbers at three moments, with expiring, spent and debt grants (4).
+  - The pool test found the missing error listener: a killed connection raised an error nothing handled.
+  - Three tests changed: two waited for a container wake that runs in the background and that nobody waits for (a "simple" message), which now can arrive after the answer; and one retry test now counts only its own user's wakes, since an earlier test's background wake could land in it.
+  - Lint and the type check pass. After merging `main`, the full backend run: 846 of 846 tests pass. In earlier full runs, now and then one timing test failed while the whole run was busy (a crew job, the browser switch, a refund job's retries, Jev routing), each passing alone; the commit before this work showed the same, 1 failed run in 4.
+  - Not run against Neon itself, and not yet on the server.
+- **Still open:**
+  - **After the reply, a turn still makes about 19 trips in a row (about 5 s at Neon's distance) before it gives the user's lock back.** About 12 of them are the usage sync, which charges the credits. A second message sent right after a reply waits for all of it. It could give the lock back before the sync, or run as a job of its own; both change how the charging is ordered, so it is your call. Not changed here.
+  - **The vm-manager's own database is on Neon too.** `GET /v1/agent/status` and every wake ask the vm-manager, which reads its database in Ohio. Not measured here, and the vm-manager is unchanged.
+  - **The web app** asks Clerk for a fresh token on every call, and an approval card in a conversation can ask for the approvals up to 4 times in a row (pending, approved, rejected, expired) to find its own. Both are the web app's work.
+  - **Moving Neon to Singapore** is the structural fix (above).
+- **Docs updated:** `backend-report.md` section 1 (the Redis row), section 4 (the sign-in check and a new part "Keeping reads fast"), section 9 (what the turn reads at once), section 13 (how a container proves who it is), section 23 ("Why no balance number is stored"), section 40 ("Where the database lives") and section 42 (the two new settings); `.env.example`.
+- **Commits:** `590470c` (the measuring test), `802c085` (connections kept open, the error listener), `ace4648` (the user's copy), `80563db` (the token owner), `379f85d` (the balance in one read), `6bd4436` (messages and app list), `4503e28` (sending and the turn), `31f84a4` (first-run marks test), `a82d11c` (the index and the budgets), and the docs commit that adds this entry.
+
 ### 15 October 2026: the web app's first-run marks (welcome steps and "Getting started")
 
 - **Where it is:** on `main`, not yet on the server. Its database update runs on Neon at the next deploy (`deploy.sh` runs the migrations before it starts the new api and worker).

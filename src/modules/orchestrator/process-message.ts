@@ -273,12 +273,16 @@ export async function sendWebMessage(
 ): Promise<{ message: MessageRow; eventId: string }> {
   if (!isChannelEnabled('web')) throw channelDisabled('web');
   await enforce({ key: `msg:user:${userId}`, max: 30, windowSeconds: 60 });
-  if (!(await userHasCredits(userId))) throw outOfCredits();
   const ids = input.attachmentIds ?? [];
-  const files = await getUserAttachments(userId, ids);
+  // Three reads that don't depend on each other, at once: each is a round trip to the database.
+  const [credits, files, sent] = await Promise.all([
+    userHasCredits(userId),
+    getUserAttachments(userId, ids),
+    // The same message sent again changes nothing, not even which conversation is active.
+    getWebMessage(userId, input.clientMessageId),
+  ]);
+  if (!credits) throw outOfCredits();
   if (files.length !== ids.length) throw badRequest('Unknown attachment');
-  // The same message sent again changes nothing, not even which conversation is active.
-  const sent = await getWebMessage(userId, input.clientMessageId);
   const conversationId =
     sent?.conversationId ?? (await webConversationToWriteIn(userId, input.conversationId)).id;
   const { message, created } = await saveWebMessage({

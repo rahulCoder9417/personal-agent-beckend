@@ -19,6 +19,7 @@ import {
   fallBackIfClaudeSignedOut,
   getAgentSettings,
   syncRuntimeAfterWake,
+  type AgentSettingsView,
   type RuntimeName,
 } from './agent-settings.ts';
 import { syncBrowserAfterWake } from './browser.ts';
@@ -73,6 +74,8 @@ export interface RouteContext {
    */
   wakeEarly?: () => void;
   times?: RouteTimes;
+  /** The user's agent settings, already being read by the turn (no second read). */
+  settings?: Promise<AgentSettingsView>;
 }
 
 /** Filled in by other modules (billing, Jev routing). Defaults keep a turn working without them. */
@@ -414,6 +417,13 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
     if (given.inboundMessageId) await setMessageStatus(given.inboundMessageId, 'delivered');
     return 'suspended';
   }
+  // Read now, beside the conversation, what the turn needs next: whether the user has credits and
+  // their agent settings (the route and the wake both need them). Each is a round trip to the
+  // database; at once they cost one. Only reads: nothing is decided before its usual place.
+  const hasCreditsRead = hooks.hasCredits(userId);
+  hasCreditsRead.catch(() => {});
+  const settingsRead = getAgentSettings(userId);
+  settingsRead.catch(() => {});
   // The turn's conversation: the message's own (or the Automations chat), else the chat's active
   // one. Everything the turn saves and everything the agent is given comes from this conversation.
   const conversation = await conversationFor(userId, given.sessionKey, given.conversationId, {
@@ -426,7 +436,7 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
   };
   const said = turnSays(input);
 
-  if (!(await hooks.hasCredits(userId))) {
+  if (!(await hasCreditsRead)) {
     timer.route = 'out_of_credits';
     await queueOutbound({ userId, ...said, text: outOfCreditsText(input.channel) });
     timer.mark('answered');
@@ -444,6 +454,7 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
       if (config().WAKE_WHILE_ROUTING) wake().catch(() => {});
     },
     times: timer.routeTimes,
+    settings: settingsRead,
   });
   timer.mark('routed');
   timer.route = decision.kind;
@@ -459,16 +470,14 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
     return 'simple';
   }
 
-  // The settings are read while the container wakes; they say which engine it must run.
-  const reading = getAgentSettings(userId);
-  reading.catch(() => {});
+  // The settings (read above, while the container woke) say which engine it must run.
   if (!timer.has('woken'))
     await publish(userId, 'agent.status', { state: 'waking', lastActiveAt: null });
   const awake = await wake();
   // Suspended while the route was decided: the same as suspended before it.
   if (!awake) return (await isSuspended(userId)) ? 'suspended' : 'error';
   const { woke } = awake;
-  const settings = await reading;
+  const settings = await settingsRead;
   // The container runs the agent the user's settings say (Hermes or Claude Code).
   const engine = await syncRuntimeAfterWake(userId, woke.sandbox, settings);
   timer.engine = engine;

@@ -108,7 +108,9 @@ describe('Phase 6: Jev routing', () => {
     );
     expect(reply.type).toBe('text');
     await waitFor(async () => (await inboundStatus(user.id, 'hi, how are you?')) === 'delivered');
-    // The container was woken while Jev decided (WAKE_WHILE_ROUTING), and it just idles.
+    // The container was woken while Jev decided (WAKE_WHILE_ROUTING), and it just idles. Nobody
+    // waits for that wake, so it may reach the vm-manager after the answer went out.
+    await waitFor(async () => wakes.length > 0);
     expect(wakes).toEqual([user.id]);
     expect(vmFake.deliveries).toHaveLength(0);
 

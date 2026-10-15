@@ -147,15 +147,18 @@ export async function turnText(
       return null;
     }
   };
-  const memory = await part('memory block', () => memoryBlock(input.userId));
-  const recap = await part('chat recap', () =>
-    chatRecap({
-      userId: input.userId,
-      conversation: input.conversation,
-      engine,
-      ...(input.inboundMessageId ? { skipMessageId: input.inboundMessageId } : {}),
-    }),
-  );
+  // Both at once: neither needs the other.
+  const [memory, recap] = await Promise.all([
+    part('memory block', () => memoryBlock(input.userId)),
+    part('chat recap', () =>
+      chatRecap({
+        userId: input.userId,
+        conversation: input.conversation,
+        engine,
+        ...(input.inboundMessageId ? { skipMessageId: input.inboundMessageId } : {}),
+      }),
+    ),
+  ]);
   const parts = [memory, recap].filter((p): p is string => Boolean(p));
   if (!parts.length) return input.text;
   return `${parts.join('\n\n')}\n\n${MESSAGE_FOLLOWS}\n${input.text}`;

@@ -189,14 +189,17 @@ describe('the container wakes while Jev decides', () => {
     expect(vmFake.wakes).toEqual([user.id]);
     expect(vmFake.deliveries).toHaveLength(1);
     const row = await timingRow(eventId);
-    // The wake began before the route was known.
-    expect(row.stages.wake_started).toBeLessThan(row.stages.routed!);
+    // The wake began before the route was known (the same millisecond at the closest: Jev answered
+    // only once the wake was seen above).
+    expect(row.stages.wake_started).toBeLessThanOrEqual(row.stages.routed!);
   });
 
   it('a simple message leaves the woken container idle; with WAKE_WHILE_ROUTING=false nothing wakes', async () => {
     const user = await chatUser();
     jevAnswer = async () => ({ route: 'simple', confidence: 0.95, apps: [] });
     await send(user.id, 'thanks!');
+    // Nobody waits for that wake, so it may reach the vm-manager after the answer went out.
+    await waitFor(async () => vmFake.wakes.length > 0);
     expect(vmFake.wakes).toEqual([user.id]);
     expect(vmFake.deliveries).toHaveLength(0);
 
@@ -346,8 +349,10 @@ describe('the timings of an agent turn', () => {
   it('a turn that fails on our side and is retried keeps the last try', async () => {
     const user = await chatUser();
     let wakes = 0;
-    vmFake.state.onWake = async () => {
-      if (wakes++ === 0) throw new ConnectError('server full', Code.ResourceExhausted);
+    // Only this user's wakes count: an earlier test's wake that nobody waited for may land here.
+    vmFake.state.onWake = async (req) => {
+      if (req.userId === user.id && wakes++ === 0)
+        throw new ConnectError('server full', Code.ResourceExhausted);
     };
     const eventId = await send(user.id, 'book the table for two');
     expect((await getEvent(eventId))?.status).toBe('done');

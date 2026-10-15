@@ -126,7 +126,7 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
     /** WakeSandbox's `was_stopped` (a cold start). */
     wasStopped: true,
     /** Called at each WakeSandbox before it answers (a test can hold the wake there). */
-    onWake: undefined as (() => Promise<void>) | undefined,
+    onWake: undefined as ((req: { userId: string }) => Promise<void>) | undefined,
     /** The Bridge's stage-times report on the turn's last event (`timings_json`). */
     bridgeTimings: '',
   };
@@ -172,7 +172,7 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
     async wakeSandbox(req: { userId: string; priority?: number }) {
       wakes.push(req.userId);
       wakePriorities.push({ userId: req.userId, priority: req.priority });
-      if (state.onWake) await state.onWake();
+      if (state.onWake) await state.onWake(req);
       if (state.wakeError) throw state.wakeError;
       return {
         sandbox: sandboxView(req.userId, SandboxState.AWAKE),

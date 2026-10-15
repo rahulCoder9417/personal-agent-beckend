@@ -12,10 +12,9 @@ import { deleteUserCrewJobs } from './modules/automations/crew-jobs.ts';
 import {
   chargeAppAction,
   chargePaidTool,
-  getBalance,
+  getBalanceAndGrants,
   getLiteLLMKey,
   hasCredits,
-  listBalanceGrants,
   offboardBilling,
   onBalanceDepleted,
   onboardBilling,
@@ -57,11 +56,7 @@ let wired = false;
 
 /** Live balance for the web app (SSE `credits.updated`). */
 async function publishCredits(userId: string): Promise<void> {
-  const now = new Date();
-  const [balance, grants] = await Promise.all([
-    getBalance(userId, now),
-    listBalanceGrants(userId, now),
-  ]);
+  const { balance, grants } = await getBalanceAndGrants(userId);
   await publish(userId, 'credits.updated', toBalance(balance, grants));
 }
 
@@ -84,7 +79,7 @@ export function wireModules(): void {
   // A Claude plan answers everything itself: no Jev, no platform-model quick replies.
   setTurnHooks({
     route: async (input, ctx) => {
-      const { aiAccess } = await getAgentSettings(input.userId);
+      const { aiAccess } = await (ctx?.settings ?? getAgentSettings(input.userId));
       if (aiAccess === 'none') return { kind: 'simple', reply: connectAiText() };
       if (aiAccess === 'claude_plan') return { kind: 'task' };
       return routeTurn(input, ctx);

@@ -122,7 +122,11 @@ export async function webConversationToWriteIn(
 ): Promise<ConversationRow> {
   if (!conversationId) return activeConversation(userId, 'web');
   const c = await webConversation(userId, conversationId);
-  return isAutomationsChat(c) ? c : openWebConversation(userId, conversationId);
+  // What openWebConversation does, without reading the conversation a second time.
+  if (isAutomationsChat(c) || c.active) return c;
+  const opened = await activateConversation(userId, conversationId);
+  if (!opened) throw notFound(NOT_FOUND);
+  return opened;
 }
 
 /**

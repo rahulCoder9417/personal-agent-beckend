@@ -102,6 +102,44 @@ export async function listBalanceGrants(userId: string, now = new Date()): Promi
     .orderBy(...spendingOrder);
 }
 
+/**
+ * The balance and the grants it is made of, from one read: the balance is the sum of what those
+ * grants have left (the grants left out have nothing left, so they add nothing). The same numbers
+ * as getBalance and listBalanceGrants, in one round trip instead of two. For showing only.
+ */
+export async function getBalanceAndGrants(
+  userId: string,
+  now = new Date(),
+): Promise<{ balance: number; grants: CreditGrant[] }> {
+  const grants = await listBalanceGrants(userId, now);
+  return { balance: grants.reduce((sum, g) => sum + g.remaining, 0), grants };
+}
+
+/**
+ * The balance and when the next credits run out, from one read: the same numbers as getBalance and
+ * getNextExpiry. For showing only (a charge decides with its own read under the user's lock).
+ */
+export async function getBalanceAndNextExpiry(
+  userId: string,
+  now = new Date(),
+): Promise<{ balance: number; nextExpiry: Date | null }> {
+  const [row] = await db()
+    .select({
+      total: sql<
+        string | null
+      >`coalesce(sum(${creditGrants.remaining}) filter (where ${counted(now)}), 0)`,
+      next: sql<
+        Date | string | null
+      >`min(${creditGrants.expiresAt}) filter (where ${and(gt(creditGrants.remaining, 0), gt(creditGrants.expiresAt, now))})`,
+    })
+    .from(creditGrants)
+    .where(eq(creditGrants.userId, userId));
+  return {
+    balance: Number(row?.total ?? 0),
+    nextExpiry: row?.next ? new Date(row.next) : null,
+  };
+}
+
 export async function listLedger(
   userId: string,
   opts: { cursor?: string; limit: number },

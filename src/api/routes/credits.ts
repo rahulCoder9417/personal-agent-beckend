@@ -1,5 +1,5 @@
 import { appActionCreditsFor } from '../../modules/billing/app-actions.ts';
-import { getBalance, listBalanceGrants, listLedger } from '../../modules/billing/credits.ts';
+import { getBalanceAndGrants, listLedger } from '../../modules/billing/credits.ts';
 import { paidToolCreditsFor } from '../../modules/billing/paid-tools.ts';
 import { listUsagePeriods } from '../../modules/billing/usage.ts';
 import { badRequest } from '../../shared/errors.ts';
@@ -8,12 +8,7 @@ import { route } from '../router.ts';
 
 export const creditRoutes = [
   route('getCredits', async (c) => {
-    const userId = c.get('user').id;
-    const now = new Date();
-    const [balance, grants] = await Promise.all([
-      getBalance(userId, now),
-      listBalanceGrants(userId, now),
-    ]);
+    const { balance, grants } = await getBalanceAndGrants(c.get('user').id);
     return c.json(toBalance(balance, grants), 200);
   }),
 

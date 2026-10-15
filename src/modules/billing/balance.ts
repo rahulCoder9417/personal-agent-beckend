@@ -1,18 +1,14 @@
 // What other modules read about a user's credits. The balance is always computed from grants.
-import { getBalance, getNextExpiry } from './credits.ts';
+import { getBalance, getBalanceAndNextExpiry } from './credits.ts';
 
 export interface BalanceSummary {
   balance: number;
   nextExpiry: Date | null;
 }
 
+/** The balance and when the next credits run out: one read of the user's grants. */
 export async function getBalanceSummary(userId: string): Promise<BalanceSummary> {
-  const now = new Date();
-  const [balance, nextExpiry] = await Promise.all([
-    getBalance(userId, now),
-    getNextExpiry(userId, now),
-  ]);
-  return { balance, nextExpiry };
+  return getBalanceAndNextExpiry(userId);
 }
 
 /** HLD 7.5 "before a turn": may this user start a turn? */

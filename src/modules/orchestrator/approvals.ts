@@ -164,7 +164,7 @@ export async function decideApproval(
     userId,
     actor: 'user',
     action: 'approval_decided',
-    summary: `${approve ? 'Approved' : 'Rejected'}: ${row.summary}`,
+    summary: `${approve ? 'Approved' : 'Denied'}: ${row.summary}`,
     details: { approvalId: id, via },
   });
   await ingestEvent({

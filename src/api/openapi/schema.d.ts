@@ -394,7 +394,7 @@ export interface paths {
          * Start connecting an app (returns the provider login URL)
          * @description `redirectUrl` is the provider's own sign-in page when the app is set up with our own sign-in
          *     app at the provider, and Composio's connect page otherwise. After signing in, the browser
-         *     comes back to `returnUrl` (default: the web app's `/apps?connected=<appSlug>`) with
+         *     comes back to `returnUrl` (default: the web app's `/integrations/apps?connected=<appSlug>`) with
          *     `status=success` or `status=failed` added by Composio. Only the app list says for sure that
          *     the connection is active.
          *
@@ -2282,6 +2282,11 @@ export interface components {
              */
             gettingStartedDismissed?: boolean;
         };
+        /**
+         * @description One of the user's linked chats. `maskedChatId`, `lastInboundAt` and `blocked` are the same
+         *     as an admin sees (`AdminUserChannel`). The server always sends them; a server from before
+         *     15 October 2026 did not, so a client treats them as optional.
+         */
         ChannelLink: {
             id: string;
             channel: components["schemas"]["ChannelType"];
@@ -2292,6 +2297,23 @@ export interface components {
             displayId: string;
             /** Format: date-time */
             linkedAt: string;
+            /**
+             * @description The chat id or phone number, masked: a Telegram chat keeps its last 4 digits, a phone
+             *     number its country code and last 4 digits. The full id is never returned.
+             * @example •••• 6789
+             * @example +91 •••• ••42 10
+             */
+            maskedChatId?: string;
+            /**
+             * Format: date-time
+             * @description When this chat last wrote to the bot (linking counts). Null if never known.
+             */
+            lastInboundAt?: string | null;
+            /**
+             * @description The user blocked the bot in this chat, so nothing is sent there. Cleared when the chat
+             *     writes again.
+             */
+            blocked?: boolean;
             /** @description WhatsApp only; whether free-form replies are currently allowed. */
             within24hWindow?: boolean;
         };
@@ -3095,7 +3117,7 @@ export interface components {
             id: string;
             channel: components["schemas"]["ChannelType"];
             /**
-             * @description What the user sees in Settings → Channels (a Telegram name or a masked number).
+             * @description What the user sees in Integrations → Chat apps (a Telegram name or a masked number).
              * @example @rahul
              * @example +91 •••• ••42 10
              */

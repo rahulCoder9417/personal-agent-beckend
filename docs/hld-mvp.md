@@ -466,7 +466,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 ### Also waiting on you
 
 - After the move to Clerk's production setup (15 October): sign up once in the web app, then make your new account an admin again (in Clerk's dashboard, the role "admin" in the user's public metadata). Your Max plan, extra credits and Telegram link stay on the old account; an admin moves them by hand, and unlinks Telegram on the old account first.
-- Upload the logo in Textcrew's Google sign-in app and submit the brand for Google's check. It takes a few days. Until then Google shows the name without the logo.
+- Google's brand check for the sign-in app: the logo is uploaded (15 October) and textcrew.in is proven ours in Google Search Console. From 16 October (Google asks for a 24-hour wait), in Google Cloud → Textcrew → Branding → View issues, choose "I have fixed the issues" and press Proceed. The check takes a few days. Until it passes, Google shows the name without the logo.
 - A repo to test pull-request review on.
 - How Free credits should run out sooner (section 7).
 - New keys in place of the four that were pasted into chat.
@@ -538,7 +538,7 @@ The domain is `textcrew.in`. In the steps below, `yourdomain` stands for it.
 |---|---|
 | Clerk's production setup for `textcrew.in` | Live. Clerk answers at `clerk.textcrew.in` |
 | Five DNS records for Clerk | Added at Vercel. `domain-setup.md`, section 4, lists them |
-| Textcrew's own Google sign-in app | Published. Google's screen names Textcrew, not Clerk. Left: the logo and Google's brand check (a few days) |
+| Textcrew's own Google sign-in app | Published. Google's screen names Textcrew, not Clerk. Logo uploaded. Left: Google's brand check (ask again from 16 October; a few days) |
 | Clerk's webhook | A new one on the production setup, to `https://api.yourdomain/webhooks/clerk`, for the same three events |
 | The live keys | On the server, in Vercel's production settings, and in the laptop's `.env.deploy` and `.env` |
 | A real sign-up on it | Not yet done |

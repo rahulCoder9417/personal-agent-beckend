@@ -173,9 +173,12 @@ export async function refreshPendingConnections(
   return pending.length > 0;
 }
 
-/** The web app's Apps page, where the user connects apps. */
+/**
+ * The Apps tab of the web app's Integrations page, where the user connects apps. (The web app
+ * sends its old `/apps` address there too.)
+ */
 export function appsPageUrl(): string {
-  return `${config().WEB_APP_URL.replace(/\/+$/, '')}/apps`;
+  return `${config().WEB_APP_URL.replace(/\/+$/, '')}/integrations/apps`;
 }
 
 // --- Which apps can be connected here, and with which Composio setup ---------------------------
@@ -346,7 +349,7 @@ export function signInPath(
 
 /**
  * The page to come back to after the sign-in. Only a page of our own web app: anything else
- * (another site, or one whose address only starts the same way) gets the Apps page.
+ * (another site, or one whose address only starts the same way) gets the Apps tab of Integrations.
  */
 export function connectReturnUrl(appSlug: string, returnUrl?: string): string {
   const web = config().WEB_APP_URL;

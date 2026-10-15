@@ -90,6 +90,8 @@ describe('purchase links: what counts and how they are replaced', () => {
       'http://web.test/',
       'http://web.test/settings/ai',
       'http://web.test/apps?connected=gmail',
+      'http://web.test/integrations',
+      'http://web.test/integrations/apps?connected=gmail',
       'http://web.test/billingham', // a different path
       'https://example.com/billing', // somebody else's site
       'https://github.com/acme/repo/pull/7',

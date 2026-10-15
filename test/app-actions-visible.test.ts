@@ -265,7 +265,7 @@ describe('list_app_actions and get_profile: a connection that is not ready', () 
     const cal = res.apps.find((a) => a.app === 'googlecalendar')!;
     expect(cal.status).toBe('connecting');
     expect(cal.note).toMatch(/^Google Calendar is still connecting/);
-    expect(cal.note).toContain('http://web.test/apps');
+    expect(cal.note).toContain('on the Integrations page (http://web.test/integrations/apps)');
     // Asked for that app alone: no actions, and the same answer.
     const only = (await mcp('list_app_actions', { app: 'googlecalendar' })).json as Listing;
     expect(only.actions).toEqual([]);
@@ -285,7 +285,7 @@ describe('list_app_actions and get_profile: a connection that is not ready', () 
     expect(ran.text).toMatch(/Google Calendar is still connecting/);
   });
 
-  it('a sign-in started long ago and never finished: connect it again on the Apps page', async () => {
+  it('a sign-in started long ago and never finished: connect it again on the Integrations page', async () => {
     const { mcp } = await agentUser([{ app: 'googlecalendar', status: 'pending', minutesAgo: 90 }]);
     const res = (await mcp('list_app_actions')).json as Listing;
     expect(res.apps).toEqual([
@@ -294,7 +294,7 @@ describe('list_app_actions and get_profile: a connection that is not ready', () 
         name: 'Google Calendar',
         status: 'not_finished',
         note: expect.stringMatching(
-          /^Google Calendar did not finish connecting.*connect it again on the Apps page \(http:\/\/web\.test\/apps\)/,
+          /^Google Calendar did not finish connecting.*connect it again on the Integrations page \(http:\/\/web\.test\/integrations\/apps\)/,
         ),
       },
     ]);
@@ -308,7 +308,9 @@ describe('list_app_actions and get_profile: a connection that is not ready', () 
         app: 'gmail',
         name: 'Gmail',
         status: 'needs_reconnecting',
-        note: expect.stringMatching(/^Gmail needs to be connected again.*http:\/\/web\.test\/apps/),
+        note: expect.stringMatching(
+          /^Gmail needs to be connected again.*on the Integrations page \(http:\/\/web\.test\/integrations\/apps\)/,
+        ),
       },
     ]);
     const b = await agentUser([
@@ -346,7 +348,16 @@ describe('list_app_actions and get_profile: a connection that is not ready', () 
     const res = (await mcp('list_app_actions')).json as Listing & { note: string };
     expect(res.apps).toEqual([]);
     expect(res.actions).toEqual([]);
-    expect(res.note).toMatch(/No app is connected.*Apps page \(http:\/\/web\.test\/apps\)/);
+    expect(res.note).toMatch(
+      /No app is connected.*Integrations page \(http:\/\/web\.test\/integrations\/apps\)/,
+    );
+    // Asked for one app that is not connected: the same page, for that app.
+    const gmail = (await mcp('list_app_actions', { app: 'gmail' })).json as Listing & {
+      note: string;
+    };
+    expect(gmail.note).toBe(
+      'Gmail is not connected. Your user connects it on the Integrations page (http://web.test/integrations/apps).',
+    );
   });
 });
 
@@ -482,7 +493,7 @@ describe('dev-user: apps, to check a user on the server', () => {
     expect(await devUser(['apps', '--user', userId])).toEqual([
       `user ${userId} (solo@example.com, plan free)`,
       'connections none',
-      'agent sees: No app is connected. Your user connects apps on the Apps page (http://web.test/apps).',
+      'agent sees: No app is connected. Your user connects apps on the Integrations page (http://web.test/integrations/apps).',
     ]);
   });
 });

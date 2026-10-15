@@ -67,6 +67,7 @@ export const SETTINGS: Setting[] = [
   ],
   ['ENABLED_CHANNELS', 'channels', (c) => [...c.ENABLED_CHANNELS]],
   ['TELEGRAM_BOT_USERNAME', 'channels', (c) => c.TELEGRAM_BOT_USERNAME ?? null],
+  ['TELEGRAM_TYPING', 'channels', (c) => c.TELEGRAM_TYPING],
   ['WHATSAPP_DISPLAY_NUMBER', 'channels', (c) => c.WHATSAPP_DISPLAY_NUMBER ?? null],
   ['SENDBLUE_NUMBER', 'channels', (c) => c.SENDBLUE_NUMBER ?? null],
   ['AI_ACCESS_MODE', 'models', (c) => c.AI_ACCESS_MODE],

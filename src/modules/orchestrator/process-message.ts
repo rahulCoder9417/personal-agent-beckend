@@ -26,6 +26,7 @@ import {
 } from '../channels/messages.ts';
 import { queueOutbound, queueRawOutbound } from '../channels/outbound.ts';
 import { sessionKeyFor, type InboundMessage } from '../channels/types.ts';
+import { whileTyping } from '../channels/typing.ts';
 import { IGNORED } from '../../worker/ignored.ts';
 import {
   isNewChatCommand,
@@ -134,30 +135,34 @@ async function linkedMessage(
   if (await inboundHooks.handleButton(userId, msg, eventId)) return null;
   if (await inboundHooks.handleText(userId, msg.text, sessionKey)) return null;
 
-  const prepared = await inboundHooks.prepareInbound(userId, msg, eventId);
-  const saved = await saveInbound({
-    userId,
-    channel: msg.channel,
-    text: prepared.text,
-    media: prepared.media,
-    eventId,
-    sessionKey,
-    externalId: msg.externalMessageId,
+  // From here the message is for the agent: the chat shows "typing…" (Telegram) until the turn
+  // is over, also while a file is downloaded or a voice note turned into text.
+  return whileTyping(sessionKey, async () => {
+    const prepared = await inboundHooks.prepareInbound(userId, msg, eventId);
+    const saved = await saveInbound({
+      userId,
+      channel: msg.channel,
+      text: prepared.text,
+      media: prepared.media,
+      eventId,
+      sessionKey,
+      externalId: msg.externalMessageId,
+    });
+    if (saved.status !== 'queued') return null; // already handed to the agent by an earlier attempt
+    await touched;
+    await runTurn({
+      userId,
+      deliveryId: eventId,
+      kind: 'message',
+      sessionKey,
+      channel: msg.channel,
+      text: saved.text,
+      attachments: saved.mediaRef ?? [],
+      inboundMessageId: saved.id,
+      conversationId: saved.conversationId,
+    });
+    return null;
   });
-  if (saved.status !== 'queued') return null; // already handed to the agent by an earlier attempt
-  await touched;
-  await runTurn({
-    userId,
-    deliveryId: eventId,
-    kind: 'message',
-    sessionKey,
-    channel: msg.channel,
-    text: saved.text,
-    attachments: saved.mediaRef ?? [],
-    inboundMessageId: saved.id,
-    conversationId: saved.conversationId,
-  });
-  return null;
 }
 
 /** What a chat of a suspended account is told, at most once a day. */

@@ -50,7 +50,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 15 October 2026: a turn's billing runs after the reply, and the next message no longer waits for it
 
-- **Where it is:** on `main`, not yet on the server.
+- **Where it is:** on `main` and on the test server since 15 October. Checked there: two quick messages in a row both got their reply (16.4 s with the container waking, then 8.5 s).
 - **Why:** you asked why the billing has to be done before the user can go on, above all for a user on their own Claude plan: "the user can get the reply and in the background we can run the checks for billing". Measured before this change: after the reply was shown, the turn still made 20 trips to the database, 19 of them one after another (5.0 seconds at Neon's distance), while it held the user's lock. 12 of them were the usage sync that charges the turn. A second message sent right after a reply waited for all of it.
 - **What the user notices:** a message sent right after a reply starts about 3.4 seconds sooner. The balance in the web app drops a moment after the reply instead of together with it. Nothing else changes.
 - **Backend:**
@@ -97,7 +97,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 15 October 2026: the admin's user view shows the two first-run marks
 
-- **Where it is:** on `main`, not yet on the server.
+- **Where it is:** on `main` and on the test server since 15 October.
 - **Why:** the entry "the web app's first-run marks" below left this open: an admin could clear a user's welcome-steps and checklist marks, but could not see them.
 - **What the user notices:** nothing. An admin now sees, in the user list and on one user's page, when the user finished or skipped the welcome steps and when they closed the "Getting started" checklist, or that they have not yet.
 - **Backend:** the admin's user view adds the two marks, read from the user's row that the admin module already gets through the auth module's own functions. No new query.
@@ -112,7 +112,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 15 October 2026: pages and replies wait for fewer trips to the database
 
-- **Where it is:** on `main`, not yet on the server. Its database update (`0024_messages_event_id`, one index) runs on Neon at the next deploy.
+- **Where it is:** on `main` and on the test server since 15 October. Its database update (`0024_messages_event_id`, one index) ran on Neon in that deploy.
 - **Why:** you said opening chats, lists and the app's pages, and replies, take far too long. Since 14 October the database is on Neon in Ohio and the server in Mumbai: each trip to the database takes about 260 ms, and opening a new connection 1.5 to 2.5 seconds. So a page's time is mostly how many trips it waits for, one after another, plus the connections it has to open. Where the time went, measured:
   - **Every signed-in call first read the user's row:** one trip before the call's own work. Most calls waited for 2 trips (0.53 s), opening a conversation for 3 (0.79 s), the app list for 3.
   - **Connections closed after 5 minutes idle.** The first page after a quiet spell asks for about 8 things at once, so it opened about 8 connections: the chat page took 3.3 to 5.4 seconds instead of 1.3.
@@ -172,7 +172,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 15 October 2026: the web app's first-run marks (welcome steps and "Getting started")
 
-- **Where it is:** on `main`, not yet on the server. Its database update runs on Neon at the next deploy (`deploy.sh` runs the migrations before it starts the new api and worker).
+- **Where it is:** on `main` and on the test server since 15 October. Its database update ran on Neon in that deploy; all five accounts on the server have both marks empty, so each sees the welcome steps on its next visit.
 - **Why:** the web app is getting a first-time onboarding: a few welcome steps, then a "Getting started" checklist on its home page. You wanted whether a user has been through it kept in the database, not in the browser, and both users we already have to get the onboarding too.
 - **What the user notices:** nothing from the backend alone. Once the web app uses it, a new user sees the welcome steps once, on any device. The two users we already have see them on their next visit, exactly like a new user.
 - **Backend:**
@@ -198,7 +198,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 15 October 2026: request logs and response times per route
 
-- **Where it is:** on `main`, not yet on the server.
+- **Where it is:** on `main` and on the test server since 15 October.
 - **Why:** you asked whether the backend keeps request logs, and for the p50, p95 and p99 response times of each endpoint. A request log existed, but a thin one: each request wrote one line with the method, the route, the status, the time and a request id, all at the same level. It had no address, no user and no IP. A request that failed with a 500 was an ordinary line, not an error. Other lines written during the same request had no id to match them with. And the answers that `/mcp`, `/git` and file downloads build themselves went out without the request id. There was no way to see how slow each route is.
 - **What the user notices:** nothing. A 500 answer now also gives the request id (`details.requestId`), so a user who reports an error can quote it.
 - **Backend:**

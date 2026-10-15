@@ -25,8 +25,17 @@ import { processors } from '../src/worker/processors.ts';
 import { startWorkers } from '../src/worker/runner.ts';
 import { turnsBilled } from './billing-helpers.ts';
 import { installDbMeter, meter, queriesSoFar, setDbDelays } from './db-meter.ts';
-import { installFakeVm } from './fakes.ts';
+import { setTelegramApi, telegramApi } from '../src/modules/channels/adapters/telegram.ts';
+import { installFakeTelegram, installFakeVm, telegramUpdate } from './fakes.ts';
 import { call, chatUser, waitFor } from './helpers.ts';
+
+function sendTelegram(update: unknown) {
+  return call('/webhooks/telegram', {
+    method: 'POST',
+    body: update,
+    headers: { 'x-telegram-bot-api-secret-token': 'tg-secret' },
+  });
+}
 
 const RTT_MS = Number(process.env.PERF_RTT_MS ?? 0);
 const CONNECT_MS = Number(process.env.PERF_CONNECT_MS ?? 0);
@@ -104,7 +113,8 @@ afterAll(async () => {
   setChatCompleter(undefined);
   if (REPORT) {
     const lines = report.map(
-      (r) => `| ${r.what} | ${r.queries} | ${r.connects} | ${(r.ms / 1000).toFixed(2)} s |`,
+      (r) =>
+        `| ${r.what} | ${r.queries} | ${r.connects} | ${Number.isNaN(r.ms) ? 'none' : `${(r.ms / 1000).toFixed(2)} s`} |`,
     );
     const table = [
       `Database round trips (each query waits ${RTT_MS} ms, each new connection ${CONNECT_MS} ms)`,
@@ -286,6 +296,91 @@ describe('a chat turn', () => {
         [...m.sql, '--- the billing job ---', ...billing.sql].join('\n'),
       );
     expect(billing.queries).toBeGreaterThan(0);
+  }, 180_000);
+});
+
+/**
+ * A Telegram message, as on the server: no Jev (every message is a task), the agent answers at once
+ * (the model's time is not in it), the reply goes out through the outbound queue to the Bot API.
+ * Times are from the moment Telegram calls the webhook.
+ */
+describe('a Telegram turn', () => {
+  const chatId = 700_000_000 + Math.floor(Math.random() * 1e6);
+  let tg: ReturnType<typeof installFakeTelegram>;
+
+  beforeAll(async () => {
+    tg = installFakeTelegram();
+    const lc = (await (
+      await call('/v1/channels/link-codes', {
+        method: 'POST',
+        token: user.token,
+        body: { channel: 'telegram' },
+      })
+    ).json()) as { code: string };
+    await sendTelegram(telegramUpdate(chatId, lc.code));
+    await waitFor(async () => tg.sent.find((m) => m.text.startsWith('✅ Linked')));
+  });
+
+  it('from the webhook to the reply on Telegram, then to the end of the job', async () => {
+    // As on the server today: no Jev key, so the route is decided at once.
+    setJevClient(undefined);
+    await warm();
+    const inbound = workers.find((w) => w.name === 'inbound')!;
+    const system = workers.find((w) => w.name === 'system')!;
+    await system.pause();
+    let start = 0;
+    let webhookMs = 0;
+    let replyQueries = 0;
+    let replyAt = 0;
+    const realApi = telegramApi();
+    setTelegramApi(async (method, body) => {
+      if (method === 'sendMessage' && String(body.chat_id) === String(chatId) && !replyAt) {
+        replyAt = performance.now();
+        replyQueries = queriesSoFar();
+      }
+      return realApi(method, body);
+    });
+    try {
+      const m = await measure('Telegram turn: webhook to the end of the job', async () => {
+        const done = new Promise<void>((resolve) => {
+          const onDone = (job: { name: string }) => {
+            if (job.name !== 'process-message') return;
+            inbound.off('completed', onDone);
+            resolve();
+          };
+          inbound.on('completed', onDone);
+        });
+        start = performance.now();
+        const res = await sendTelegram(telegramUpdate(chatId, 'what is on my calendar'));
+        expect(res.status).toBe(200);
+        webhookMs = Math.round(performance.now() - start);
+        await done;
+      });
+      const typing = tg.calls.find(
+        (c) => c.method === 'sendChatAction' && c.chatId === String(chatId) && c.at > start,
+      );
+      expect(replyAt, m.sql.join('\n')).toBeGreaterThan(0);
+      report.push(
+        { what: 'Telegram turn: webhook answered', queries: NaN, connects: NaN, ms: webhookMs },
+        {
+          what: 'Telegram turn: the first "typing…" sent',
+          queries: NaN,
+          connects: NaN,
+          ms: typing ? Math.round(typing.at - start) : NaN,
+        },
+        {
+          what: 'Telegram turn: the reply sent to Telegram',
+          queries: replyQueries,
+          connects: NaN,
+          ms: Math.round(replyAt - start),
+        },
+      );
+      if (process.env.PERF_TG_SQL) writeFileSync(process.env.PERF_TG_SQL, m.sql.join('\n'));
+    } finally {
+      setTelegramApi(realApi);
+      system.resume();
+      setJevClient({ decide: async () => ({ route: 'task', confidence: 0.9, apps: [] }) });
+    }
   }, 180_000);
 });
 

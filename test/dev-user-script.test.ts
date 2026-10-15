@@ -469,7 +469,7 @@ describe('dev-user script: approvals, pull-request review, memory, the browser',
     const asked = await devUser(['send', '--user', userId, '--text', 'the launch']);
     const approvalId = field(asked, 'approval');
     expect(withPrefix(asked, 'reply')).toEqual([
-      'Approval needed: Send the email about the launch',
+      "I'd like to send the email about the launch. Approve or Deny below.",
     ]);
 
     const out = await devUser(['approve', '--user', userId]);

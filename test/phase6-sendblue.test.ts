@@ -64,9 +64,9 @@ describe('Phase 6: yes/no text answers', () => {
     expect(
       buttonsAsText([
         { id: 'apr:1:yes', title: '✅ Approve' },
-        { id: 'apr:1:no', title: '❌ Reject' },
+        { id: 'apr:1:no', title: '❌ Deny' },
       ]),
-    ).toBe('Reply YES to approve or NO to reject.');
+    ).toBe('Reply YES to approve or NO to deny.');
     expect(
       buttonsAsText([
         { id: 'a', title: 'Morning' },
@@ -154,13 +154,13 @@ describe('Phase 6: iMessage via Sendblue', () => {
         text: 'Send the email to Bob?',
         buttons: [
           { id: 'apr:7:yes', title: '✅ Approve' },
-          { id: 'apr:7:no', title: '❌ Reject' },
+          { id: 'apr:7:no', title: '❌ Deny' },
         ],
       });
       const asked = await waitFor(async () =>
         sb.sent.find((m) => m.number === number && m.content.startsWith('Send the email')),
       );
-      expect(asked.content).toBe('Send the email to Bob?\n\nReply YES to approve or NO to reject.');
+      expect(asked.content).toBe('Send the email to Bob?\n\nReply YES to approve or NO to deny.');
 
       await postSendblue(sbInbound(number, 'Yes'));
       await waitFor(async () => answers.length === 1);

@@ -10,6 +10,7 @@ import { publish } from '../channels/stream.ts';
 import type { InboundMessage } from '../channels/types.ts';
 import { ingestEvent } from '../events/intake.ts';
 import { IGNORED } from '../../worker/ignored.ts';
+import { APPROVE_TITLE, approvalAskText, channelOfSession, DENY_TITLE } from './approval-text.ts';
 import { approvals } from './schema.ts';
 import { runTurn, turnMessageFields } from './turn.ts';
 
@@ -43,7 +44,10 @@ export function toApiApproval(a: Approval) {
 const effective = (a: Approval): Approval =>
   a.status === 'pending' && a.expiresAt.getTime() <= Date.now() ? { ...a, status: 'expired' } : a;
 
-/** Saves the approval and sends the question with ✅ / ❌ buttons. Returns immediately ("pending"). */
+/**
+ * Saves the approval and sends the question with ✅ Approve / ❌ Deny buttons: Tex saying what it
+ * wants to do, made from the approval's summary (approval-text.ts). Returns immediately ("pending").
+ */
 export async function requestApproval(input: {
   userId: string;
   sessionKey: string;
@@ -73,12 +77,12 @@ export async function requestApproval(input: {
     sessionKey: input.sessionKey,
     // Asked during a turn: the question belongs to that turn's conversation.
     ...(await turnMessageFields(input.userId, input.sessionKey)),
-    text: `Approval needed: ${a.summary}`,
+    text: approvalAskText(a.summary, channelOfSession(input.sessionKey)),
     approvalId: a.id,
     template: 'approval',
     buttons: [
-      { id: `apr:${a.id}:yes`, title: '✅ Approve' },
-      { id: `apr:${a.id}:no`, title: '❌ Reject' },
+      { id: `apr:${a.id}:yes`, title: APPROVE_TITLE },
+      { id: `apr:${a.id}:no`, title: DENY_TITLE },
     ],
   });
   await publish(input.userId, 'approval.created', toApiApproval(a));
@@ -185,10 +189,7 @@ export async function handleProcessApproval(job: Job): Promise<unknown> {
   };
   const a = await getApproval(userId, approvalId);
   if (!a || (a.status !== 'approved' && a.status !== 'rejected')) return IGNORED;
-  const parsedChannel =
-    a.sessionKey === 'web'
-      ? 'web'
-      : (a.sessionKey.split(':')[0] as 'telegram' | 'whatsapp' | 'imessage');
+  const parsedChannel = channelOfSession(a.sessionKey);
   // The answer goes back to the conversation the question was asked in, not to whichever one is
   // active now: that is where the agent is waiting for it.
   const conversationId = await conversationOfApproval(userId, a.id);
@@ -202,7 +203,7 @@ export async function handleProcessApproval(job: Job): Promise<unknown> {
     text:
       a.status === 'approved'
         ? `The user APPROVED: ${a.summary}. Go ahead (call ${toolFor(a)} with approval_id "${a.id}").`
-        : `The user REJECTED: ${a.summary}. Don't do it.`,
+        : `The user REJECTED: ${a.summary}. Don't do it. Tell them in one short sentence that you won't.`,
     approval: { id: a.id, approved: a.status === 'approved' },
   });
   return null;

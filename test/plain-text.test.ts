@@ -419,14 +419,14 @@ describe('text that is not Markdown', () => {
       outOfCreditsText('imessage'),
       buttonsAsText([
         { id: 'apr:1:yes', title: '✅ Approve' },
-        { id: 'apr:1:no', title: '❌ Reject' },
+        { id: 'apr:1:no', title: '❌ Deny' },
       ]),
       // The ones written where they are sent (process-message, approvals, automations, billing).
       '✅ Linked! You can chat with your agent right here. What can I do for you?',
       'This chat is already linked to your account.',
       'That code is invalid or expired. Get a new one in the web app (codes last 10 minutes).',
       'Too many attempts. Please try again in an hour.',
-      'Approval needed: Send email to priya@acme.com: "Report delayed to Monday" (GMAIL_SEND_EMAIL)',
+      'I\'d like to send an email to priya@acme.com with subject "Report delayed to Monday". Approve or Deny below.',
       'That approval was already answered or has expired.',
       'I paused the automation "Monday PRs" because it failed 3 times in a row. You can resume it in the web app.',
       '🎉 +100 credits added, they expire on 2026-12-31. Balance: 1,100.',

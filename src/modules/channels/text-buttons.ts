@@ -57,7 +57,7 @@ const isYesNo = (buttons: Button[]) =>
 /** The text line that replaces buttons on a channel that has none. */
 export function buttonsAsText(buttons: Button[] | undefined): string {
   if (!buttons?.length) return '';
-  if (isYesNo(buttons)) return 'Reply YES to approve or NO to reject.';
+  if (isYesNo(buttons)) return 'Reply YES to approve or NO to deny.';
   return `Reply with one of: ${buttons.map((b) => b.title).join(', ')}`;
 }
 

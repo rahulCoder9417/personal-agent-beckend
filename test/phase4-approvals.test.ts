@@ -125,8 +125,11 @@ describe('Phase 4: approvals + Composio', () => {
     const ask = await waitFor(async () =>
       tg.sent.find((m) => m.chatId === String(alice.chatId) && m.buttons),
     );
-    expect(ask.text).toContain('Approval needed');
-    expect(ask.buttons!.map((b) => b.text)).toEqual(['✅ Approve', '❌ Reject']);
+    // Tex says what it wants to do, from the approval's own summary, and how to answer.
+    expect(ask.text).toBe(
+      'I\'d like to email priya@acme.com: "Report delayed to Monday". Approve or Deny below.',
+    );
+    expect(ask.buttons!.map((b) => b.text)).toEqual(['✅ Approve', '❌ Deny']);
     await waitFor(async () => tg.sent.find((m) => m.text === 'Drafted it. Waiting for your OK.'));
     // Before ✅ nothing was sent, and trying without approval failed.
     expect(executed).toHaveLength(0);

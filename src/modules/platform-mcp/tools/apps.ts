@@ -28,6 +28,7 @@ import {
 } from '../../integrations/catalog.ts';
 import { composio } from '../../integrations/composio.ts';
 import { approvals } from '../../orchestrator/schema.ts';
+import { approvalAskText, channelOfSession } from '../../orchestrator/approval-text.ts';
 import { consumeApproval, requestApproval } from '../../orchestrator/approvals.ts';
 import { userHasCredits } from '../../orchestrator/turn.ts';
 import { defineTool, ToolError } from '../registry.ts';
@@ -110,9 +111,12 @@ function appOfAction(action: string) {
 defineTool({
   name: 'request_approval',
   description:
-    'Ask your user to approve a risky action (sending to others, deleting, paying…). Returns immediately with status "pending": ' +
-    "END YOUR TURN after calling it (tell the user you're waiting for their OK). Their answer arrives later as a new message. " +
-    'Pass the exact action and arguments you intend to run; run_app_action will only run exactly those.',
+    'Ask your user to approve a risky action (sending to others, deleting, paying…) before you run it. ' +
+    'The user is shown your summary as "I\'d like to <summary>." with Approve and Deny buttons, so write the summary as what you will do, ' +
+    'starting with the verb, with what they need to decide. Example: Send an email to priya@acme.com with subject "Notes". ' +
+    'Pass the exact action and arguments you intend to run; run_app_action will only run exactly those. ' +
+    'Returns immediately with status "pending". Then END YOUR TURN: the user already sees what you asked and that you wait for ' +
+    "their answer, so don't repeat it or say you're waiting. Their answer arrives later as a new message.",
   input: {
     summary: z.string().min(3).max(500),
     action: z.string().optional(),
@@ -130,7 +134,15 @@ defineTool({
       action: args.action ?? null,
       arguments: args.arguments ?? null,
     });
-    return { approval_id: a.id, status: 'pending', expires_at: a.expiresAt.toISOString() };
+    return {
+      approval_id: a.id,
+      status: 'pending',
+      expires_at: a.expiresAt.toISOString(),
+      shown_to_user: approvalAskText(a.summary, channelOfSession(sessionKey)),
+      next:
+        'End your turn now. The user already sees this question with Approve and Deny: write nothing more, ' +
+        'unless there is something else they must know.',
+    };
   },
   summarize: (args) => `Asked for approval: ${args.summary}`,
 });

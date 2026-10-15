@@ -76,7 +76,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 15 October 2026: the bot and Tex point to Integrations, and the user sees more about each linked chat
 
-- **Where it is:** on the branch `feat/integrations-followup` in the backend and in the web app, not merged yet (15 October).
+- **Where it is:** on `main` (backend) and live in the web app since 15 October. The backend part is not on the test server yet.
 - **Why:** the web app now has one Integrations page (`/integrations`), with tabs for the chat apps, the apps (`/integrations/apps`) and the user's own MCP servers. Settings → Channels is gone and `/apps` only redirects, but the backend still sent people to both. Also, an admin could see for each linked chat its masked chat id, when it last wrote and whether the user blocked the bot. The user could not see this about their own chats.
 - **What the user notices:**
   - **A chat that is not linked** gets: "Open Integrations at https://app.textcrew.in/integrations and send me the code you get there", instead of "go to Settings → Channels".

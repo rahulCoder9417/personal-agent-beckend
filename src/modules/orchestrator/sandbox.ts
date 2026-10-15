@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../../shared/db/client.ts';
 import { sha256Hex } from '../../shared/crypto.ts';
 import { logger } from '../../shared/logger.ts';
+import { redis } from '../../shared/redis.ts';
 import { getActiveUser } from '../auth/users.ts';
 import { sandboxRuntime } from './agent-settings.ts';
 import { browserWanted } from './browser.ts';
@@ -60,17 +61,41 @@ export async function ensureSandbox(userId: string): Promise<void> {
     .onConflictDoUpdate({ target: sandboxTokens.userId, set: { mcpTokenHash: res.mcpTokenHash } });
 }
 
+/**
+ * Which user a container token belongs to is kept in Redis for 10 minutes (keyed by the token's
+ * hash, never the token), so the agent's tool calls don't each wait for the database. It changes
+ * only when the user's container record is removed, which drops it.
+ */
+const TOKEN_OWNER_SECONDS = 600;
+const tokenOwnerKey = (hash: string) => `mcp-token:${hash}`;
+
 /** Platform MCP auth: bearer token → user id. The container can't choose or fake it. */
 export async function userIdForMcpToken(token: string): Promise<string | null> {
-  const [row] = await db()
-    .select()
-    .from(sandboxTokens)
-    .where(eq(sandboxTokens.mcpTokenHash, sha256Hex(token)));
-  return row?.userId ?? null;
+  const hash = sha256Hex(token);
+  const known = await redis()
+    .get(tokenOwnerKey(hash))
+    .catch(() => null);
+  if (known) return known;
+  const [row] = await db().select().from(sandboxTokens).where(eq(sandboxTokens.mcpTokenHash, hash));
+  if (!row) return null;
+  await redis()
+    .set(tokenOwnerKey(hash), row.userId, 'EX', TOKEN_OWNER_SECONDS)
+    .catch(() => {});
+  return row.userId;
 }
 
 export async function deleteSandboxRecord(userId: string): Promise<void> {
-  await db().delete(sandboxTokens).where(eq(sandboxTokens.userId, userId));
+  const gone = await db()
+    .delete(sandboxTokens)
+    .where(eq(sandboxTokens.userId, userId))
+    .returning({ hash: sandboxTokens.mcpTokenHash });
+  // Its token stops working at once, not when the copy runs out.
+  for (const { hash } of gone)
+    await redis()
+      .del(tokenOwnerKey(hash))
+      .catch((err: unknown) =>
+        logger().error({ userId, err: String(err) }, 'container token owner not dropped'),
+      );
 }
 
 export type AgentState = 'none' | 'stopped' | 'waking' | 'awake' | 'busy' | 'broken';

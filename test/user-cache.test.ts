@@ -13,9 +13,15 @@ import {
   setPlan,
   upsertUserFromClerk,
 } from '../src/modules/auth/users.ts';
+import {
+  deleteSandboxRecord,
+  ensureSandbox,
+  userIdForMcpToken,
+} from '../src/modules/orchestrator/sandbox.ts';
 import { db } from '../src/shared/db/client.ts';
 import { redis } from '../src/shared/redis.ts';
 import { installDbMeter, meter } from './db-meter.ts';
+import { installFakeVm, mcpCall } from './fakes.ts';
 import { call, createUser, expectContract } from './helpers.ts';
 
 beforeAll(() => installDbMeter());
@@ -145,5 +151,30 @@ describe('every change drops the copy', () => {
     expect((await call('/v1/crew', { token: u.token })).status).toBe(200);
     await markUserDeleted(u.clerkId);
     expect((await call('/v1/crew', { token: u.token })).status).toBe(401);
+  });
+});
+
+describe("the container token's owner", () => {
+  it('is read from the database once, then from Redis; removing the record stops the token at once', async () => {
+    const vm = installFakeVm();
+    const u = await createUser();
+    await ensureSandbox(u.id);
+    const token = vm.tokens.get(u.id)!;
+    const first = await meter(() => userIdForMcpToken(token));
+    expect(first).toMatchObject({ result: u.id, queries: 1 });
+    const second = await meter(() => userIdForMcpToken(token));
+    expect(second).toMatchObject({ result: u.id, queries: 0 });
+    expect((await mcpCall(token, 'get_profile', {})).isError).toBe(false);
+
+    await deleteSandboxRecord(u.id);
+    expect(await userIdForMcpToken(token)).toBeNull();
+    const refused = await mcpCall(token, 'get_profile', {});
+    expect(refused).toMatchObject({ isError: true, text: 'Unauthorized' });
+  });
+
+  it('a made-up token is refused and nothing is kept for it', async () => {
+    const m = await meter(() => userIdForMcpToken('not-a-real-token'));
+    expect(m.result).toBeNull();
+    expect((await meter(() => userIdForMcpToken('not-a-real-token'))).queries).toBe(1);
   });
 });

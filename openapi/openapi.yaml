@@ -4844,7 +4844,7 @@ components:
 
     AdminUser:
       type: object
-      required: [id, email, emailVerified, name, timezone, plan, role, status, suspendedAt, flagged, createdAt, deletedAt, lastActiveAt, credits, engine, channels, connectedApps]
+      required: [id, email, emailVerified, name, timezone, plan, role, status, suspendedAt, flagged, createdAt, deletedAt, lastActiveAt, credits, engine, channels, connectedApps, onboardingCompletedAt, gettingStartedDismissedAt]
       properties:
         id: { type: string }
         email: { type: string }
@@ -4872,6 +4872,19 @@ components:
           description: The chat apps linked (the kinds only, never a chat id or number).
           items: { type: string, enum: [whatsapp, telegram, imessage] }
         connectedApps: { type: integer, description: "App connections that are active" }
+        onboardingCompletedAt:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            When the user finished or skipped the web app's welcome steps; null means not yet, so
+            the web app shows them on the next visit. The same mark as on `Me`. The reset
+            (`POST /v1/admin/users/{userId}/onboarding/reset`) clears it.
+        gettingStartedDismissedAt:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            When the user closed the "Getting started" checklist; null means it may still show.
+            The same mark as on `Me`. The reset clears it too.
 
     AdminUserDetailApp:
       type: object

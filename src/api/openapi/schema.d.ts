@@ -3406,6 +3406,19 @@ export interface components {
             channels: ("whatsapp" | "telegram" | "imessage")[];
             /** @description App connections that are active */
             connectedApps: number;
+            /**
+             * Format: date-time
+             * @description When the user finished or skipped the web app's welcome steps; null means not yet, so
+             *     the web app shows them on the next visit. The same mark as on `Me`. The reset
+             *     (`POST /v1/admin/users/{userId}/onboarding/reset`) clears it.
+             */
+            onboardingCompletedAt: string | null;
+            /**
+             * Format: date-time
+             * @description When the user closed the "Getting started" checklist; null means it may still show.
+             *     The same mark as on `Me`. The reset clears it too.
+             */
+            gettingStartedDismissedAt: string | null;
         };
         AdminUserDetailApp: {
             /** @example gmail */

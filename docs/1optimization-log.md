@@ -50,7 +50,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 15 October 2026: where a sign-in's seconds go, and a new account's first page one trip shorter
 
-- **Where it is:** on the branch `perf/sign-in-speed` in the backend and in the web app, waiting for your review. Not on `main` and not on the test server yet.
+- **Where it is:** on `main` and on the test server since 15 October (backend), and live on app.textcrew.in since 15 October (web app, together with the welcome flow shown first).
 - **Why:** you signed up and signed in on `app.textcrew.in` with Google on 15 October and said it took too long. Each step was measured: the server's request log from your sign-up, the sign-in pages loaded in a headless browser from a laptop in India (no account made, nothing typed), and the backend's own tests with every database trip slowed to Neon's distance.
 - **Where the seconds go** for someone new who uses "Continue with Google" on the sign-in page. "Ours" means our code or our setup; "Clerk" is the sign-in service, whose servers are in the US, about 0.5 s away per request from India.
 

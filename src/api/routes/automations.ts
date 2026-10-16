@@ -1,5 +1,6 @@
 import {
   deleteAutomation,
+  getAutomation,
   listAutomations,
   setEnabled,
   toApiAutomation,
@@ -18,6 +19,13 @@ export const automationRoutes = [
   route('listAutomations', async (c) => {
     const rows = await listAutomations(c.get('user').id);
     return c.json({ items: rows.map(toApiAutomation) }, 200);
+  }),
+
+  // One automation, for its own page in the web app (drawn as a flow). Filtered by the user.
+  route('getAutomation', async (c, { params }) => {
+    const row = await getAutomation(c.get('user').id, params.automationId);
+    if (!row) throw notFound('Automation not found');
+    return c.json(toApiAutomation(row), 200);
   }),
 
   route('updateAutomation', async (c, { params, body }) => {

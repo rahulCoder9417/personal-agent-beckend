@@ -39,6 +39,15 @@ export class AutomationError extends Error {
   }
 }
 
+/**
+ * Where a copy of each run's answer goes besides the Automations chat: the chat app the automation
+ * was made in (its session key). Null for web chat, or a key that names no chat app.
+ */
+export function copyToOf(sessionKey: string): 'telegram' | 'whatsapp' | 'imessage' | null {
+  const channel = parseSessionKey(sessionKey)?.channel;
+  return channel && channel !== 'web' ? channel : null;
+}
+
 export function toApiAutomation(a: Automation) {
   return {
     id: a.id,
@@ -48,7 +57,10 @@ export function toApiAutomation(a: Automation) {
     runAt: a.runAt ? a.runAt.toISOString() : null,
     cron: a.cron,
     timezone: a.timezone,
-    trigger: a.trigger ? { app: a.trigger.app, event: a.trigger.event } : null,
+    trigger: a.trigger
+      ? { app: a.trigger.app, event: a.trigger.event, config: a.trigger.config ?? {} }
+      : null,
+    copyTo: copyToOf(a.sessionKey),
     preset: a.preset ?? null,
     enabled: a.enabled,
     pausedReason: a.pausedReason ?? null,

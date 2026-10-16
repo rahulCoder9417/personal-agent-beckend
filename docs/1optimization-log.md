@@ -50,7 +50,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 16 October 2026: approvals for Claude Code's own actions, and for git pushes
 
-- **Where it is:** on the branch `feat/cc-approvals` in the backend, the vm-manager and the web app. Not on `main`, not on the test server.
+- **Where it is:** on `main` and on the test server (backend and vm-manager), and live in the web app, since 16 October.
 - **Why:** until now nothing the agent did itself ever asked first. Claude Code ran any command without asking, and the container was the only wall. Two gaps stood out: with Scout's browser on, the container can reach any public website, so `curl` in a command could too; and the git gateway refused the default branch, deletes and tags, but let a force push to any other branch through. Your choices from the research: our own rule list, a gate in the container that fails closed, the usual approval card that ends the turn, the git gateway enforcing the push rules for Hermes too, and the crew brief as the yes for its own branch only.
 - **What the user notices:**
   - Most of the time, nothing: reading, searching, work inside the workspace, tests, builds, local git and pushing a new branch run as before.
@@ -78,7 +78,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 16 October 2026: Keep my plan, and auto top-up (built, switched off)
 
-- **Where it is:** on the branch `feat/billing-resume` in the backend and the web app, 16 October. Not merged, not on the test server.
+- **Where it is:** on `main` and on the test server (backend and vm-manager), and live in the web app, since 16 October. Auto top-up stays switched off (`AUTO_TOPUP_ENABLED`).
 - **Why:** two items for the Pricing page. First, after Cancel there was no way back, and "Subscribe again" would start a second paid month while the first was still running. Second, you wanted auto top-up, but only if Polar can really charge a saved card without the user being there.
 - **What Polar can do:** yes, it can. Polar added "off-session charges" in June 2026. A draft order for a one-time product is made, then "finalized", and Polar charges the customer's saved card at once. It is in preview, needs a paid Polar plan, and Polar has to switch it on for our account (`off_session_charges_enabled`). Sources: https://polar.sh/docs/features/orders.md (the section "Arbitrary charges"), the API spec at https://polar.sh/docs/openapi.json (`POST /v1/orders/` and `POST /v1/orders/{id}/finalize`), and the change that added it, https://github.com/polarsource/polar/pull/12089. Polar's docs do not say for sure that the card saved at a plan's checkout is the one used. Check that in the sandbox before switching it on.
 - **What the user notices:**
@@ -110,7 +110,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 16 October 2026: automations on a canvas, phase 3 (building and changing one by hand)
 
-- **Where it is:** on the branch `feat/automations-manual` in the backend and the web app, made from `main` of 16 October. Not on `main`, not on the test server. The vm-manager does not change.
+- **Where it is:** on `main` and on the test server (backend and vm-manager), and live in the web app, since 16 October.
 - **Why:** you approved phase 3 of `automations-flow-proposal.md` (option A): build and change today's shape of automation box by box on the canvas, check it before saving, try it once, and make the apps on the canvas a real limit (your decision 6).
 - **What the user notices:**
   - On an automation's page, a click on a box opens its settings beside the canvas: when it runs (once, a schedule built from days and a time, every few hours, or a cron line, in their time zone; or an app event picked from the app's own list, with its settings), Tex's instruction, the apps Tex may use, "ask me first" (the usual rule, or stricter: before anything that changes something), and where the results go (the Automations chat, and a copy to their linked Telegram chat or not).
@@ -147,7 +147,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 16 October 2026: a quicker first answer (waking before the message, and a quick default model)
 
-- **Where it is:** on the branch `perf/prewarm-defaults` in the backend, the vm-manager and the web app, not merged and not on the test server.
+- **Where it is:** on `main` and on the test server (backend and vm-manager), and live in the web app, since 16 October.
 - **Why:** two things you approved. A container asleep after its 3 idle minutes added 2.5 to 3.5 seconds to the first message, plus about a second for Claude Code to start. And with the model left on "Default", Claude Code picked for itself: on a Max plan Opus 5.5 at medium effort, which once thought for 14 seconds before its first word. The idle stop stays at 3 minutes: keeping containers awake longer would cost users credits.
 - **What the user notices:**
   - In web chat, the first message after a pause no longer waits for the wake, when the chat was opened or typing started a few seconds before sending. Nothing is shown for it.
@@ -184,7 +184,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 16 October 2026: notices and approvals on Telegram, with quiet hours
 
-- **Where it is:** on the branch `feat/notify-telegram` in the backend and the web app (worktrees `beckend-wt-notify` and `user-frontend-web-wt-notify`), not on `main` yet. Nothing deployed.
+- **Where it is:** on `main` and on the test server (backend and vm-manager), and live in the web app, since 16 October.
 - **Why:** you asked for "notifiers on Telegram when the job is finished" and left the choices to us. Before this, a crew job's report went to one chat only, so a job given in the web app never reached Telegram; an automation made in the web app answered only in the Automations chat; an approval's buttons showed only in the chat that asked, and stayed after a tap.
 - **What the user notices:**
   - Settings → General has "Tell me on Telegram when…", once Telegram is linked, with three switches: Byte or Patch finishes a job (on at first), pull-request reviews finish (on), automation runs finish (off; it is about automations made in the web app, since those made on Telegram always answer there). Each change saves at once, with a toast.
@@ -210,7 +210,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 16 October 2026: the databases' move to Neon in Singapore, prepared (not run)
 
-- **Where it is:** on the branch `ops/neon-singapore`, not merged, since 16 October. **Prepared only: nothing has been run.** The server still uses Neon in Ohio. The move waits for you to create the new Neon project.
+- **Where it is:** on `main` since 16 October: the script and the runbook only. Not run; it waits for the new Neon project in Singapore.
 - **Why:** every trip to the database from the Mumbai server to Neon in Ohio takes about 209 to 260 ms, and a reply still makes about a dozen of them one after another. You approved preparing a move to Neon's Singapore region, about 35 to 60 ms away. Neon can't move a project to another region, so this is a new project and a copy of the data.
 - **What the user notices:** nothing yet. After the move, about 2.5 seconds less on every message, and faster pages in the web app. During the move, about 5 minutes (at most about 10) in which the bot doesn't answer and the web app shows errors.
 - **Backend:** a new one-off script, `move-neon-region.sh`, next to the first move's script, built the same way:

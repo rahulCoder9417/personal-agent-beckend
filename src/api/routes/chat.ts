@@ -23,6 +23,7 @@ import { config } from '../../shared/config.ts';
 import { db } from '../../shared/db/client.ts';
 import { AppError, badRequest, notFound } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
+import { logger } from '../../shared/logger.ts';
 import { iso } from '../presenters.ts';
 import { route } from '../router.ts';
 
@@ -156,20 +157,93 @@ export const chatRoutes = [
         enqueueStreamEvent(queue, e);
         wake?.();
       });
-      stream.onAbort(unsubscribe);
-      await stream.writeSSE({ event: 'ready', data: '{}' });
+      const life = streamLife(userId, queue);
+      stream.onAbort(() => {
+        unsubscribe();
+        life.closed();
+      });
+      const write = async (event: string, data: string) => {
+        const started = life.writing(event);
+        await stream.writeSSE({ event, data });
+        life.written(event, started);
+      };
+      await write('ready', '{}');
       while (!stream.aborted) {
         const next = queue.shift();
         if (next) {
-          await stream.writeSSE({ event: next.type, data: JSON.stringify(next) });
+          await write(next.type, JSON.stringify(next));
           continue;
         }
         await Promise.race([new Promise<void>((r) => (wake = r)), stream.sleep(25_000)]);
         wake = undefined;
-        if (queue.length === 0 && !stream.aborted)
-          await stream.writeSSE({ event: 'ping', data: '{}' });
+        if (queue.length === 0 && !stream.aborted) await write('ping', '{}');
       }
       unsubscribe();
     });
   }),
 ];
+
+/** A write to the live stream that waits this long means nothing downstream is reading it. */
+export const STREAM_WRITE_SLOW_MS = 5_000;
+let writeSlowMs = STREAM_WRITE_SLOW_MS;
+/** Tests lower it. */
+export function setStreamWriteSlowMs(ms: number | undefined): void {
+  writeSlowMs = ms ?? STREAM_WRITE_SLOW_MS;
+}
+
+/**
+ * What one live stream did, for the log: a write that waited (`STREAM_WRITE_SLOW_MS`), and one line
+ * when the connection closes, with how long it was open, what was written, the last event and how
+ * long before the close it went, and how many events were still waiting. That tells a connection
+ * the api kept writing to (its pings up to the end) from one whose writes stopped going through.
+ * Nothing of what the events say is logged.
+ */
+function streamLife(userId: string, queue: readonly StreamEvent[]) {
+  const openedAt = Date.now();
+  let events = 0;
+  let pings = 0;
+  let lastWriteAt = openedAt;
+  let lastEvent: { type: string; at: number } | null = null;
+  let done = false;
+  const seconds = (ms: number) => Math.round(ms / 100) / 10;
+  return {
+    /** An event is handed to the connection. Returns when. */
+    writing(event: string): number {
+      const now = Date.now();
+      lastWriteAt = now;
+      if (event === 'ping') pings++;
+      else if (event !== 'ready') {
+        events++;
+        lastEvent = { type: event, at: now };
+      }
+      return now;
+    },
+    /** The connection took it; `since` is when it was handed over. */
+    written(event: string, since: number) {
+      const waitedMs = Date.now() - since;
+      if (waitedMs >= writeSlowMs)
+        logger().warn(
+          { userId, event, waitedSeconds: seconds(waitedMs), waiting: queue.length },
+          'live stream write held up',
+        );
+    },
+    closed() {
+      if (done) return;
+      done = true;
+      const now = Date.now();
+      logger().info(
+        {
+          userId,
+          openSeconds: seconds(now - openedAt),
+          events,
+          pings,
+          lastEvent: lastEvent?.type ?? null,
+          lastEventSecondsAgo: lastEvent ? seconds(now - lastEvent.at) : null,
+          quietSeconds: seconds(now - lastWriteAt),
+          waiting: queue.length,
+        },
+        'live stream closed',
+      );
+    },
+  };
+}

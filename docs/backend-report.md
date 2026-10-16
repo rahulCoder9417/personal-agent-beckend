@@ -2494,6 +2494,8 @@ The message on Telegram has no purchase link, by the Telegram rule. It names the
 
 ### Refunds and chargebacks
 
+The rule, on the terms page since 16 October (`textcrew.in/terms#refunds`): a user can ask for a refund within 14 days of a payment, by writing to support@textcrew.in. After 14 days there is none, except where the law requires. The backend does not check the 14 days, and it has no way to make a refund. An admin makes it by hand in Polar's dashboard.
+
 A refund is made in Polar. The backend acts when the refund has succeeded.
 
 1. It finds the saved order: the amount paid and the credits bought.

@@ -48,6 +48,20 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 16 October 2026: the terms page goes live, and the refund rule is decided
+
+- **Where it is:** live on the website at `textcrew.in/terms` since 16 October (landing page `main`). The docs are on the backend's `main`. Nothing changed in the backend's code or on the server.
+- **Why:** Polar's review and Google's review both look for a terms page with a refund rule, and the page had blanks. You gave the answers: Rahul Kumar, Chandigarh, and yes to 14-day refunds.
+- **What the user notices:** a Terms link in the website's footer, and on Pricing a line that a refund can be asked for within 14 days, linking to the terms. The terms say: Textcrew is run by Rahul Kumar, an individual trading as Textcrew (not a company), in Chandigarh, India; the plans at the launch prices ($19 Pro, $30 Max, regular $30 and $50, a $10 top-up, 50% off the first month for the waitlist); cancelling stops the next renewal and the plan runs to the end of the month paid for; a refund on request within 14 days of a payment, made by Polar, with the credits it added taken back and any already spent owed from the next credits; no refund after 14 days except where the law requires; Polar may refund on its own to stop a chargeback; the laws of India and the courts at Chandigarh.
+- **Backend:** no change. The backend already takes the credits back when Polar reports a succeeded refund, and spent credits stay as a debt. A refund does not end the plan, so the terms tell the user to cancel as well. The backend does not check the 14 days, and has no way to make a refund: an admin makes it in Polar's dashboard.
+- **Cost and speed:** none.
+- **Contracts:** none.
+- **Database:** none.
+- **How it was checked:** the landing page's lint and build passed, the built terms page has no placeholder left, and `textcrew.in/terms` was opened after the deploy.
+- **Still open:** the full privacy policy (the privacy page is still a summary).
+- **Docs updated:** `hld-mvp.md` section 12 (the refund decision marked decided, and the lines that said the terms page was waiting), `backend-report.md` section 28, "Refunds and chargebacks" (the rule and who makes a refund).
+- **Commits:** landing page `71e3c5f` (the filled terms page) and the merge `b88e836`; backend COMMIT_ID (these docs).
+
 ### 16 October 2026: automations with steps, the real run on the test server (4d) and its fixes
 
 - **Where it is:** the real run was done on the test server on 16 October, on your current account, on Claude Code. The fixes are on `main` and on the test server since 16 October.

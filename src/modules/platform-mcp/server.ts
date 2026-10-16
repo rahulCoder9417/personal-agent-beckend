@@ -4,7 +4,13 @@ import { runLater } from '../../shared/later.ts';
 import { logger } from '../../shared/logger.ts';
 import { audit, type AuditInput } from '../admin/audit.ts';
 import { touch } from '../orchestrator/sandbox.ts';
-import { platformTools, ToolError, type ToolContext } from './registry.ts';
+import {
+  INTERNAL_FAILURE,
+  platformTools,
+  ToolError,
+  UNKNOWN_FAILURE,
+  type ToolContext,
+} from './registry.ts';
 import './tools/core.ts';
 import './tools/apps.ts';
 import './tools/automations.ts';
@@ -39,6 +45,20 @@ export function createPlatformMcpServer(ctx: ToolContext): McpServer {
           const message = err instanceof ToolError ? err.message : 'Internal error';
           if (!(err instanceof ToolError))
             logger().error({ tool: tool.name, err: String(err) }, 'tool failed');
+          // A failed or refused call is in the activity log too, for the tools that say how (app
+          // actions, approval requests): what, which app and why, never the inputs.
+          const reason =
+            err instanceof ToolError ? (err.reason ?? UNKNOWN_FAILURE) : INTERNAL_FAILURE;
+          const failure = tool.auditFailure?.(args as never, reason);
+          if (failure)
+            auditLater(tool.name, {
+              userId: ctx.userId,
+              actor: 'agent',
+              action: failure.action,
+              summary: failure.summary,
+              details: failure.details,
+              creditsCharged: failure.creditsCharged ?? null,
+            });
           return { content: [{ type: 'text' as const, text: message }], isError: true };
         }
       },

@@ -323,6 +323,10 @@ export const configSchema = z.object({
   BACKUP_VOLUMES_DIR: z.string().default('/backups/volumes'),
   /** Off-server copy, run after each backup. `{dir}` and `{date}` are substituted. e.g. rclone copy {dir} b2crypt:backups/{date} */
   BACKUP_UPLOAD_CMD: optional,
+  /**
+   * Days the database dumps are kept (the privacy page says 7). The vm-manager deletes the archives
+   * of users' files after its own SNAPSHOT_KEEP_DAYS: keep the two equal.
+   */
   BACKUP_KEEP_DAYS: z.coerce.number().int().positive().default(7),
   /** Bearer token for GET /metrics (unset = endpoint disabled). */
   METRICS_TOKEN: optional,

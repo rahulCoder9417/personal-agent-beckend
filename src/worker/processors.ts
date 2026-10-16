@@ -7,6 +7,7 @@ import {
   handleRefundTurn,
   handleSyncUsage,
 } from '../modules/billing/jobs.ts';
+import { handleAutoTopUp } from '../modules/billing/auto-topup.ts';
 import { handleBillTurn } from '../modules/billing/turn-billing.ts';
 import {
   handleAutomationTurn,
@@ -72,6 +73,7 @@ export function processors(): Processors {
       'bill-turn': handleBillTurn,
       'refund-turn': handleRefundTurn,
       'expire-credits': handleExpireCredits,
+      'auto-topup': handleAutoTopUp,
     },
   };
 }

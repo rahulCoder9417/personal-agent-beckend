@@ -3,6 +3,7 @@
 // so what users see about them is read back from the ledger.
 import { db, type Tx } from '../../shared/db/client.ts';
 import { getBalance, spendInTx } from './credits.ts';
+import { maybeQueueAutoTopUp } from './auto-topup.ts';
 import { afterCreditsRemoved } from './enforce.ts';
 import { itemCreditsFor, restoreItemChargesInTx } from './item-charges.ts';
 
@@ -42,6 +43,7 @@ export async function chargeAppAction(
   const balance = await getBalance(userId);
   // The last credit went: close the AI budget and pause automations (HLD 7.5).
   if (charged > 0 && balance <= 0) await afterCreditsRemoved(userId);
+  if (charged > 0) await maybeQueueAutoTopUp(userId, balance);
   return { charged, balance };
 }
 

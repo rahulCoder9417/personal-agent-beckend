@@ -12,6 +12,7 @@ import { audit } from '../admin/audit.ts';
 import { flagUser, getUser, setPlan } from '../auth/users.ts';
 import { findWaitlistOffer, markWaitlistOfferUsed } from '../auth/waitlist.ts';
 import { getEvent } from '../events/intake.ts';
+import { markAutoTopUpCredited } from './auto-topup.ts';
 import { createGrantInTx } from './credits.ts';
 import { afterCreditsAdded, afterCreditsRemoved } from './enforce.ts';
 import { firePlanChanged } from './hooks.ts';
@@ -288,6 +289,8 @@ async function orderPaid(d: Data, event: PolarWebhook) {
     return created;
   });
   if (toppedUp) await afterCreditsAdded(userId);
+  // An auto top-up's credits are in: its "waiting" marker is lifted (also on a re-run).
+  if (isTopUp) await markAutoTopUpCredited(orderId);
   if (newPeriod) {
     // The order carries the subscription as it is now (the paid period's dates).
     const s = obj(d, 'subscription') ?? { id: subId, product_id: str(d, 'product_id') };

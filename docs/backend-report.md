@@ -2217,7 +2217,7 @@ The ways to move:
 
 Polar is the payment company. It shows the payment page, charges the card, runs the monthly subscription and tells the backend what happened. This section follows a payment from the click to the credits.
 
-The backend needs these settings: `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET`, `POLAR_SERVER`, one product id each for Pro, Max and the top-up, and `POLAR_WAITLIST_DISCOUNT_ID`. `POLAR_SERVER` is "sandbox" by default, which is Polar's test system. Without the product ids a checkout fails. Without the webhook secret every webhook is refused.
+The backend needs these settings: `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET`, `POLAR_SERVER`, one product id each for Pro, Max and the top-up, and `POLAR_WAITLIST_DISCOUNT_ID`. `POLAR_SERVER` is "sandbox" by default, which is Polar's test system. Without the product ids a checkout fails. Without the webhook secret every webhook is refused. `AUTO_TOPUP_ENABLED` switches auto top-up on (off by default, see "Auto top-up" below).
 
 ### Checkout
 
@@ -2245,7 +2245,7 @@ At this point nothing has changed in our database. Only Polar's webhook changes 
 |---|---|
 | `subscription.active` | Sets the plan, grants the month's credits, raises the AI budget |
 | `order.paid` for a plan | Saves the order. Grants that month's credits if not yet granted |
-| `order.paid` for a top-up | Saves the order. Adds 800 credits for 90 days |
+| `order.paid` for a top-up | Saves the order. Adds 800 credits for 90 days. For an auto top-up, marks the try as credited |
 | `subscription.updated` | Updates status and dates. A change between Pro and Max applies at once |
 | `subscription.canceled` | Marks the plan as ending at the period end. The plan stays |
 | `subscription.uncanceled` | Marks the plan as active again |
@@ -2265,6 +2265,60 @@ Cancelling goes like this:
 3. At the period end Polar sends `subscription.revoked`. The user goes to Free. As a safety net, the hourly job ends any cancelled plan whose period is over.
 
 Credits already granted keep their 90 days. Deleting an account also cancels the plan at the period end.
+
+**Keep my plan.** Until the period ends, the user can undo the cancel (`/v1/billing/subscription/resume`):
+
+1. The api checks that the user has a cancelled plan whose period is not over, and no other plan that renews. If not, it refuses (409).
+2. It asks Polar to renew the subscription again.
+3. It marks the plan as active at once, as Cancel marks it cancelled at once. Polar's `subscription.uncanceled` then says the same.
+
+Nothing is charged at that moment and no credits are given. The next renewal charges and gives the month's credits as usual. While a cancelled plan still runs, a checkout for the same plan is refused, so nobody pays for a second month beside the first.
+
+### Auto top-up
+
+Auto top-up buys a top-up by itself when the balance runs low. It charges the user's card while they are not there, so it has more rules than anything else here. It is off unless the server setting `AUTO_TOPUP_ENABLED` is on. Off, the api says it is not available, the web app hides it and the job does nothing.
+
+**How Polar does it.** Polar calls this an "off-session charge". The backend makes a draft order for the top-up product, which charges nothing yet. Then it asks Polar to "finalize" the order, and Polar charges the saved card at once. The feature is in preview: it needs a paid Polar plan, and Polar has to switch it on for our account. See https://polar.sh/docs/features/orders.md.
+
+**Switching it on.** In Pricing the user picks:
+
+- the line: a top-up is tried when a charge leaves the balance under it (20 to 1,000 credits, 100 at first);
+- the pack ($10 for 800 credits, the only one);
+- the most per calendar month (1 to 5, 2 at first).
+
+Then they tick a box that allows the charges. The api checks the plan (Pro or Max), the ticked box and that Polar has a saved card for the user. The card is the one Polar keeps for their plan. The backend keeps only its brand and last 4 digits. The settings, the time of the consent and the card are saved, and the activity log records it. Switching off always works.
+
+**When it runs.** After a usage charge, an app action or a paid tool, the backend checks the user's line. If the balance is now under it, a job is added (`auto-topup`, one a minute at most per user). The job takes a lock of its own for that user, so two never run at once. Then it stops if any of these is true:
+
+1. Auto top-up is off, or the plan is Free.
+2. The balance is not under the line any more.
+3. A top-up was paid and its credits have not arrived yet (the "waiting" mark). This lasts up to a day.
+4. The last try was less than an hour ago, or less than a day ago if the card was declined.
+5. The month's limit is reached. Tries that are paid, or being paid, count.
+
+Otherwise it writes the try, with a key made of the user, the month and the try's number, and makes the draft order. The order id is saved before the card is charged. Then it finalizes the order.
+
+**Credits come only from Polar.** A paid order does not add credits by itself. The credits come with Polar's `order.paid` event, through the same steps and the same key (`topup:<order id>`) as a top-up bought by hand. The try then becomes "credited", which lifts the waiting mark.
+
+**Why a re-run cannot charge twice.**
+
+- A try that did not finish is finished, never started again. Its order id is saved, so the next run asks Polar about that order. If it is paid, the try is marked paid. If it is still a draft, it is charged then, unless the balance is fine again. Then it is dropped.
+- Polar refuses to finalize an order that is no longer a draft. So the same order can be charged once at most.
+- Two jobs at once: the lock lets one through, and the try's key is unique.
+
+**When it fails.**
+
+| What happens | What the backend does |
+|---|---|
+| The card is declined | The try is marked declined. The next try waits a day |
+| Declined twice in a row | It switches itself off. The user is told in the web chat and on Telegram |
+| Polar has no saved card | It switches itself off at once and tells the user |
+| Polar refuses for another reason (for example, off-session charges not switched on) | The same |
+| Polar does not answer | The job is tried again. The saved order id keeps it to one charge |
+
+The message on Telegram has no purchase link, by the Telegram rule. It names the Textcrew web app instead. A paid top-up sets the count of declines back to zero, and so does switching it on again.
+
+**What the user sees.** `/v1/billing/auto-topup` gives the settings, the card, why it switched itself off, this month's count and cost, and the last try.
 
 ### Refunds and chargebacks
 
@@ -2303,7 +2357,7 @@ The offer is marked as used when the subscription becomes active, not at checkou
 
 - **The webhook does not arrive.** The user has paid and sees no change. Nothing changes until it arrives. Handling the same event late, or twice, is safe.
 - **The job fails.** It is retried, 5 tries in all. Then it shows on the failed jobs board.
-- **Polar does not answer at checkout or at cancel.** The user gets an error. Nothing was changed.
+- **Polar does not answer at checkout, at cancel or at "Keep my plan".** The user gets an error. Nothing was changed.
 - **The user or the product cannot be matched.** The event is logged as a warning and ignored.
 
 ## 29. Coupon codes

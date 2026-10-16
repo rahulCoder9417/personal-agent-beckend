@@ -34,6 +34,7 @@ describe('contract: routes', () => {
       'getSubscription',
       'createCheckout',
       'cancelSubscription',
+      'resumeSubscription',
       'getCredits',
       'listLedger',
       'getUsage',
@@ -139,6 +140,21 @@ describe('contract: billing', () => {
       409,
     );
     expect(body.error.code).toBe('conflict');
+  });
+
+  it('POST /v1/billing/subscription/resume', async () => {
+    const u = await createUser();
+    const body = await expectContract<Err>(
+      'resumeSubscription',
+      await call('/v1/billing/subscription/resume', { method: 'POST', token: u.token }),
+      409,
+    );
+    expect(body.error.code).toBe('conflict');
+    await expectContract(
+      'resumeSubscription',
+      await call('/v1/billing/subscription/resume', { method: 'POST' }),
+      401,
+    );
   });
 });
 

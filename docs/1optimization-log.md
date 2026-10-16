@@ -48,6 +48,38 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 16 October 2026: Keep my plan, and auto top-up (built, switched off)
+
+- **Where it is:** on the branch `feat/billing-resume` in the backend and the web app, 16 October. Not merged, not on the test server.
+- **Why:** two items for the Pricing page. First, after Cancel there was no way back, and "Subscribe again" would start a second paid month while the first was still running. Second, you wanted auto top-up, but only if Polar can really charge a saved card without the user being there.
+- **What Polar can do:** yes, it can. Polar added "off-session charges" in June 2026. A draft order for a one-time product is made, then "finalized", and Polar charges the customer's saved card at once. It is in preview, needs a paid Polar plan, and Polar has to switch it on for our account (`off_session_charges_enabled`). Sources: https://polar.sh/docs/features/orders.md (the section "Arbitrary charges"), the API spec at https://polar.sh/docs/openapi.json (`POST /v1/orders/` and `POST /v1/orders/{id}/finalize`), and the change that added it, https://github.com/polarsource/polar/pull/12089. Polar's docs do not say for sure that the card saved at a plan's checkout is the one used. Check that in the sandbox before switching it on.
+- **What the user notices:**
+  - **Keep my plan.** After Cancel, the plan's own column on Pricing shows "Keep my plan" in place of "Subscribe again". A dialog says the plan renews on its date as before and that nothing is charged today. Then a toast says so and the card says when it renews.
+  - Paying again for the same plan while the cancelled one still runs is refused.
+  - **Auto top-up** is hidden while the server setting `AUTO_TOPUP_ENABLED` is off, which it is by default. Users see nothing of it.
+  - Switched on: Pro and Max users pick when (under 100 credits, say), the pack and the most per month. They see the price in words, tick a box that says exactly what will be charged, and then it runs by itself.
+  - Only while it is allowed, Pricing, Settings → Credits and Help stop saying that a card is never charged at zero, and Help gets an answer about it.
+- **Backend:**
+  - `POST /v1/billing/subscription/resume` asks Polar to renew a cancelled subscription again. It is refused when nothing is cancelled, when the period is over, or when another plan already renews. The plan and its credits keep following Polar's events, as before.
+  - Auto top-up: `GET` and `PUT /v1/billing/auto-topup`. Switching on needs the ticked box, a paid plan and a card Polar has saved.
+  - After a charge leaves the balance under the line, a job is added. The job has its own lock per user. It stops at the monthly limit, within an hour of the last try (a day after a declined card), and while a paid top-up's credits are still on their way.
+  - The job saves Polar's order id before the charge, so a re-run charges that same order once at most. The credits come only from Polar's paid-order event, as for a top-up bought by hand.
+  - Two declined cards in a row, no saved card, or a refusal from Polar switch it off. The user is told in the web chat and on Telegram, where the message has no purchase link.
+- **Cost and speed:** with the setting off, nothing changes: the check after a charge returns before it touches the database. With it on, each charge adds one small read. A top-up costs the user $10 for 800 credits, at most their monthly limit, plus tax where it applies.
+- **Contracts:** `openapi.yaml` gains `POST /v1/billing/subscription/resume` and `GET`/`PUT /v1/billing/auto-topup`, and the web app's copy is synced. `vm.proto` is unchanged.
+- **Database:** migration `0029_auto_topup` (renumbered at the merge) adds two tables. `auto_topup_settings` holds one row per user: on or off, the line, the pack, the limit, when they allowed it, the card's brand and last 4 digits, the declines in a row, and why it switched itself off. `auto_topup_attempts` holds one row per try, with a unique key and Polar's order id. There is still no balance column anywhere.
+- **How it was checked:**
+  - Backend: lint and type-check clean. 1,029 tests: 1,027 passed and 2 failed, both outside billing. `automation-drafts` has a timing bug that `main` fixed after this branch began. `phase6-routing` passed when run again.
+  - The new auto top-up tests (13) cover the setting off hiding everything, the line, the cap, the cooldown, the waiting mark, switching off after declines with the messages, no card and refusals, a lost answer from Polar, a timeout, two runs at once, and order.paid arriving twice. The resume tests cover that it calls Polar, that it is refused when not cancelled or after the period, and user isolation.
+  - Web: lint, type-check, 946 tests and the build all pass.
+  - Polar's real API was never called. It has not run on the test server.
+- **Still open:**
+  - Before setting `AUTO_TOPUP_ENABLED=true`, ask Polar to switch on off-session charges for our organization, then try one charge in the sandbox with a real subscriber's saved card.
+  - Changing the card is done with Polar, not in our app.
+  - Merging needs the migration number checked against other branches.
+- **Docs updated:** `hld-mvp.md` section 7 (new parts "Cancelling, and keeping the plan after all" and "Auto top-up"), `backend-report.md` section 28 ("Keep my plan" under "Renewals and cancelling", a new part "Auto top-up", and the settings and events lists), and the web app's README (Pricing).
+- **Commits:** backend `c1f0242`, `bd420b8`, `5642132`, `acc447e`, `66afa48`, and this entry. Web `e0dd082`, `574e046`.
+
 ### 16 October 2026: automations on a canvas, phase 3 (building and changing one by hand)
 
 - **Where it is:** on the branch `feat/automations-manual` in the backend and the web app, made from `main` of 16 October. Not on `main`, not on the test server. The vm-manager does not change.

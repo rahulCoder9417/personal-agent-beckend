@@ -382,6 +382,24 @@ Free: reading and searching in apps, reading a web page, and the web search buil
 - Every charge is written once, even if a job runs twice.
 - At zero credits a turn does not start, and automations pause.
 
+### Cancelling, and keeping the plan after all
+
+- Cancel stops the plan at the end of the month already paid for. Until then the plan stays.
+- Until that day, "Keep my plan" undoes the cancel. Polar is asked to renew the plan again. Nothing is charged at that moment, and no credits are given. The next renewal charges and gives credits as usual.
+- Paying for the same plan again while it still runs is refused, so nobody pays for a second month beside the first.
+
+### Auto top-up (switched off on the server for now)
+
+Polar can charge a saved card without the user being there, for a one-time product such as the top-up. It calls these "off-session charges". They are in preview, need a paid Polar plan, and Polar must switch them on for our account. So auto top-up is built but hidden, behind the server setting `AUTO_TOPUP_ENABLED` (off by default).
+
+When it is on:
+
+- Only Pro and Max users can use it. They switch it on in Pricing, pick when (under 100 credits, say), the pack ($10 for 800 credits), and the most per month (2, say), and tick a box that allows the charges. It uses the card Polar already has for their plan.
+- After a charge leaves the balance under their line, the worker tries one top-up. It does nothing if the month's limit is reached, if the last try was less than an hour ago (a day after a declined card), or if a top-up is already paid and its credits are on the way.
+- The credits come only from Polar's "order paid" event, as for a top-up bought by hand.
+- After 2 declined cards in a row it turns itself off, and the user is told in the web chat and on Telegram. With no saved card, or when Polar refuses for another reason, it turns off at once and says so.
+- With the setting on, Pricing and Help no longer say that nothing is ever charged at zero.
+
 **Still open:** you want Free users to run out sooner, so that they buy a plan. The choices are fewer sign-up credits, a shorter life for them, or higher prices for everyone. Nothing is changed yet.
 
 ---

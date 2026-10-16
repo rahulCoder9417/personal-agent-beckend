@@ -204,6 +204,13 @@
       "when": 1792148405234,
       "tag": "0028_automations_manual",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1792148786839,
+      "tag": "0029_auto_topup",
+      "breakpoints": true
     }
   ]
 }

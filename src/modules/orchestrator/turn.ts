@@ -59,6 +59,13 @@ export interface TurnInput {
    * apps, "ask me first").
    */
   automationId?: string;
+  /**
+   * The automation whose work this turn is: its run (not a test run, which is the user's own),
+   * the turn after the user's answer to one of its approvals, or a crew job its run started. An
+   * approval asked during the turn is then the automation's, and may go to Telegram too
+   * (approvals.ts). Left out: the user's own work.
+   */
+  forAutomation?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -217,6 +224,8 @@ export interface CurrentTurn {
   kind?: TurnKind;
   /** An automation's run: the automation. */
   automationId?: string;
+  /** The automation whose work the turn is (TurnInput.forAutomation). */
+  forAutomation?: string;
 }
 
 /** Never fails the turn: without the record a reply goes to the chat's active conversation. */
@@ -325,6 +334,23 @@ export async function turnAutomation(userId: string): Promise<string | null | 'u
   } catch (err) {
     logger().warn({ userId, err: String(err) }, 'automation of the turn not readable');
     return 'unknown';
+  }
+}
+
+/**
+ * The automation whose work the user's turn in progress is (TurnInput.forAutomation), in any chat.
+ * Null: no turn in progress, the user's own work, or the record could not be read (an approval is
+ * then kept in the chat it was asked in, the cautious way).
+ */
+export async function turnForAutomation(userId: string): Promise<string | null> {
+  try {
+    const raw = await redis().get(turnConversationKey(userId));
+    if (!raw) return null;
+    const id = (JSON.parse(raw) as { forAutomation?: unknown }).forAutomation;
+    return typeof id === 'string' && id ? id : null;
+  } catch (err) {
+    logger().warn({ userId, err: String(err) }, 'automation of the turn not readable');
+    return null;
   }
 }
 
@@ -618,6 +644,7 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
     inAutomationsChat: input.inAutomationsChat === true,
     kind: input.kind,
     ...(input.automationId ? { automationId: input.automationId } : {}),
+    ...(input.forAutomation ? { forAutomation: input.forAutomation } : {}),
   });
   const outcome = await deliverTurn(
     input,

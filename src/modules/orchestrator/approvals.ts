@@ -21,7 +21,7 @@ import {
   DENY_TITLE,
 } from './approval-text.ts';
 import { approvals } from './schema.ts';
-import { runTurn, turnMessageFields } from './turn.ts';
+import { runTurn, turnForAutomation, turnMessageFields } from './turn.ts';
 
 export type Approval = typeof approvals.$inferSelect;
 export const APPROVAL_TTL_MS = 24 * 3600 * 1000;
@@ -81,7 +81,14 @@ export async function requestApproval(input: {
   details?: Record<string, unknown> | null;
   /** The conversation the question goes to (default: the turn's in progress in that chat). */
   conversationId?: string | null;
+  /**
+   * The automation whose work asks (null: the user's own). Default: the turn in progress's, from
+   * the worker's note, never from anything the agent says.
+   */
+  automationId?: string | null;
 }): Promise<Approval> {
+  const automationId =
+    input.automationId !== undefined ? input.automationId : await turnForAutomation(input.userId);
   const [row] = await db()
     .insert(approvals)
     .values({
@@ -93,6 +100,7 @@ export async function requestApproval(input: {
       arguments: input.arguments ?? null,
       details: input.details ?? null,
       sessionKey: input.sessionKey,
+      automationId,
       expiresAt: new Date(Date.now() + APPROVAL_TTL_MS),
     })
     .returning();
@@ -113,11 +121,14 @@ export async function requestApproval(input: {
     template: 'approval',
     buttons,
   });
-  // Asked elsewhere: the same question on the user's Telegram too. The first answer wins.
-  await copyApprovalQuestion(input.userId, asked, {
-    text: approvalAskText(a.summary, 'telegram'),
-    buttons,
-  });
+  // Asked by an automation's work: the same question on the user's Telegram too (their switch).
+  // One asked in the web app stays there. The first answer wins.
+  await copyApprovalQuestion(
+    input.userId,
+    asked,
+    { text: approvalAskText(a.summary, 'telegram'), buttons },
+    a.automationId,
+  );
   await publish(input.userId, 'approval.created', toApiApproval(a));
   await audit({
     userId: input.userId,
@@ -236,6 +247,8 @@ export async function handleProcessApproval(job: Job): Promise<unknown> {
       userId,
       deliveryId: eventId,
       kind: 'approval_answer',
+      // Still the automation's work: a next question it asks follows the same rule for Telegram.
+      ...(a.automationId ? { forAutomation: a.automationId } : {}),
       sessionKey: a.sessionKey,
       channel: parsedChannel,
       ...(conversationId ? { conversationId } : {}),

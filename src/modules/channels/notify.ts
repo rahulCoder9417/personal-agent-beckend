@@ -1,9 +1,10 @@
 // Notices on Telegram (docs/backend-report.md, "Notices on Telegram"). What the user asked for in
 // the web app (a crew job, a pull-request review, an automation made there) is answered where it
 // was asked; a short notice can go to their linked Telegram chat as well, never instead. An
-// approval asked anywhere is sent to Telegram too, and once it is answered (anywhere) every copy
-// there loses its buttons and says how it ended. During the user's quiet hours Telegram messages
-// are sent silently: nothing is held back.
+// approval asked by an automation's run is sent to Telegram too (the user's switch, on at first);
+// one asked in the web app stays there. Once it is answered (anywhere) every copy on Telegram
+// loses its buttons and says how it ended. During the user's quiet hours Telegram messages are
+// sent silently: nothing is held back.
 import type { Job } from 'bullmq';
 import { config, isChannelEnabled } from '../../shared/config.ts';
 import { logger } from '../../shared/logger.ts';
@@ -29,12 +30,13 @@ import {
 } from './types.ts';
 
 /** The kinds of work a user can be told about on Telegram, each with its own switch. */
-export type NoticeKind = 'crew_job' | 'pr_review' | 'automation_run';
+export type NoticeKind = 'crew_job' | 'pr_review' | 'automation_run' | 'automation_approval';
 
 const SWITCH: Record<NoticeKind, keyof Omit<NotificationSettings, 'quietHours'>> = {
   crew_job: 'crewJobs',
   pr_review: 'prReviews',
   automation_run: 'automationRuns',
+  automation_approval: 'automationApprovals',
 };
 
 /**
@@ -135,26 +137,30 @@ export async function inQuietHours(userId: string, now: Date = new Date()): Prom
 
 // --- approvals on Telegram -----------------------------------------------------------------------
 
-/** The last line of an approval's copy on Telegram: where it was asked, and where Tex goes on. */
-export const ASKED_ELSEWHERE = 'Asked in the web app. Tex carries on there after your answer.';
+/** The last line of an approval's copy on Telegram: who asked, and where Tex goes on. */
+export const ASKED_BY_AUTOMATION =
+  'Asked by one of your automations. Tex carries on in the web app after your answer.';
 
 /**
- * The approval's question was asked in `asked` (its message, in the asking chat). When that chat
- * is not Telegram and the user has linked Telegram, the same question goes there too, with the
- * same buttons. Once per question. Returns the copy, or null when none was sent.
+ * The approval's question was asked in `asked` (its message, in the asking chat), for the work of
+ * `automationId` (null: the user's own chat asked). Only an automation's question goes to Telegram
+ * too, with the same buttons, while the user's "An automation needs my OK" switch is on and
+ * Telegram is linked. One asked in the web app stays there; one asked on Telegram is there
+ * already. Once per question. Returns the copy, or null when none was sent.
  */
 export async function copyApprovalQuestion(
   userId: string,
   asked: MessageRow,
   content: { text: string; buttons: Button[] },
+  automationId: string | null,
 ): Promise<MessageRow | null> {
-  if (!asked.approvalId || asked.channel === 'telegram') return null;
-  const target = await telegramChatOf(userId);
+  if (!asked.approvalId || asked.channel === 'telegram' || !automationId) return null;
+  const target = await noticeTarget(userId, 'automation_approval');
   if (!target) return null;
   return queueOutbound({
     userId,
     sessionKey: target,
-    text: `${content.text}\n\n${ASKED_ELSEWHERE}`,
+    text: `${content.text}\n\n${ASKED_BY_AUTOMATION}`,
     approvalId: asked.approvalId,
     copyOf: asked.id,
     template: 'approval',

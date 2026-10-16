@@ -333,6 +333,8 @@ export async function createCrewJob(
     clientRequestId?: string | null;
     /** A run again of an earlier job, with what the user approved for it. */
     rerun?: { of: string; approved: CrewJobItem[] };
+    /** The automation whose run started it (null or left out: the user asked for it). */
+    automationId?: string | null;
   },
 ): Promise<{ job: CrewJob; created: boolean }> {
   if (opts.clientRequestId) {
@@ -362,6 +364,7 @@ export async function createCrewJob(
       sessionKey: opts.sessionKey,
       conversationId: opts.conversationId ?? null,
       clientRequestId: opts.clientRequestId ?? null,
+      automationId: opts.automationId ?? null,
       ...(opts.rerun ? { rerunOf: opts.rerun.of, approved: opts.rerun.approved } : {}),
       ...brief,
     })
@@ -700,6 +703,7 @@ export async function handleCrewJob(job: Job): Promise<unknown> {
       userId: claimed.userId,
       deliveryId: eventId,
       kind: 'crew_job',
+      ...(claimed.automationId ? { forAutomation: claimed.automationId } : {}),
       sessionKey: claimed.sessionKey,
       channel: parseSessionKey(claimed.sessionKey)?.channel ?? 'web',
       text: crewJobInstruction(claimed),
@@ -882,6 +886,8 @@ export async function offerCrewRerun(
     userId,
     sessionKey: job.sessionKey,
     conversationId,
+    // A job an automation's run started: its question follows the automation's rule for Telegram.
+    automationId: job.automationId,
     summary: `Run ${who}'s job "${jobTitle(job)}" again, with ${
       job.blocked.length === 1 ? 'this' : `these ${job.blocked.length}`
     } allowed: ${job.blocked.map(crewItemText).join('; ')}`,
@@ -944,6 +950,7 @@ export async function handleCrewRerunAnswer(job: Job): Promise<unknown> {
       // One new job per yes, however often this runs.
       clientRequestId: `rerun:${a.id}`,
       rerun: { of: earlier.id, approved: earlier.blocked },
+      automationId: earlier.automationId,
     }));
   } catch (err) {
     if (!(err instanceof CrewJobError)) throw err;

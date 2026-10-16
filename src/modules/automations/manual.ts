@@ -265,7 +265,7 @@ function planProblem(plan: PlanId): Problem {
 function cronWords(message: string): string {
   if (message === 'Invalid cron expression')
     return "That schedule line can't be read. It has five parts: minute, hour, day of the month, month, day of the week.";
-  return message.replace(/^Automations can run/, 'An automation can run');
+  return `${message.replace(/^Automations can run/, 'An automation can run')}.`;
 }
 
 /** The refusal for problems found at a save: the plan's limit first (403), else all of them (400). */

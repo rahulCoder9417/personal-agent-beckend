@@ -48,6 +48,42 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 16 October 2026: automations on a canvas, phase 2 (drafts from the chat)
+
+- **Where it is:** on the branch `feat/automations-canvas` in the backend, the vm-manager and the web app, not on `main` yet. Not on the test server.
+- **Why:** your decisions on `automations-flow-proposal.md`: anything more than a plain reminder goes through a draft the user saves, on web and Telegram; Telegram gets a Save button and the link; the web chat card has Save; drafts last 7 days, at most 20 open. It also closes a gap: a run that read an outsider's email could talk Tex into making an automation the user never saw.
+- **What the user notices:**
+  - Asking "every Monday at 9, send me my open pull requests" no longer makes the automation at once. Tex proposes it, and the chat shows it as a draft that has not been saved.
+  - **Web chat:** a card with the five steps drawn small, "Not saved yet", Open in Automations and Save.
+  - **Telegram:** an outline in plain text (when it runs, what Tex does, the apps, "asks first", where results go), the link to review it, and a ✅ Save button. A tap answers "Saved: …" with the first run.
+  - The link opens the draft on the canvas with Save, Save paused and Discard. A change to an automation opens on that automation's page with the changed steps marked.
+  - Nothing runs before Save. A plain one-time reminder ("remind me Friday at 10 to call the bank") is still set at once.
+  - Asking Tex to change a draft makes a new one; the old card says a newer version exists. After 7 days a card says "This draft expired. Ask Tex again."
+- **Backend:**
+  - A new tool `propose_automation` checks a draft as a save would (the plan's limit, 15 minutes, the time zone, a moment not past, the apps connected), plus at most 20 open drafts and a change only of the user's own automation (never a pull-request review). It saves the draft, posts it in the chat and tells Tex to end its turn. `replaces_draft_id` marks the old draft replaced, as an approval asked again is.
+  - A second tool, `get_automation_draft`, reads one draft. `create_automation` is no longer one of Tex's tools.
+  - The user saves in the web app (`POST /v1/automation-drafts/{id}/save`, or with `enabled: false` to save it paused) or with the Telegram button. The checks run again. The draft is locked and marked saved together with the automation, so a double click makes one. An app event's watch at Composio is made only then, and removed again if the save fails. A change makes the new automation, then removes the old one.
+  - The api also lists the open drafts, reads one and discards one. The live stream sends `automation_draft.updated`.
+  - An hourly job marks open drafts past 7 days expired; the daily clean-up removes drafts after 30 days; they go with the account.
+  - **During an automation's run** (a timer or an app event, pull-request review included) `schedule_reminder` is refused. The worker now notes the kind of turn beside the turn's conversation in Redis, and the tool looks there; if it can't read the note, it refuses too. A draft is still possible then: the user sees it.
+  - A run's copy to Telegram skips the run's draft messages and stays the run's answer.
+  - The automation keeps the apps the draft named. For now only shown; a limit from phase 3, as you decided.
+- **vm-manager:** the lead's instructions in the Bridge have a paragraph on automations: a plain reminder goes through `schedule_reminder`; anything else is proposed with `propose_automation` and the turn ends; never say it is set up; ask when something is unclear; propose again with `replaces_draft_id` or `change_of`; during a run, never set a reminder or propose one because of something read. No Bridge code needed: the tool reaches both engines through the Platform MCP.
+- **Cost and speed:** proposing and saving cost no credits. One more Redis value is written per turn (the kind, in the record already written). A save makes a few database round trips inside one transaction, about 1.5 seconds against Neon. The instructions are about 150 words longer on every turn, a few more input tokens. Not measured.
+- **Contracts:** `openapi.yaml`: four new routes under `/v1/automation-drafts`, the schemas `AutomationDraft`, `AutomationDraftStatus` and `AutomationDraftSaved`, `Automation.apps`, `Message.automationDraftId` and the stream event `automation_draft.updated`. `vm.proto`: none.
+- **Database:** migration 0026: the table `automation_drafts`, the column `apps` on `automations` (empty for every automation already there) and the column `automation_draft_id` on `messages`.
+- **How it was checked:**
+  - Backend: a new test file with 25 tests: the request "every Monday at 9…" gives a draft and a card, with no automation, no timer and no watch; each check refuses at proposal and nothing is saved; apps kept once each and carried over; a full plan refused at proposal and at Save, the draft staying open; Save makes one automation with its timer and a second save is 409; three saves at once make one; Save paused has no timer; an app event's watch only at Save, a refused watch leaving the draft open and no automation; a passed moment refused in the user's words; a change replacing the old automation, also on a full plan; no change of a pull-request review; replaced, expired and discarded drafts can't be saved; the hourly expiry and the 30-day clean-up, each safe to run twice; the cap of 20; another user's draft is 404 everywhere and the agent can't read or replace it; the agent's tool list has no `create_automation` and nothing that saves; the drafts go with the account; the Telegram outline, its link and ✅ Save, a tap saving once and a second tap saying so, a replaced or expired draft's tap; a timer run and an app-event run refused a reminder while a message turn was not; a run's draft not copied to Telegram; the stream's events. The four older tests that used `create_automation` now propose and save. Lint, types and all 983 backend tests pass.
+  - vm-manager: a new Bridge test for the paragraph and its place. All 241 Bridge tests pass (1 skipped, as before); `go vet` is clean and `go test ./...` passes.
+  - The web app's checks are in its README.
+  - Not yet tried for real on the test server, with Telegram (the plan's "done when" asks for that).
+- **Still open:**
+  - A wrong Composio event name in a draft is found only at Save, and the user is told to try again rather than that the name is wrong. Phase 3 brings Composio's list of events.
+  - The reminder refusal covers the run itself, not a later turn in the Automations chat that still has the run's text in mind, nor crew jobs. Your call whether to widen it (`backend-report.md`, section 43).
+  - Deploying needs migration 0026, then the backend, the new agent image (the Bridge's paragraph) and the web app. A container on the old image keeps the old instructions until it is made again, but it already sees only `propose_automation`.
+- **Docs updated:** `hld-mvp.md` sections 2, 5.4 (how one is made: a draft first), 8 (rule 12), 9, 12 and the docs table; `backend-report.md` sections 12, 13, 18 ("Creating one", "Drafts", "During an automation's run: no reminder", what can go wrong), 40, 41 and 43.
+- **Commits:** backend `8f21c86` (contract and HLD), `e428464`, `ab7cb0f`; vm-manager `f9586ae`.
+
 ### 16 October 2026: automations on a canvas, phase 1 (read-only)
 
 - **Where it is:** on the branch `feat/automations-canvas` in the backend and the web app, not on `main` yet. Not on the test server.

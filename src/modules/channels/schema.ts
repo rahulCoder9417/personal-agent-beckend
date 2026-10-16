@@ -74,6 +74,18 @@ export const conversations = pgTable(
     startedAt: timestamp({ withTimezone: true }).notNull(),
     /** When its newest message was saved; `startedAt` while it has none. */
     lastMessageAt: timestamp({ withTimezone: true }).notNull(),
+    /**
+     * When the agent's newest message in it was saved (`direction` out: a reply, an approval
+     * request, a run's answer, a copy). Null while there is none. With `lastReadAt` it says
+     * whether the conversation is unread.
+     */
+    lastAgentMessageAt: timestamp({ withTimezone: true }),
+    /**
+     * Up to when the user has seen it: marked read from the web app, or the time of the newest
+     * message the user wrote in it. Null: never read. Unread means the agent's newest message is
+     * later than this.
+     */
+    lastReadAt: timestamp({ withTimezone: true }),
   },
   (t) => [
     uniqueIndex().on(t.userId, t.sessionKey, t.epoch),

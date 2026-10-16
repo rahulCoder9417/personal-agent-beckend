@@ -5,6 +5,7 @@ import {
   findActiveConversation,
   getConversation,
   listConversations,
+  markConversationRead,
   toApiConversation,
 } from '../../modules/channels/conversations.ts';
 import { listMessages, toApiMessage } from '../../modules/channels/messages.ts';
@@ -97,6 +98,13 @@ export const chatRoutes = [
     if (title) conversation = await renameUserConversation(userId, params.conversationId, title);
     // The contract asks for at least one of the two fields.
     if (!conversation) throw badRequest('Nothing to change');
+    return c.json(toApiConversation(conversation), 200);
+  }),
+
+  // The user has seen it up to now (the web app shows it). Any channel's, the Automations chat too.
+  route('markConversationRead', async (c, { params }) => {
+    const conversation = await markConversationRead(c.get('user').id, params.conversationId);
+    if (!conversation) throw notFound('Conversation not found');
     return c.json(toApiConversation(conversation), 200);
   }),
 

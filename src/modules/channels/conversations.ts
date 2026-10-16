@@ -8,6 +8,10 @@
 // channel: the chat's latest. Everything that changes which conversations a chat has, or which is
 // active, runs in a transaction that holds a lock for that chat.
 //
+// A conversation is unread while the agent's newest message in it (`lastAgentMessageAt`) is later
+// than the time up to which the user has seen it (`lastReadAt`). The web app marks one read when
+// it shows it; a message the user writes marks what came before it read, in any channel.
+//
 // The Automations chat (`kind` automations) is where every run of every automation answers: one
 // per user, a web conversation beside the others, titled "Automations". It is never the active
 // one, so the user's next message never goes into it unless they write in it. The user cannot
@@ -55,6 +59,19 @@ export function titleFromText(text: string): string | null {
   return cut > 0 ? head.slice(0, cut) : chars.slice(0, TITLE_MAX_CHARS).join('');
 }
 
+/**
+ * Whether the agent said something in it that the user hasn't seen: its newest message from the
+ * agent is later than the time up to which the user read it (never read: any message from the
+ * agent). The same test as `UNREAD` below, which the database runs.
+ */
+export function isUnread(c: Pick<ConversationRow, 'lastAgentMessageAt' | 'lastReadAt'>): boolean {
+  if (!c.lastAgentMessageAt) return false;
+  return !c.lastReadAt || c.lastAgentMessageAt > c.lastReadAt;
+}
+
+/** `isUnread`, in SQL. A null `last_agent_message_at` compares as null: not unread. */
+const UNREAD = sql`${conversations.lastAgentMessageAt} > coalesce(${conversations.lastReadAt}, '-infinity'::timestamptz)`;
+
 export function toApiConversation(c: ConversationRow) {
   return {
     id: c.id,
@@ -65,6 +82,7 @@ export function toApiConversation(c: ConversationRow) {
     lastMessageAt: c.lastMessageAt.toISOString(),
     title: c.title ?? NEW_CHAT_TITLE,
     active: c.active,
+    unread: isUnread(c),
   };
 }
 
@@ -534,7 +552,10 @@ export async function listConversations(
 
 /**
  * A message was saved in a conversation: its time becomes the conversation's `lastMessageAt`, and
- * the first incoming message with text gives the conversation its title.
+ * the first incoming message with text gives the conversation its title. One from the agent makes
+ * the conversation unread (its time becomes `lastAgentMessageAt`). One the user wrote, in any
+ * channel, marks it read up to that message: they were in that chat, so they saw what came before.
+ * Times only move forward (`greatest` passes over a null), so a late call changes nothing.
  */
 export async function noteMessage(message: {
   userId: string;
@@ -543,16 +564,41 @@ export async function noteMessage(message: {
   text: string;
   createdAt: Date;
 }): Promise<void> {
+  const at = sql`${message.createdAt.toISOString()}::timestamptz`;
   const title = message.direction === 'in' ? titleFromText(message.text) : null;
   const [row] = await db()
     .update(conversations)
     .set({
-      lastMessageAt: sql`greatest(${conversations.lastMessageAt}, ${message.createdAt.toISOString()}::timestamptz)`,
+      lastMessageAt: sql`greatest(${conversations.lastMessageAt}, ${at})`,
+      ...(message.direction === 'out'
+        ? { lastAgentMessageAt: sql`greatest(${conversations.lastAgentMessageAt}, ${at})` }
+        : { lastReadAt: sql`greatest(${conversations.lastReadAt}, ${at})` }),
       ...(title ? { title: sql`coalesce(${conversations.title}, ${title})` } : {}),
     })
     .where(mine(message.userId, message.conversationId))
     .returning();
   if (row) await announce(row);
+}
+
+/**
+ * The user has seen the conversation up to now: it is no longer unread. Only an unread one is
+ * written (and announced, so the user's other tabs and devices clear their mark); one that is read
+ * already is only looked up. Null: not this user's.
+ */
+export async function markConversationRead(
+  userId: string,
+  id: string,
+): Promise<ConversationRow | null> {
+  const [changed] = await db()
+    .update(conversations)
+    .set({ lastReadAt: sql`greatest(now(), ${conversations.lastAgentMessageAt})` })
+    .where(and(mine(userId, id), UNREAD))
+    .returning();
+  if (changed) {
+    await announce(changed);
+    return changed;
+  }
+  return (await getConversation(userId, id)) ?? null;
 }
 
 /**

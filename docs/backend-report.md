@@ -957,6 +957,7 @@ The api writes one line to its log when a connection closes: how long it was ope
 | `credits.updated` | A turn's billing job has run (a moment after the turn), or credits are added or run out |
 | `automation.updated` | An automation changes |
 | `automation_draft.updated` | The agent proposes a draft, or one is saved, discarded, replaced or expires. It holds the whole draft (section 18, "Drafts") |
+| `automation_run.updated` | A run of an automation with steps starts, a step is done, skipped, failed or waits for a yes, or the run ends. It holds the whole run (section 18, "Automations with steps") |
 | `conversation.updated` | A conversation starts, gets a message, is renamed, becomes or stops being the active one, or is marked read |
 | `conversation.deleted` | A conversation is deleted. The event holds only its id |
 
@@ -1476,6 +1477,8 @@ A draft is an automation the agent proposed that the user has not saved. It neve
 - For an app event, Composio's watch is made at Save. If Composio can't be reached, nothing is saved and the user is told to try again in a moment. A watch made for a save that then fails is removed.
 - **A change:** Save changes the automation in place: its id, its page and its runs so far stay. A new schedule replaces the timer. A changed app event gets its new watch first, then the old one is removed. The plan's limit does not count the automation being changed. Until 16 October a change made a new automation and removed the old one; if the automation was deleted meanwhile, the draft still makes a new one.
 - The automation keeps the apps the draft named (`apps`) and the draft's "ask me first". Both are limits on its runs (the part "The run's limits" below).
+- **On or paused, for a change.** Since 16 October a change saved without saying "on" or "paused" keeps its automation as it was: a paused one stays paused. The Save button on Telegram never says, so it keeps it too, like the canvas's "Save changes". A new automation is switched on unless saved paused.
+- A draft with steps has its steps checked again at Save (an app may have been disconnected, an action renamed at Composio). The first problem is said, and the draft stays open.
 - On Telegram the tap is answered in the chat: "Saved: Monday PRs. First run: 9:00 AM on Monday 20 October (Asia/Kolkata). Each run answers in your Automations chat, with a copy here." A second tap gets "That automation is already saved."
 - Saving and discarding are in the activity log as the user's.
 
@@ -1555,6 +1558,68 @@ When the worker hands an automation's run to the container (a timer, an app even
 - The user's own turns, in any chat including the Automations chat, are not limited.
 
 Example: "Boss emails" names Gmail. An email from outside asks Tex to post in Slack. Tex calls `run_app_action` for Slack; it is refused, and nothing happens in Slack.
+
+### Automations with steps
+
+Since 16 October an automation can have up to 6 steps instead of one instruction (the design is `automations-steps-proposal.md`, option C). Every automation made before has no steps and runs as before.
+
+| Word | What it means here |
+|---|---|
+| Step | One thing a run does: an app action, or a Tex instruction |
+| Run record | What the platform keeps about one run: which step it is on, and each step's result (the table `automation_runs`) |
+| Only if | A condition on a step, checked on the result of the step before |
+
+**What a step is.**
+
+| Part | What it holds |
+|---|---|
+| Type | An **app action** (one named Composio action, such as `GMAIL_SEND_EMAIL`) or a **Tex instruction** (words) |
+| App and action | App action only: the app, connected and on the plan, and one of its actions |
+| Fixed inputs | App action only: the inputs the user sets, such as a recipient. Tex fills the others from the results before |
+| Apps it reads | Tex step only: apps Tex may read in that step, with actions that only read |
+| Ask me first | App action only. Always on, and locked, for an action that sends, deletes or pays |
+| Only if | Always; "the step before found something"; "the step before mentions any of these words"; "Tex decides: <question>". Step 1 has none |
+| Show me this | Its result also goes into the run's answer |
+
+Each step has a short id, so moving a step never mixes up results. With steps, the automation's instruction is its purpose in one line, and its apps are every app the steps name.
+
+**Example (Priya's).** "Urgent mail from my boss", every weekday at 8:00 AM: (1) Gmail, fetch emails, fixed query "from:boss@acme.com is:unread newer_than:1d"; (2) Tex: pick the urgent ones, only if step 1 found something; (3) Tex: draft a two-line reply, only if step 2 mentions "urgent", show me this; (4) Gmail, send the reply (asks first, locked).
+
+**The checks.** The same calls as for one instruction (check without saving, make, change, a draft's Save, `propose_automation`), with every problem on its step: "Step 3: Gmail's GMAIL_SEND_EMAIL has no input `to`. Its inputs: recipient_email, subject, body." At most 6 steps ("An automation has up to 6 steps.", on the list itself). Pull-request review never has steps. Steps are on every plan: the plan's number of automations already limits them.
+
+**An app's actions** (`GET /v1/apps/{app}/actions`). For the step panel's picker: an app's actions from Composio, each with its inputs, whether it always asks first and whether it changes something (1 credit). Kept 10 minutes, the same for every user; `search` narrows the list; at most 200. 503 when Composio can't be asked.
+
+**How a run follows the steps.** A run is still one turn of Tex in the user's container. The platform keeps the step pointer and refuses any call that does not fit the current step.
+
+1. The trigger fires as before. The worker makes a run record, one per event, so a job that runs again never starts a second run. The steps are copied into it, so a change while it waits never mixes old and new.
+2. The worker notes the run's id in Redis beside the turn, as it notes the automation. The tools find the run by the user, never by what Tex says. If the note can't be read, or an automation with steps has no run noted, the tools refuse: a run never goes free.
+3. Tex gets the purpose, the numbered steps and the rules: one at a time, in order, nothing extra.
+4. **An app step:** Tex calls `run_app_action`. It must be the current step's action, or an action of the same app that only reads (to look something up first). The fixed inputs are put in when Tex leaves them out; a changed one is refused. "Ask me first" needs an approval asked for exactly this step of this run.
+5. **A Tex step:** Tex may read the step's apps, then calls `finish_step` with its result in words. A Tex step that tries to change something in an app is refused: changes are app steps, so the user sees each one.
+6. Each result is cut to 4,000 characters and saved, then the pointer moves on. Before the next step its "only if" is checked: "found" means the result was not empty (no emails, an empty list); "mentions" looks for the words, ignoring capitals; "Tex decides" asks Tex, who answers yes or no with one line why in `finish_step` (the trail keeps the line; the canvas marks it as Tex's judgement).
+7. Every tool answer ends with what comes next ("next"): "Now step 3: …", or "The run ends here".
+8. At the end the platform adds one line under Tex's answer: "Steps: 1 ✓ 2 ✓ 3 ✓ 4 waiting for your OK". The answer and that line are copied to Telegram as a run's answer is.
+
+**Asking first in the middle of a run.** The turn ends at the question, as every approval does, so a run with "ask me first" has two turns. The approval remembers the run and the step, and the run waits, holding no container. A yes wakes Tex in the Automations chat with the run noted beside that turn too: Tex runs the approved action and goes on. A no stops the run there with one line, and no turn. No answer in 24 hours: the run stops ("No answer in 24 hours, so step 4 did not run."), checked hourly. A new run of the same automation while one waits: the older question becomes "replaced" and the older run "superseded", so a morning run never sends yesterday's draft too.
+
+**When something goes wrong.**
+
+| Case | What happens |
+|---|---|
+| "Only if" is false | The run stops there, as a success. One line in the Automations chat ("Nothing to do: step 2 runs only if step 1 found something, and it didn't."), no copy to Telegram |
+| The app refuses the step's action | One more try is allowed; a second failure fails the step and the run |
+| A step fails | The run stops; the steps after it are skipped. It counts toward "paused after 3 failures in a row" |
+| Tex ends the turn early | "Stopped at step 2: Tex ended before finishing it." A failure |
+| Too many calls | At most 10 app calls in a step and 30 in a run; past that the run fails |
+| Out of credits | A changing action is refused, its step fails and the run stops |
+| The job runs again | Steps done are not done again. An approved send runs once (an approval is single use) |
+| A test run ("Run once now") | Follows the steps, marked as a test; counts no failure |
+
+**The cost.** No new price. A run is a turn: the AI, the awake time, and 1 credit per successful changing app action. A run that waited for a yes is two turns.
+
+**What is kept.** Each run's trail: its state (running, waiting, done, stopped, failed, superseded), each step's state, its short result, its tries and why it stopped. Results can hold bits of emails, so they are removed 2 days after the run ended; the trail stays 30 days (the daily clean-up). `GET /v1/automations/{id}/runs` gives the last 10 runs, and each change is sent live as `automation_run.updated` (section 12). Deleting the automation or the account removes its runs.
+
+**The switch.** `AUTOMATION_STEPS=false` on the server stops runs with steps: they can still be made and changed, and a run says in one line that steps are switched off. Default on.
 
 ### During an automation's run: no reminder
 
@@ -3489,6 +3554,7 @@ There are three databases: the backend's, the vm-manager's and LiteLLM's. Each p
 | integrations | `byok_keys` | The user's own AI keys, encrypted, plus the last 4 characters |
 | automations | `automations` | Reminders, repeating tasks and app-event tasks, each with the chat it was made in, the apps its runs may use, its "ask me first", and for one made by hand the save's one-time key. Its runs answer in the Automations chat. A column that held a conversation per automation until 13 October is no longer used |
 | automations | `automation_drafts` | Automations the agent proposed, or the user's own version from the canvas, not saved yet, with their state (open, saved, discarded, replaced, expired), who made them, the chat they were proposed in, the automation a change is for, and the automation a saved one made. Removed after 30 days (section 18, "Drafts") |
+| automations | `automation_runs` | One row per run of an automation with steps: the steps as they were at the start, which step it is on, each step's state and short result, the app calls made, why it stopped. One per event. Results removed 2 days after the end, rows after 30 days (section 18, "Automations with steps") |
 | automations | `pr_reviews` | One row per reviewed pull-request commit, so none is reviewed twice |
 | automations | `crew_jobs` | One row per crew job: the brief, where the report goes, its state, the report itself, what its run was refused (`blocked`), for a job run again, the job it repeats and what the user approved for it, and the automation whose run started it, if one did |
 | billing | `subscriptions` | Each paid plan: user, Polar id, status, period |
@@ -3517,8 +3583,8 @@ This section says what the web app can do through the api, group by group. Almos
 | Apps | See the app list with status and plan, and which apps can be connected on this server. Start connecting an app. Disconnect one |
 | MCP servers | List the user's own MCP servers. Add one (Max plan), rename it, switch it on or off, remove it |
 | Own AI keys | See which providers have a key and which one is in use, never the key itself. Set, replace or remove one |
-| Automations | List reminders and automations, with why one is paused (by the user, after failures, out of credits, or by Textcrew support), where the copy of each answer goes, the trigger's settings, the apps named and "ask me first". Read one. Check the parts of one without saving, with every problem on its box and the next three runs. Make one by hand (once per key), change one in place, run one once now as a test (10 an hour). Pause, resume or delete one. List an app's events with their settings |
-| Automation drafts | List the open drafts. Read one in any state. Keep the user's own version from the canvas as a draft, for Tex. Save one (switched on, or paused), which makes the automation or changes it. Discard one |
+| Automations | List reminders and automations, with why one is paused (by the user, after failures, out of credits, or by Textcrew support), where the copy of each answer goes, the trigger's settings, the apps named and "ask me first". Read one. Check the parts of one without saving, with every problem on its box and the next three runs. Make one by hand (once per key), change one in place, run one once now as a test (10 an hour). Pause, resume or delete one. List an app's events with their settings, and an app's actions with their inputs (for a step). An automation's last runs with steps, each with its trail |
+| Automation drafts | List the open drafts. Read one in any state. Keep the user's own version from the canvas as a draft, for Tex. Save one (switched on, or paused; a change left unsaid keeps its automation on or paused), which makes the automation or changes it. Discard one |
 | Pull-request review | List the repositories with review on. Turn review on or off for one |
 | Agent settings and the Claude sign-in | See the container's state and which engine runs. Choose the engine, and Claude Code's model and thinking effort. Start, finish or undo the Claude sign-in |
 | The crew | See the four members, which are available, and the state of Scout's browser |
@@ -3566,6 +3632,7 @@ This section lists the backend's settings by group. They are environment setting
 | | `COMPOSIO_API_URL` | Composio's address. `/oauth/callback` sends the browser on to it | `https://backend.composio.dev` |
 | Routing | `JEV_API_KEY` | Turns the router on | Every message goes to the agent |
 | | `WAKE_WHILE_ROUTING` | Starts waking the container while Jev decides (section 9). `false` wakes it only for a task | On |
+| Automations | `AUTOMATION_STEPS` | Runs of automations with steps (section 18). `false`: they can be made, but a run does nothing and says so | On |
 | Payments | `POLAR_ACCESS_TOKEN` | Opens checkouts and cancels subscriptions | No checkout can be opened |
 | | `POLAR_WEBHOOK_SECRET` | Checks Polar's webhooks | No payment reaches the system |
 | | `POLAR_SERVER` | Test mode or real money | Test mode |

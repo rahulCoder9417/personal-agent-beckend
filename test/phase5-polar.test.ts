@@ -5,6 +5,7 @@ import { getUser } from '../src/modules/auth/users.ts';
 import { getBalance } from '../src/modules/billing/credits.ts';
 import {
   cancelSubscription,
+  resumeSubscription,
   startCheckout,
   verifyPolarWebhook,
 } from '../src/modules/billing/polar.ts';
@@ -406,5 +407,62 @@ describe('checkout + cancel', () => {
     // Polar's confirmation keeps the same state.
     await deliver(subscriptionEvent('subscription.canceled', { ...sub, cancelAtPeriodEnd: true }));
     expect((await getCurrentSubscription(u.id))!.status).toBe('cancel_at_period_end');
+  });
+
+  it('Keep my plan: un-cancels through Polar before the period ends; no charge, no credits', async () => {
+    const u = await member(0);
+    // Nothing cancelled: refused, and Polar is not called.
+    await expect(resumeSubscription(u.id)).rejects.toMatchObject({ status: 409 });
+    const sub: SubOpts = { userId: u.id, subId: randomUUID(), ...periodFromNow() };
+    await deliver(subscriptionEvent('subscription.active', sub));
+    const grantsBefore = (await grantsOf(u.id)).length;
+    // Active and renewing: nothing to keep.
+    await expect(resumeSubscription(u.id)).rejects.toMatchObject({ status: 409 });
+    expect(polar.uncancelled).not.toContain(sub.subId);
+
+    await cancelSubscription(u.id);
+    // Subscribing to the same plan again while it still runs is refused: Keep my plan instead.
+    await expect(
+      startCheckout((await getUser(u.id))!, { kind: 'plan', planId: 'pro' }),
+    ).rejects.toMatchObject({ status: 400 });
+
+    // Polar does not answer: an error, and nothing changes here.
+    polar.failUncancel = true;
+    await expect(resumeSubscription(u.id)).rejects.toThrow();
+    expect((await getCurrentSubscription(u.id))!.status).toBe('cancel_at_period_end');
+
+    const kept = await resumeSubscription(u.id);
+    expect(kept.status).toBe('active');
+    expect(polar.uncancelled).toEqual([sub.subId]);
+    expect((await getUser(u.id))!.plan).toBe('pro');
+    // Asking again: it already renews, so refused and Polar is not called twice.
+    await expect(resumeSubscription(u.id)).rejects.toMatchObject({ status: 409 });
+    expect(polar.uncancelled).toEqual([sub.subId]);
+    // Polar's confirmation keeps it active and grants nothing.
+    await deliver(subscriptionEvent('subscription.uncanceled', sub));
+    await deliver(subscriptionEvent('subscription.updated', sub));
+    expect((await getCurrentSubscription(u.id))!.status).toBe('active');
+    expect((await grantsOf(u.id)).length).toBe(grantsBefore);
+  });
+
+  it('Keep my plan is refused once the period is over, and for another user', async () => {
+    const a = await member(0);
+    const b = await member(0);
+    const subA: SubOpts = { userId: a.id, subId: randomUUID(), ...periodFromNow() };
+    await deliver(subscriptionEvent('subscription.active', subA));
+    await cancelSubscription(a.id);
+    // B has nothing cancelled: B's request never touches A's subscription.
+    await expect(resumeSubscription(b.id)).rejects.toMatchObject({ status: 409 });
+    expect(polar.uncancelled).not.toContain(subA.subId);
+    expect((await getCurrentSubscription(a.id))!.status).toBe('cancel_at_period_end');
+
+    // A period that is already over cannot be kept.
+    const c = await member(0);
+    const past = { start: new Date(Date.now() - 31 * DAY), end: new Date(Date.now() - DAY) };
+    const subC: SubOpts = { userId: c.id, subId: randomUUID(), ...past };
+    await deliver(subscriptionEvent('subscription.active', subC));
+    await deliver(subscriptionEvent('subscription.canceled', { ...subC, cancelAtPeriodEnd: true }));
+    await expect(resumeSubscription(c.id)).rejects.toMatchObject({ status: 409 });
+    expect(polar.uncancelled).not.toContain(subC.subId);
   });
 });

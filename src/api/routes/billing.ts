@@ -1,4 +1,8 @@
-import { cancelSubscription, startCheckout } from '../../modules/billing/polar.ts';
+import {
+  cancelSubscription,
+  resumeSubscription,
+  startCheckout,
+} from '../../modules/billing/polar.ts';
 import { PLAN_IDS, PLANS, TOP_UPS } from '../../modules/billing/plans.ts';
 import { getCurrentSubscription } from '../../modules/billing/subscriptions.ts';
 import { toPlan, toSubscription } from '../billing-presenters.ts';
@@ -31,5 +35,11 @@ export const billingRoutes = [
   route('cancelSubscription', async (c) => {
     const user = c.get('user');
     return c.json(toSubscription(user.plan, await cancelSubscription(user.id)), 200);
+  }),
+
+  // Undo a cancel before the period ends; credits and the plan still follow Polar's events.
+  route('resumeSubscription', async (c) => {
+    const user = c.get('user');
+    return c.json(toSubscription(user.plan, await resumeSubscription(user.id)), 200);
   }),
 ];

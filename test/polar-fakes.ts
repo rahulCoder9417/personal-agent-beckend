@@ -9,6 +9,9 @@ import { POLAR_SECRET } from './billing-fakes.ts';
 export class FakePolar implements PolarClient {
   checkouts: Array<Parameters<PolarClient['createCheckout']>[0]> = [];
   cancelled: string[] = [];
+  uncancelled: string[] = [];
+  /** When set, the next uncancel fails as if Polar did not answer. */
+  failUncancel = false;
   async createCheckout(input: Parameters<PolarClient['createCheckout']>[0]) {
     this.checkouts.push(input);
     const checkoutId = randomUUID();
@@ -19,6 +22,13 @@ export class FakePolar implements PolarClient {
   }
   async cancelAtPeriodEnd(subscriptionId: string) {
     this.cancelled.push(subscriptionId);
+  }
+  async uncancel(subscriptionId: string) {
+    if (this.failUncancel) {
+      this.failUncancel = false;
+      throw new Error('Polar PATCH /v1/subscriptions failed: 503');
+    }
+    this.uncancelled.push(subscriptionId);
   }
 }
 

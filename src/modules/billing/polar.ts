@@ -11,6 +11,7 @@ import { findWaitlistOffer } from '../auth/waitlist.ts';
 import { getTopUp, planLimits, type PlanId } from './plans.ts';
 import {
   getCurrentSubscription,
+  getEndingSubscription,
   getRenewingSubscription,
   setSubscriptionStatus,
   type Subscription,
@@ -39,6 +40,8 @@ export interface PolarClient {
   }): Promise<{ checkoutUrl: string; checkoutId: string }>;
   /** PATCH /v1/subscriptions/{id} { cancel_at_period_end: true } */
   cancelAtPeriodEnd(subscriptionId: string): Promise<void>;
+  /** PATCH /v1/subscriptions/{id} { cancel_at_period_end: false }: un-cancel before it ends. */
+  uncancel(subscriptionId: string): Promise<void>;
 }
 
 class HttpPolar implements PolarClient {
@@ -79,6 +82,12 @@ class HttpPolar implements PolarClient {
   async cancelAtPeriodEnd(subscriptionId: string) {
     await this.request('PATCH', `/v1/subscriptions/${encodeURIComponent(subscriptionId)}`, {
       cancel_at_period_end: true,
+    });
+  }
+
+  async uncancel(subscriptionId: string) {
+    await this.request('PATCH', `/v1/subscriptions/${encodeURIComponent(subscriptionId)}`, {
+      cancel_at_period_end: false,
     });
   }
 }
@@ -148,6 +157,12 @@ export async function startCheckout(
           : 'Cancel your current plan first; the new one can start when it ends',
       );
     }
+    // The same plan, cancelled but still running: paying again would start a second paid month
+    // beside it. "Keep my plan" (resumeSubscription) undoes the cancel instead.
+    const ending = await getEndingSubscription(user.id);
+    if (ending?.plan === req.planId) {
+      throw badRequest('Your plan is still running until the end of this period. Keep it instead');
+    }
     productId = productFor('plan', req.planId);
     metadata = { user_id: user.id, kind: 'plan', plan_id: req.planId };
     const discount = config().POLAR_WAITLIST_DISCOUNT_ID;
@@ -186,6 +201,19 @@ export async function cancelSubscription(userId: string): Promise<Subscription> 
   if (!renewing) throw conflict('No active paid subscription');
   await polar().cancelAtPeriodEnd(renewing.polarSubscriptionId);
   return (await setSubscriptionStatus(renewing.id, 'cancel_at_period_end'))!;
+}
+
+/**
+ * "Keep my plan": undo a cancel before the period ends. Polar is asked to renew the subscription
+ * again; nothing is charged now and no credits are given. Our row says "active" at once (as
+ * cancel says "cancelled" at once); Polar's subscription.uncanceled / .updated then sync it.
+ */
+export async function resumeSubscription(userId: string): Promise<Subscription> {
+  if (await getRenewingSubscription(userId)) throw conflict('Your plan already renews');
+  const ending = await getEndingSubscription(userId);
+  if (!ending) throw conflict('No cancelled plan to keep');
+  await polar().uncancel(ending.polarSubscriptionId);
+  return (await setSubscriptionStatus(ending.id, 'active'))!;
 }
 
 // --- webhook ----------------------------------------------------------------------------------

@@ -1066,6 +1066,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/billing/subscription/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Keep a cancelled plan (undo a cancel before the period ends)
+         * @description Asks Polar to un-cancel the subscription that is set to end at the end of its period, so it
+         *     renews again as before. Nothing is charged now, and no credits are given: the plan and its
+         *     monthly credits keep following Polar's events (`subscription.uncanceled`, then the usual
+         *     renewal). Answers the subscription as it is now (`active`, or `past_due` if the last payment
+         *     had failed).
+         */
+        post: operations["resumeSubscription"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/credits": {
         parameters: {
             query?: never;
@@ -5808,6 +5832,36 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             /** @description No active paid subscription */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    resumeSubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The plan will renew again */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Subscription"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description No cancelled plan that is still running (nothing to keep) */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -1,6 +1,6 @@
 // Subscription state. The user's plan (auth.users.plan) changes only here, and only from Polar
 // webhooks or when a cancelled period ends (HLD 7.6) — never from the web app directly.
-import { and, desc, eq, inArray, isNull, lte, ne } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lte, ne, or } from 'drizzle-orm';
 import { db, type Tx } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import { setPlan } from '../auth/users.ts';
@@ -34,6 +34,30 @@ export async function getRenewingSubscription(userId: string): Promise<Subscript
         eq(subscriptions.userId, userId),
         inArray(subscriptions.status, ['active', 'past_due']),
         isNull(subscriptions.endedAt),
+      ),
+    )
+    .orderBy(desc(subscriptions.updatedAt))
+    .limit(1);
+  return row;
+}
+
+/**
+ * A subscription set to end at the end of its period whose period is not over yet: the one
+ * "Keep my plan" can still undo.
+ */
+export async function getEndingSubscription(
+  userId: string,
+  now = new Date(),
+): Promise<Subscription | undefined> {
+  const [row] = await db()
+    .select()
+    .from(subscriptions)
+    .where(
+      and(
+        eq(subscriptions.userId, userId),
+        eq(subscriptions.status, 'cancel_at_period_end'),
+        isNull(subscriptions.endedAt),
+        or(isNull(subscriptions.periodEnd), gt(subscriptions.periodEnd, now)),
       ),
     )
     .orderBy(desc(subscriptions.updatedAt))

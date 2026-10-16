@@ -1584,6 +1584,30 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /v1/billing/subscription/resume:
+    post:
+      operationId: resumeSubscription
+      tags: [billing]
+      summary: Keep a cancelled plan (undo a cancel before the period ends)
+      description: |
+        Asks Polar to un-cancel the subscription that is set to end at the end of its period, so it
+        renews again as before. Nothing is charged now, and no credits are given: the plan and its
+        monthly credits keep following Polar's events (`subscription.uncanceled`, then the usual
+        renewal). Answers the subscription as it is now (`active`, or `past_due` if the last payment
+        had failed).
+      responses:
+        "200":
+          description: The plan will renew again
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Subscription" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: No cancelled plan that is still running (nothing to keep)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   # ---------------------------------------------------------------- credits
   /v1/credits:
     get:

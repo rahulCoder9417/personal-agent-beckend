@@ -11,7 +11,7 @@ Six files make up the docs:
 | `aws-setup.md` | The test server: what was done, the commands, the problems and their fixes |
 | `domain-setup.md` | The domain `textcrew.in`: where it was bought, who answers DNS, each name, and how to add or move one |
 | `engines-proposal.md` | A proposal, not built: adding Codex and other bring-your-own engines, with OpenAI's rules and the decisions to make |
-| `automations-flow-proposal.md` | A proposal, not built: automations shown and made on a canvas (React Flow), and drafts Tex makes from the chat, with the decisions to make |
+| `automations-flow-proposal.md` | A proposal: automations shown and made on a canvas (React Flow), and drafts Tex makes from the chat, with the decisions to make. You chose option A, with C to follow. Phases 1 and 2 are built (section 5.4) |
 | `optimization-log.md` | Every change made to the backend and the vm-manager while we optimize the product, by feature, in plain words |
 
 **The pictures** are in GoDraw, in the canvas named **"Textcrew MVP: high-level design"**. It has five pages. Each section below says which page shows it.
@@ -59,7 +59,7 @@ Six files make up the docs:
 - **See what is new.** In the web app's list, a conversation with a message from the agent that the user has not seen yet has a blue dot, a Telegram conversation too. Opening it clears the dot on every device. Writing in a conversation, on Telegram as well, counts as having seen what came before.
 - **Get real work done in apps.** The agent can act in about 25 apps. Example: "Email Priya the meeting notes."
 - **Stay in control.** Before the agent sends something to another person, deletes something or pays, it asks first.
-- **Set reminders and automations.** Once, on a schedule, or when something happens in an app. Example: "Every Monday at 9, send me my open pull requests."
+- **Set reminders and automations.** Once, on a schedule, or when something happens in an app. Example: "Every Monday at 9, send me my open pull requests." Tex shows anything more than a plain reminder as a draft first, drawn as a small diagram, and the user saves it with one tap. Each automation can be seen as a flow on its own page.
 - **Use a crew.** The agent you text is called Tex. Tex can hand work to three specialists: Byte writes code, Patch reviews code, Scout researches.
 - **Get pull requests reviewed.** Turn it on for a GitHub repo. When a pull request opens, Patch reviews it and comments on it. You get a short verdict in chat.
 - **Give the crew a job.** Say it in chat, in plain words: Patch reviews one pull request or branch, or Byte fixes or builds something and opens a pull request. Pick the repo, say what to look for or what to test, give the commands to run, and choose where the report goes. The job runs in a folder of its own, and when it is over, everything it started is stopped and the folder is deleted. Example: "Patch, review acme/web PR 42, run pnpm test, post it on the PR."
@@ -211,6 +211,42 @@ When one fires, it goes down the same path as a normal message, with the saved i
 
 An automation pauses itself at zero credits, or after three failures in a row. The shortest allowed interval is 15 minutes.
 
+**How one is made: a draft first** (your decision of 16 October).
+
+1. The user asks Tex, in web chat or on Telegram: "Every Monday at 9, send me my open pull requests."
+2. Tex calls `propose_automation` with the parts of the automation and the apps it will use. The platform checks it as a save would: the plan's limit, 15 minutes between runs, a real time zone, a moment not past, the apps connected. A problem goes back to Tex to fix.
+3. The platform saves a draft and posts it in the chat. Nothing runs: no timer, no watch at Composio. Tex's turn ends there.
+4. **Web chat** shows a card with the five steps drawn small, "Not saved yet", **Open in Automations** and **Save**. **Telegram** gets the same as an outline in plain text, the link and a **Save** button.
+5. The link, `/automations/new?draft=drf_…`, opens the draft on the canvas (below), with Save, Save paused and Discard.
+6. When the user saves, the automation is made, with its timer or its watch. The card then says "Saved" with a way to open it.
+
+The rules:
+
+- **A plain one-time reminder** ("remind me Friday at 10 to call the bank") still goes straight through, as before.
+- **Only the user saves.** Tex has no tool that saves, and the tool that made automations straight away (`create_automation`) is no longer Tex's.
+- **One save, one automation,** even on a double click. The plan's limit is checked again at Save. A draft does not count against the plan, and proposing costs nothing.
+- **A draft lasts 7 days.** Then its card says "This draft expired. Ask Tex again." A user has at most 20 open drafts. Drafts are removed after 30 days.
+- **Asked again.** When the user asks Tex to change a draft, Tex proposes again and the old draft becomes "replaced", as an approval asked again does; its card says so. When the user asks to change a saved automation, Tex proposes the change: its link (`/automations/aut_…?draft=drf_…`) marks the boxes that change, and Save makes the new automation and then removes the old one.
+- **During an automation's run, Tex cannot set a reminder.** An email or a page read during a run could otherwise ask for one, and a reminder is saved without the user seeing it first. A draft is still possible: the user sees it and decides.
+
+**On a canvas.** Each automation has a page of its own in the web app, `/automations/aut_…`, opened from its card. It shows the automation as five boxes joined by arrows, left to right:
+
+| Box | What it shows | Example |
+|---|---|---|
+| Trigger | When it runs, and whether it is on or paused | "Every Monday at 9:00 AM, your time" |
+| Tex's instruction | The title and the instruction | "List my open pull requests in acme/web" |
+| Apps Tex may use | The trigger's app; for older automations, "Your connected apps, as needed" | GitHub |
+| Asks you first | The platform's fixed rule | "Sending, deleting or paying waits for your OK" |
+| Results | The Automations chat, and the chat app a copy goes to | "Automations chat", "Copy to Telegram" |
+
+- It only shows. Nothing is changed on it yet (that is phase 3 of `automations-flow-proposal.md`).
+- A draft opens on the same canvas, marked "Not saved yet", with Save, Save paused and Discard. "Save paused" makes the automation switched off, to turn on later.
+- The apps Tex names in a draft are kept with the automation and drawn in the Apps box. For now they are only a picture; from phase 3 they become a limit on what a run may use.
+- The drawing library is React Flow (MIT licence, version 12.12.0, about 59 KB). It loads on that page only. Its small "React Flow" link in the corner stays, as you decided.
+- **Phones** (under 768 pixels wide) get the same five boxes as a list of cards. A "List view" switch shows the list on a wide screen too.
+- **The cards** on the Automations page each have the same five steps as a small strip of plain text, without the library.
+- For the picture the API now says two things it kept to itself: where the copy of each answer goes (`copyTo`: Telegram, or none), and the trigger's settings (for example the repository a pull-request review watches). `GET /v1/automations/{id}` reads one automation.
+
 ### 5.5 A pull request gets reviewed
 
 1. The user turns review on for one GitHub repo, in the web app.
@@ -333,6 +369,7 @@ These rules hold everywhere in the system.
 9. **Risky actions need the user's yes.** Sending to others, deleting, paying.
 10. **Secrets are encrypted in the database.** Tokens and codes are stored only as fingerprints that cannot be turned back.
 11. **Everything the agent does is written to the activity log.**
+12. **Only the user makes an automation that repeats or watches an app.** Tex proposes it as a draft; the user saves it. During an automation's run Tex cannot set a reminder either.
 
 One exception to rule 6, by decision: a Max user's container with Scout's browser turned on can reach any public website. Addresses inside our own network stay refused.
 
@@ -354,6 +391,7 @@ One exception to rule 6, by decision: a Max user's container with Scout's browse
 | Web app hosting | Vercel |
 | Server for the beta | The AWS test server. The VPS comes after the beta is tested |
 | Containers | Every message, reminder and automation goes through the user's container |
+| Automations | Anything more than a plain one-time reminder goes through a draft the user saves, on web and Telegram. Each automation is drawn as a flow (React Flow); phones get a list. Building by hand: option A (today's shape on the canvas), then C (a few steps in one run). Decided on 16 October |
 
 ---
 
@@ -438,6 +476,8 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - Approvals that hold exactly what runs (15 October, on the branch `fix/approval-args`, not on `main` yet). The founder's test email of that evening was never sent: Tex asked with an input Gmail doesn't have (`to` instead of `recipient_email`), the approved run failed, and Tex asked a second time. Now such a request is refused before the user sees it, the approved details run as saved, and a request asked again shows as "replaced" in the web app. Checked with the automated tests only.
 - Unread conversations (16 October, on the branch `feat/unread-dot` in the backend and the web app, not on `main` yet): a blue dot in the web app's chat list on a conversation with a message from the agent that the user has not seen, on web and Telegram conversations and the Automations chat. Opening the conversation marks it read. Checked with the automated tests and the web app's demo mode. It needs the database update (migration 0025) when it goes to the server, and the web app works with the backend before and after.
 - The Automations chat: every run, verdict and automation notice answering there, pinned in the web app's chat list with a mark for a new run, and a copy of each answer on Telegram for an automation made there. Built on 13 October, after your decision for a separate automation chat. Checked with the automated tests, and the web app's part in its demo mode in a browser. No real run has gone through it yet. The conversations that automations made for themselves earlier that day stay as ordinary chats.
+- Automations on a canvas, phase 1 (16 October, on the branch `feat/automations-canvas` in the backend and the web app, not on `main` yet): each automation's own page draws it as five boxes (section 5.4), read-only, with a list on phones, and each card on the Automations page has the same steps as a small strip. The API now says where the copy of each answer goes and the trigger's settings, and reads one automation. Checked with the automated tests and the web app's demo mode. No database change.
+- Automations from the chat as drafts, phase 2 (16 October, on the same branch, and in the vm-manager for the Bridge's instructions): Tex proposes anything more than a plain reminder with `propose_automation`; the platform checks it and saves a draft that never runs; web chat shows it as a card with a small diagram and Save, Telegram as an outline with the link and a Save button; the link opens it on the canvas with Save, Save paused and Discard. A draft lasts 7 days, at most 20 are open, and asking again replaces the old one. `create_automation` is no longer Tex's, and `schedule_reminder` is refused during an automation's run. Checked with the automated tests, the web app's demo mode, and end to end on the laptop with the real backend and the web app (stand-ins only for Tex, Composio and Telegram); not yet tried on the server with a real Tex and Telegram. It needs the database update (migration 0026) and the new agent image when it goes to the server.
 
 ### Not finished
 

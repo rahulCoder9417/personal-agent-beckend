@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { CronExpressionParser } from 'cron-parser';
-import { and, count, desc, eq, isNull, or } from 'drizzle-orm';
-import { db } from '../../shared/db/client.ts';
+import { and, count, desc, eq, isNull, ne, or } from 'drizzle-orm';
+import { db, type Tx } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import { logger } from '../../shared/logger.ts';
 import { getActiveUser, isValidTimezone, type PlanId } from '../auth/users.ts';
@@ -13,7 +13,7 @@ import { queue } from '../events/queues.ts';
 import { appForToolkit, findApp } from '../integrations/catalog.ts';
 import { connectionForToolkit } from '../integrations/apps.ts';
 import { composio } from '../integrations/composio.ts';
-import { automations, prReviews } from './schema.ts';
+import { automationDrafts, automations, prReviews } from './schema.ts';
 
 export type Automation = typeof automations.$inferSelect;
 
@@ -32,11 +32,22 @@ export function setMinIntervalMs(ms: number): void {
 export class AutomationError extends Error {
   constructor(
     message: string,
-    /** `plan_limit`: the plan's automations are used up. */
-    readonly code: 'invalid' | 'plan_limit' = 'invalid',
+    /** `plan_limit`: the plan's automations are used up. `past`: the moment has passed. */
+    readonly code: 'invalid' | 'plan_limit' | 'past' = 'invalid',
+    /** `plan_limit`: the user's plan and how many automations it allows. */
+    readonly details?: { plan: PlanId; limit: number },
   ) {
     super(message);
   }
+}
+
+/**
+ * Where a copy of each run's answer goes besides the Automations chat: the chat app the automation
+ * was made in (its session key). Null for web chat, or a key that names no chat app.
+ */
+export function copyToOf(sessionKey: string): 'telegram' | 'whatsapp' | 'imessage' | null {
+  const channel = parseSessionKey(sessionKey)?.channel;
+  return channel && channel !== 'web' ? channel : null;
 }
 
 export function toApiAutomation(a: Automation) {
@@ -48,7 +59,11 @@ export function toApiAutomation(a: Automation) {
     runAt: a.runAt ? a.runAt.toISOString() : null,
     cron: a.cron,
     timezone: a.timezone,
-    trigger: a.trigger ? { app: a.trigger.app, event: a.trigger.event } : null,
+    trigger: a.trigger
+      ? { app: a.trigger.app, event: a.trigger.event, config: a.trigger.config ?? {} }
+      : null,
+    copyTo: copyToOf(a.sessionKey),
+    apps: a.apps ?? [],
     preset: a.preset ?? null,
     enabled: a.enabled,
     pausedReason: a.pausedReason ?? null,
@@ -61,6 +76,15 @@ export function toApiAutomation(a: Automation) {
 function nextRuns(cron: string, tz: string, n: number): Date[] {
   const expr = CronExpressionParser.parse(cron, { tz, currentDate: new Date() });
   return Array.from({ length: n }, () => expr.next().toDate());
+}
+
+/** The schedule's next time from now, in its time zone. Null when the line can't be read. */
+export function nextCronRun(cron: string, tz: string): Date | null {
+  try {
+    return nextRuns(cron, tz, 1)[0] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** Validates a cron: parses, and consecutive runs are at least the minimum interval apart. */
@@ -138,12 +162,37 @@ export interface CreateInput {
   cron?: string;
   timezone?: string;
   trigger?: { app: string; event: string; config?: Record<string, unknown> };
+  /** The apps the agent said it will use (app slugs), from the draft it was saved from. */
+  apps?: string[];
+  /** False: made switched off, paused by the user ("Save paused"). Default on. */
+  enabled?: boolean;
   /** Set only by the platform itself (pr-review.ts), never from the agent's tools. */
   preset?: NonNullable<Automation['preset']>;
 }
 
-/** Checks plan limit, 15-minute minimum and timezone → saves → registers the timer. */
-export async function createAutomation(input: CreateInput): Promise<Automation> {
+/** What the checks found: what is saved besides the input. */
+export interface CheckedAutomation {
+  kind: Automation['kind'];
+  timezone: string;
+  nextRunAt: Date | null;
+  /** kind=event: the Composio connected account the trigger watches (the app's newest). */
+  watchAccount: string | null;
+}
+
+/** Composio could not make the trigger (a watch on the app). Not one of the checks' refusals. */
+export class TriggerError extends Error {}
+
+/**
+ * The checks a save makes, without saving or watching anything: exactly one of a moment, a
+ * schedule or an app event; a real time zone; the plan's limit (`replacing`: an automation that
+ * the new one takes the place of, so it does not count); a moment not past; a schedule at most
+ * every 15 minutes; an app event's app connected. A draft is checked with this when it is proposed,
+ * and again when it is saved. `exec`: run the plan's count in a transaction.
+ */
+export async function checkAutomation(
+  input: CreateInput,
+  opts: { exec?: Tx; replacing?: string | null } = {},
+): Promise<CheckedAutomation> {
   const user = await getActiveUser(input.userId);
   if (!user) throw new AutomationError('User not found');
   const kinds = [input.runAt, input.cron, input.trigger].filter(Boolean).length;
@@ -151,69 +200,124 @@ export async function createAutomation(input: CreateInput): Promise<Automation> 
   const tz = input.timezone ?? user.timezone;
   if (!isValidTimezone(tz)) throw new AutomationError(`Unknown timezone ${tz}`);
 
-  const [{ n } = { n: 0 }] = await db()
+  const counted = [eq(automations.userId, input.userId), isNull(automations.completedAt)];
+  if (opts.replacing) counted.push(ne(automations.id, opts.replacing));
+  const [{ n } = { n: 0 }] = await (opts.exec ?? db())
     .select({ n: count() })
     .from(automations)
-    .where(and(eq(automations.userId, input.userId), isNull(automations.completedAt)));
+    .where(and(...counted));
   const limit = limitFor(user.plan);
   if (n >= limit)
     throw new AutomationError(
       `Your ${user.plan} plan allows ${limit} automations; cancel one or upgrade`,
       'plan_limit',
+      { plan: user.plan, limit },
     );
 
-  let kind: Automation['kind'];
-  let nextRunAt: Date | null = null;
-  let triggerRef: string | null = null;
   if (input.runAt) {
     if (input.runAt.getTime() < Date.now() - 60_000)
-      throw new AutomationError('run_at is in the past');
-    kind = 'once';
-    nextRunAt = input.runAt;
-  } else if (input.cron) {
-    kind = 'repeat';
-    nextRunAt = validateCron(input.cron, tz);
-  } else {
-    kind = 'event';
-    const app = findApp(input.trigger!.app) ?? appForToolkit(input.trigger!.app);
-    if (!app) throw new AutomationError(`Unknown app ${input.trigger!.app}`);
-    const conn = await connectionForToolkit(input.userId, app.toolkit);
-    if (!conn) throw new AutomationError(`Connect ${app.name} first`);
-    const res = await composio().createTrigger(
-      input.userId,
-      input.trigger!.event,
-      conn.composioAccountId,
-      input.trigger!.config ?? {},
-    );
-    triggerRef = res.triggerId;
+      throw new AutomationError('run_at is in the past', 'past');
+    return { kind: 'once', timezone: tz, nextRunAt: input.runAt, watchAccount: null };
   }
-
-  const [row] = await db()
-    .insert(automations)
-    .values({
-      id: newId('aut'),
-      userId: input.userId,
-      kind,
-      title: input.title,
-      instruction: input.instruction,
-      runAt: input.runAt ?? null,
-      cron: input.cron ?? null,
+  if (input.cron) {
+    return {
+      kind: 'repeat',
       timezone: tz,
-      trigger: input.trigger ?? null,
-      triggerRef,
-      preset: input.preset ?? null,
-      sessionKey: input.sessionKey,
-      nextRunAt,
-    })
-    .returning();
-  await registerTimer(row!);
-  await emit(row!);
-  // Its runs answer in the Automations chat: started now if the user has none yet, so the web app
-  // can show where the results will be. The first run starts it otherwise.
-  await automationsChat(input.userId).catch((err: unknown) =>
-    logger().warn({ userId: input.userId, err: String(err) }, 'automations chat not started'),
+      nextRunAt: validateCron(input.cron, tz),
+      watchAccount: null,
+    };
+  }
+  const app = findApp(input.trigger!.app) ?? appForToolkit(input.trigger!.app);
+  if (!app) throw new AutomationError(`Unknown app ${input.trigger!.app}`);
+  const conn = await connectionForToolkit(input.userId, app.toolkit);
+  if (!conn) throw new AutomationError(`Connect ${app.name} first`);
+  return { kind: 'event', timezone: tz, nextRunAt: null, watchAccount: conn.composioAccountId };
+}
+
+/**
+ * Saves a checked automation: for an app event, Composio's trigger first (a TriggerError when
+ * Composio refuses), then the row. `made.triggerRef` holds the trigger made, so a caller whose
+ * transaction fails afterwards can remove it. Nothing is registered here (activateAutomation).
+ */
+export async function insertAutomation(
+  input: CreateInput,
+  checked: CheckedAutomation,
+  exec: Tx = db(),
+  made: { triggerRef?: string } = {},
+): Promise<Automation> {
+  let triggerRef: string | null = null;
+  if (checked.kind === 'event') {
+    try {
+      triggerRef = (
+        await composio().createTrigger(
+          input.userId,
+          input.trigger!.event,
+          checked.watchAccount!,
+          input.trigger!.config ?? {},
+        )
+      ).triggerId;
+    } catch (err) {
+      throw new TriggerError(String(err));
+    }
+    made.triggerRef = triggerRef;
+  }
+  const enabled = input.enabled !== false;
+  try {
+    const [row] = await exec
+      .insert(automations)
+      .values({
+        id: newId('aut'),
+        userId: input.userId,
+        kind: checked.kind,
+        title: input.title,
+        instruction: input.instruction,
+        runAt: input.runAt ?? null,
+        cron: input.cron ?? null,
+        timezone: checked.timezone,
+        trigger: input.trigger ?? null,
+        triggerRef,
+        preset: input.preset ?? null,
+        apps: input.apps ?? [],
+        sessionKey: input.sessionKey,
+        enabled,
+        pausedReason: enabled ? null : 'user',
+        nextRunAt: checked.nextRunAt,
+      })
+      .returning();
+    return row!;
+  } catch (err) {
+    if (triggerRef) await dropTrigger(triggerRef);
+    delete made.triggerRef;
+    throw err;
+  }
+}
+
+/** Removes a Composio trigger, best effort (logged when Composio refuses). */
+export async function dropTrigger(triggerRef: string): Promise<void> {
+  await composio()
+    .deleteTrigger(triggerRef)
+    .catch((err: unknown) => logger().warn({ err: String(err) }, 'delete trigger failed'));
+}
+
+/**
+ * A saved automation goes live: its timer is set (none while paused, and an app event's watch was
+ * made with it), the web app is told, and the user's Automations chat is started if they have none
+ * yet, so the web app can show where the results will be (the first run starts it otherwise).
+ */
+export async function activateAutomation(row: Automation): Promise<void> {
+  await registerTimer(row);
+  await emit(row);
+  await automationsChat(row.userId).catch((err: unknown) =>
+    logger().warn({ userId: row.userId, err: String(err) }, 'automations chat not started'),
   );
-  return row!;
+}
+
+/** Checks plan limit, 15-minute minimum and timezone → saves → registers the timer. */
+export async function createAutomation(input: CreateInput): Promise<Automation> {
+  const checked = await checkAutomation(input);
+  const row = await insertAutomation(input, checked);
+  await activateAutomation(row);
+  return row;
 }
 
 /**
@@ -485,4 +589,5 @@ export async function deleteUserAutomations(userId: string): Promise<void> {
   }
   await db().delete(automations).where(eq(automations.userId, userId));
   await db().delete(prReviews).where(eq(prReviews.userId, userId));
+  await db().delete(automationDrafts).where(eq(automationDrafts.userId, userId));
 }

@@ -9,6 +9,7 @@ import {
   setAutomationLimit,
 } from './modules/automations/automations.ts';
 import { deleteUserCrewJobs } from './modules/automations/crew-jobs.ts';
+import { handleDraftButton } from './modules/automations/drafts.ts';
 import {
   chargeAppAction,
   chargePaidTool,
@@ -146,8 +147,9 @@ export function wireModules(): void {
   });
 
   setInboundHooks({
-    // ✅ / ❌ buttons and yes/no replies answer approvals.
-    handleButton: handleApprovalReply,
+    // ✅ Save under a draft saves it; ✅ / ❌ buttons and yes/no replies answer approvals.
+    handleButton: async (userId, msg) =>
+      (await handleDraftButton(userId, msg)) || handleApprovalReply(userId, msg),
     // A coupon code sent in chat is redeemed, not given to the agent.
     handleText: async (userId, text, sessionKey) => {
       const reply = await redeemFromChat(userId, text);

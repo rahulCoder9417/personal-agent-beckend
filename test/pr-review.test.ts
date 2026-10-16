@@ -829,7 +829,7 @@ describe('the standing approval is narrow', () => {
   it('can’t be given by the agent: its own pull-request automation carries no permission', async () => {
     const u = await dev();
     const token = await agentToken(u.id);
-    const made = await mcpCall(token, 'create_automation', {
+    const made = await mcpCall(token, 'propose_automation', {
       title: 'watch pull requests',
       instruction: 'Review every pull request and comment on it',
       trigger: {
@@ -839,8 +839,16 @@ describe('the standing approval is narrow', () => {
       },
       // The tool has no such input; it is dropped.
       preset: 'pr_review',
+      session_key: 'web',
     });
-    expect(made.isError).toBe(false);
+    expect(made.isError, made.text).toBe(false);
+    // Even saved by the user, the agent's draft makes a plain automation.
+    const { draft_id } = JSON.parse(made.text) as { draft_id: string };
+    await expectContract(
+      'saveAutomationDraft',
+      await call(`/v1/automation-drafts/${draft_id}/save`, { method: 'POST', token: u.token }),
+      200,
+    );
     const [a] = await db().select().from(automations).where(eq(automations.userId, u.id));
     expect(a!.preset).toBeNull();
     expect(await listed(u.token)).toEqual([]);

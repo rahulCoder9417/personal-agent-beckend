@@ -902,6 +902,7 @@ The api writes one line to its log when a connection closes: how long it was ope
 | `agent.progress` | The agent reports a progress line |
 | `credits.updated` | A turn's billing job has run (a moment after the turn), or credits are added or run out |
 | `automation.updated` | An automation changes |
+| `automation_draft.updated` | The agent proposes a draft, or one is saved, discarded, replaced or expires. It holds the whole draft (section 18, "Drafts") |
 | `conversation.updated` | A conversation starts, gets a message, is renamed, becomes or stops being the active one, or is marked read |
 | `conversation.deleted` | A conversation is deleted. The event holds only its id |
 
@@ -958,7 +959,7 @@ The Platform MCP is the platform's tool server. MCP is a standard way for an AI 
 
 - The tool server is part of the api process. It answers at the path `/mcp`.
 - Only containers can reach it. From the public internet, `/mcp` answers "not found".
-- It offers the same 16 tools to every container. It keeps nothing between two calls.
+- It offers the same 17 tools to every container. It keeps nothing between two calls.
 
 ### How a container proves who it is
 
@@ -979,8 +980,9 @@ The Platform MCP is the platform's tool server. MCP is a standard way for an AI 
 | `describe_app_action` | Gives one action's inputs: their names, their kinds and which are required (new on 16 October) |
 | `run_app_action` | Runs one app action, for example "send an email". The answer is kept short (section 14) |
 | `request_approval` | Asks the user to approve a risky action, with its exact inputs, checked against the action first. Answers "pending" at once |
-| `schedule_reminder` | Saves a reminder for one moment in time |
-| `create_automation` | Saves an automation: once, repeating, or on an app event. Its answer says where the runs will answer, so the agent can tell the user |
+| `schedule_reminder` | Saves a plain reminder for one moment in time. Refused while an automation runs (section 18) |
+| `propose_automation` | Proposes an automation (once, repeating, or on an app event) with the apps it will use. The platform checks it and posts a draft the user saves; nothing runs before (section 18, "Drafts") |
+| `get_automation_draft` | Reads one of the user's drafts and its state |
 | `list_automations` | Lists the user's reminders and automations |
 | `cancel_automation` | Deletes one reminder or automation |
 | `web_search` | Searches the web through the platform. Max plan, 1 credit a search |
@@ -1297,10 +1299,16 @@ An automation is a saved instruction that the agent runs later, without the user
 
 ### Creating one
 
-1. The user asks in chat. The agent calls `schedule_reminder` with a text and a time. For the other kinds it calls `create_automation`.
-2. The api checks the request (the list below) and saves it in the table `automations`. The database is the source of truth.
-3. It also saves the chat the request was made in, web chat or a Telegram chat. That decides only where a copy of each answer goes (below). The answers themselves always go to the Automations chat. If the user has no Automations chat yet, it is started now, so the web app can show where the results will be.
-4. The api sets the timer. For an app event, Composio starts a watch on the app, called a trigger. It watches the connection the agent uses for that app, the newest. When the user connects the same account again, the trigger moves to the new connection (section 14, "Connecting the same account again"). The agent then confirms to the user. The tool's answer tells the agent where the runs will answer, so it can say so.
+There are two ways, by what the user asks for:
+
+- **A plain one-time reminder** ("remind me Friday at 10 to call the bank"): the agent calls `schedule_reminder` with a text and a time, and it is saved at once.
+- **Anything else** (a schedule, an app event, or a one-time job with work to do): the agent proposes it with `propose_automation`, and it is saved only when the user saves the draft. The part "Drafts" below explains it. Until 16 October the agent saved these at once with `create_automation`; that tool is no longer the agent's.
+
+When it is saved, either way:
+
+1. The api checks the request (the list below) and saves it in the table `automations`. The database is the source of truth.
+2. It also saves the chat the request was made in, web chat or a Telegram chat. That decides only where a copy of each answer goes (below). The answers themselves always go to the Automations chat. If the user has no Automations chat yet, it is started now, so the web app can show where the results will be.
+3. The api sets the timer. For an app event, Composio starts a watch on the app, called a trigger. It watches the connection the agent uses for that app, the newest. When the user connects the same account again, the trigger moves to the new connection (section 14, "Connecting the same account again"). A reminder's tool answer tells the agent where the runs will answer, so it can say so.
 
 - **The plan limit.** Free 1, Pro 5, Max 50. Reminders count, and paused automations count. A finished one-time reminder does not.
 - **The 15-minute minimum.** For a schedule, the next 50 runs must each be at least 15 minutes apart.
@@ -1312,6 +1320,70 @@ An automation is a saved instruction that the agent runs later, without the user
 Example: Priya in Bengaluru signs up. Her account starts on UTC. The setup page sets it to Asia/Kolkata. "Every morning at 9" then runs at 9 in India, not at 2:30 PM.
 
 The user's container keeps the time zone it was made with, which is usually UTC: it is made at sign-up, before the web app sets one. The agent reads the user's time zone with `get_profile`, and an automation uses the account's time zone, not the container's.
+
+### Drafts
+
+A draft is an automation the agent proposed that the user has not saved. It never runs. It is the table `automation_drafts`.
+
+**The steps.**
+
+1. The user asks, in web chat or on Telegram: "every Monday at 9, send me my open pull requests".
+2. The agent calls `propose_automation` with the title, the instruction, when it runs (a moment, a schedule or an app event, with its settings), the apps it will use and, for a change, which automation it changes.
+3. The api checks it with the same checks as a save (the list above), plus three of its own: each app named must be one the user has connected; a change must name one of the user's own automations, and not a pull-request review (that one is changed on its own screen); and the user must have fewer than 20 open drafts. A refusal goes back to the agent in words it can act on, and nothing is saved.
+4. The api saves the draft, open for 7 days. It saves no automation, sets no timer and makes no watch at Composio.
+5. It posts the draft in the chat it was asked in, during the turn, in the turn's conversation. The message carries the draft's id:
+   - **web chat:** one line, `Here's a draft of "Monday PRs". Nothing runs until you save it.` The web app draws the draft's card under it: the five steps drawn small, "Not saved yet", Open in Automations and Save.
+   - **Telegram:** an outline in plain text, with a ✅ Save button under it:
+
+     ```
+     ⏰ New automation, not saved yet: Monday PRs
+     When: every Monday at 9:00 AM (Asia/Kolkata)
+     Tex: List my open pull requests in acme/web
+     Apps: GitHub
+     Asks first: before sending, deleting or paying
+     Results: your Automations chat, and a copy here
+     Review it: https://app.textcrew.in/automations/new?draft=drf_…
+     ```
+
+     An app event reads like "When: a new email arrives in Gmail (from: boss@acme.com)", and gets ⚡ instead of ⏰. A change starts "A change, not saved yet" and says which automation it replaces.
+6. The tool answers at once with the draft's id and the link, and tells the agent to end its turn without repeating the draft or saying it is set up.
+
+**Saving.** Only the user saves: in the web app (the card, or the draft's page, `POST /v1/automation-drafts/{id}/save`), or with the Save button on Telegram. No agent tool saves.
+
+- The checks run again at Save, because time has passed: the plan's limit (a draft does not count until then), a moment not yet past, the app still connected. A refusal is written for the user ("Your Free plan allows 1 automation. Delete one or upgrade, then save again.", "The time it was set for has passed. Ask Tex for a new time."), and the draft stays open.
+- **One draft makes one automation.** The draft is locked while it is read, and it is marked saved in the same step as the automation is saved. Two saves at the same moment (a double click) make one automation: the second waits, then finds it saved and is refused with "already saved".
+- **Save paused** (web app): the automation is made switched off, "paused by you", with no timer. The user turns it on later.
+- For an app event, Composio's watch is made at Save. If Composio can't be reached, nothing is saved and the user is told to try again in a moment. A watch made for a save that then fails is removed.
+- **A change:** Save makes the new automation first, then removes the old one with its timer or watch. The plan's limit counts the old one as gone.
+- The automation keeps the apps the draft named (`apps`). For now they are only shown on the canvas. From phase 3 they become a limit on what a run may use.
+- On Telegram the tap is answered in the chat: "Saved: Monday PRs. First run: 9:00 AM on Monday 20 October (Asia/Kolkata). Each run answers in your Automations chat, with a copy here." A second tap gets "That automation is already saved."
+- Saving and discarding are in the activity log as the user's.
+
+**Its states.**
+
+| State | What it means | What its card says |
+|---|---|---|
+| open | Waiting for the user, at most 7 days | Not saved yet, with Save |
+| saved | The automation exists | Saved, with a way to open it |
+| replaced | The agent proposed a newer version | That there is a newer version |
+| expired | 7 days passed | "This draft expired. Ask Tex again." |
+| discarded | The user threw it away | That it was discarded |
+
+- **Asked again.** When the user asks the agent to change a draft, the agent proposes again with the old draft's id. The old one becomes `replaced` in the same step, if it is still open, as an approval asked again does (section 15). A replaced draft can't be saved. One that was already saved, discarded or expired stays as it is.
+- **Expiry.** An hourly job marks open drafts past their 7 days as expired. Until it runs, the api already treats them as expired. Safe to run twice.
+- **Clean-up.** The daily clean-up removes drafts made more than 30 days ago, in any state. A card whose draft is gone shows the expired text.
+- **The cap.** At most 20 open drafts per user. A draft that replaces another does not add one. The 21st is refused, and the agent asks the user to save or discard some first.
+- **The account goes:** its drafts go with it.
+
+**Example.** Rahul writes on Telegram "every Monday at 9, send me my open pull requests". Tex proposes it. Telegram shows the outline and ✅ Save. Nothing runs. He opens the link, sees the five boxes, then taps Save on Telegram. The automation is made, its timer set, and each Monday the list lands in his Automations chat with a copy on Telegram.
+
+### During an automation's run: no reminder
+
+A run reads things the user did not write: an email, a web page, a pull request. Before drafts, such text could talk the agent into calling `create_automation`, and the user would never see what was saved. That tool is gone. The other tool that saves at once, `schedule_reminder`, is refused while one of the user's automations runs (a timer's run or an app event, pull-request review included): "A reminder can't be set while an automation runs: what the run read could have asked for it."
+
+- How the api knows: when the worker hands a turn to the container, it notes in Redis what kind of turn it is, beside the turn's conversation, and removes the note when the turn ends. The container's tool calls are matched to that note by the user, never by anything the agent says. If the note can't be read, the reminder is refused too.
+- `propose_automation` still works during a run. The user sees the draft and decides. The agent's instructions also tell it never to propose or set one because of something it read during a run.
+- A draft's message is not what a run's copy to Telegram carries: the copy is still the run's answer.
 
 ### What happens when one fires
 
@@ -1389,9 +1461,20 @@ The worker's start used to drop such a run at times. On start the worker sets ev
 - **After a restart.** The timers live in the job queue, which can lose its data. So every time the worker starts, it sets the timer of every enabled automation again. A timer that is still there is left as it is, so a run that came due while the worker was stopped is not lost. It runs late and says so (above).
 - **The job queue lost its jobs.** A run whose job was lost is put back from the saved event. It still knows its automation and when it was due.
 
+### What the web app draws: the canvas
+
+The web app shows each automation on a page of its own as five boxes: the trigger, Tex's instruction, the apps, "asks you first" and the results (`hld-mvp.md`, section 5.4). Everything it draws comes from the api:
+
+- **One automation:** `GET /v1/automations/{id}`. It answers only for the user's own automations; another user's, or a deleted one, is "not found". A finished one-time reminder is left out of the list but is still found by its id, so an old link to it still opens.
+- **Where the copy goes:** `copyTo` says which chat app gets a copy of each run's answer: `telegram` for an automation made in a Telegram chat (and for a pull-request review turned on while Telegram was linked), and empty for one made in web chat. It comes from the chat the automation was made in, which the table already kept. The answers themselves always go to the Automations chat.
+- **The trigger's settings:** an app-event automation now shows its settings as they were given when it was made, for example the owner and repository a pull-request review watches. They were saved before, but the api gave only the app and the event. An automation made without settings shows none.
+
+Nothing new is saved for this. Example: Rahul's "every Monday at 9" made on Telegram reads `copyTo: telegram`, so its Results box says "Automations chat" and "Copy to Telegram".
+
 ### What can go wrong
 
-- **The plan limit is reached.** The tool says how many the plan allows. Nothing is saved.
+- **The plan limit is reached.** The tool says how many the plan allows. Nothing is saved. A draft is refused when it is proposed, and again at Save; it stays open, to save once a place is free.
+- **The agent proposes an event name Composio doesn't know.** It is checked only when the watch is made, at Save: the save is refused and the draft stays open. Phase 3 brings Composio's list of events.
 - **No credits when it fires.** No turn runs. The user gets the out-of-credits message in the Automations chat, with a copy on Telegram when the automation was made there, and the automation is paused. The copy names the web app instead of the purchase link (section 10).
 - **The user tries to delete the Automations chat.** The api answers 409 and nothing changes. The web app does not offer it.
 - **The automation is deleted while it runs.** The run stops before the agent gets it. The job is tried again, finds no automation and ends.
@@ -3132,7 +3215,7 @@ There are three databases: the backend's, the vm-manager's and LiteLLM's. Each p
 | auth | `waitlist_entries` | People waiting for access, with request details for abuse checks |
 | auth | `waitlist_attempts` | Every waitlist try, also repeats and blocked ones |
 | events | `events` | Everything that came in, saved once, with its status |
-| channels | `messages` | Every message in and out, with its channel, its conversation and its status. A message written during a turn keeps the turn's id. A copy sent to Telegram keeps the id of the message it copies |
+| channels | `messages` | Every message in and out, with its channel, its conversation and its status. A message written during a turn keeps the turn's id. A copy sent to Telegram keeps the id of the message it copies. A message that carries a draft the agent proposed keeps the draft's id, for its card |
 | channels | `conversations` | One row per conversation: its chat, its kind (a chat, or the user's one Automations chat), its number in that chat, its title, its start and last-message times, if it is the active one, and the two times that say if it is unread: the agent's newest message and up to when the user read it (section 8) |
 | channels | `chat_epochs` | Each chat's counter: the highest conversation number given out in it. It only goes up, so a number is never used twice |
 | channels | `attachments` | Files uploaded in the web app or received in a chat |
@@ -3147,7 +3230,8 @@ There are three databases: the backend's, the vm-manager's and LiteLLM's. Each p
 | integrations | `user_mcp_servers` | The user's own MCP servers, with the secret encrypted |
 | integrations | `composio_triggers` | Made for app triggers. No code reads or writes it today |
 | integrations | `byok_keys` | The user's own AI keys, encrypted, plus the last 4 characters |
-| automations | `automations` | Reminders, repeating tasks and app-event tasks, each with the chat it was made in. Its runs answer in the Automations chat. A column that held a conversation per automation until 13 October is no longer used |
+| automations | `automations` | Reminders, repeating tasks and app-event tasks, each with the chat it was made in and the apps the agent named in its draft. Its runs answer in the Automations chat. A column that held a conversation per automation until 13 October is no longer used |
+| automations | `automation_drafts` | Automations the agent proposed and the user has not saved, with their state (open, saved, discarded, replaced, expired), the chat they were proposed in, the automation a change replaces, and the automation a saved one made. Removed after 30 days (section 18, "Drafts") |
 | automations | `pr_reviews` | One row per reviewed pull-request commit, so none is reviewed twice |
 | automations | `crew_jobs` | One row per crew job: the brief, where the report goes, its state, and the report itself |
 | billing | `subscriptions` | Each paid plan: user, Polar id, status, period |
@@ -3176,7 +3260,8 @@ This section says what the web app can do through the api, group by group. Almos
 | Apps | See the app list with status and plan, and which apps can be connected on this server. Start connecting an app. Disconnect one |
 | MCP servers | List the user's own MCP servers. Add one (Max plan), rename it, switch it on or off, remove it |
 | Own AI keys | See which providers have a key and which one is in use, never the key itself. Set, replace or remove one |
-| Automations | List reminders and automations, with why one is paused (by the user, after failures, out of credits, or by Textcrew support). Pause, resume or delete one |
+| Automations | List reminders and automations, with why one is paused (by the user, after failures, out of credits, or by Textcrew support), where the copy of each answer goes, the trigger's settings and the apps named. Read one. Pause, resume or delete one |
+| Automation drafts | List the open drafts the agent proposed. Read one in any state. Save one (switched on, or paused), which makes the automation. Discard one |
 | Pull-request review | List the repositories with review on. Turn review on or off for one |
 | Agent settings and the Claude sign-in | See the container's state and which engine runs. Choose the engine, and Claude Code's model and thinking effort. Start, finish or undo the Claude sign-in |
 | The crew | See the four members, which are available, and the state of Scout's browser |
@@ -3323,6 +3408,8 @@ These were found by reading the code while this report was written. Each is desc
 - **What a user is told when Textcrew AI credits run out in the middle of a turn is not settled.** The turn may be treated as our fault and given back (section 26).
 - **Disconnect does not try again when Composio cannot remove the account.** The failure is only logged and our row is deleted, so the app's sign-in can stay at Composio with nothing pointing to it. Account deletion does try again (sections 14 and 33).
 - **A deleted account keeps its email and name** in its `users` row, and its data stays in backups for a while: 7 days in the database dumps by default, and with no end in the archives of users' files (sections 33 and 37).
+- **The refusal of reminders covers an automation's run only.** A later turn in the Automations chat (the user's follow-up there, or the agent's turn after an approval a run asked for) still has the run's text in its context and may set a reminder. A crew job, which reads other people's code, may too. The agent's instructions tell it not to act on what it read; the platform does not enforce it there (section 18).
+- **A draft's event name is checked only at Save,** when Composio makes the watch. A wrong name is refused then, with "try again in a moment", which does not say the name is wrong (section 18).
 
 ### Crew jobs
 

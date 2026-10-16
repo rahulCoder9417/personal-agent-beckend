@@ -1,23 +1,56 @@
 import {
   deleteAutomation,
+  getAutomation,
   listAutomations,
   setEnabled,
   toApiAutomation,
 } from '../../modules/automations/automations.ts';
+import {
+  discardDraft,
+  DraftError,
+  getDraft,
+  listOpenDrafts,
+  saveDraft,
+  toApiDraft,
+} from '../../modules/automations/drafts.ts';
 import {
   disablePrReview,
   enablePrReview,
   listPrReviews,
   toApiPrReview,
 } from '../../modules/automations/pr-review.ts';
-import { notFound } from '../../shared/errors.ts';
+import { AppError, badRequest, notFound, planLimit, unavailable } from '../../shared/errors.ts';
 import { enforce } from '../../shared/rate-limit.ts';
 import { route } from '../router.ts';
+
+/** A draft's refusal in the `Error` shape: 404, 409 (not open), 403 (plan), 400, 503. */
+function draftRefusal(err: unknown): unknown {
+  if (!(err instanceof DraftError)) return err;
+  switch (err.code) {
+    case 'not_found':
+      return notFound('Draft not found');
+    case 'not_open':
+      return new AppError(409, 'conflict', err.message, err.details);
+    case 'plan_limit':
+      return planLimit(err.message, err.details);
+    case 'unavailable':
+      return unavailable(err.message);
+    default:
+      return badRequest(err.message);
+  }
+}
 
 export const automationRoutes = [
   route('listAutomations', async (c) => {
     const rows = await listAutomations(c.get('user').id);
     return c.json({ items: rows.map(toApiAutomation) }, 200);
+  }),
+
+  // One automation, for its own page in the web app (drawn as a flow). Filtered by the user.
+  route('getAutomation', async (c, { params }) => {
+    const row = await getAutomation(c.get('user').id, params.automationId);
+    if (!row) throw notFound('Automation not found');
+    return c.json(toApiAutomation(row), 200);
   }),
 
   route('updateAutomation', async (c, { params, body }) => {
@@ -30,6 +63,40 @@ export const automationRoutes = [
     if (!(await deleteAutomation(c.get('user').id, params.automationId)))
       throw notFound('Automation not found');
     return c.body(null, 204);
+  }),
+
+  // Drafts the agent proposed (drafts.ts). Only the user saves one: here, or with Save in a chat app.
+  route('listAutomationDrafts', async (c) => {
+    const rows = await listOpenDrafts(c.get('user').id);
+    return c.json({ items: rows.map(toApiDraft) }, 200);
+  }),
+
+  route('getAutomationDraft', async (c, { params }) => {
+    const row = await getDraft(c.get('user').id, params.draftId);
+    if (!row) throw notFound('Draft not found');
+    return c.json(toApiDraft(row), 200);
+  }),
+
+  route('saveAutomationDraft', async (c, { params, body }) => {
+    const userId = c.get('user').id;
+    await enforce({ key: `draft-save:user:${userId}`, max: 30, windowSeconds: 3600 });
+    try {
+      const { draft, automation } = await saveDraft(userId, params.draftId, {
+        enabled: body?.enabled !== false,
+        via: 'web',
+      });
+      return c.json({ draft: toApiDraft(draft), automation: toApiAutomation(automation) }, 200);
+    } catch (err) {
+      throw draftRefusal(err);
+    }
+  }),
+
+  route('discardAutomationDraft', async (c, { params }) => {
+    try {
+      return c.json(toApiDraft(await discardDraft(c.get('user').id, params.draftId)), 200);
+    } catch (err) {
+      throw draftRefusal(err);
+    }
   }),
 
   // Pull-request review per GitHub repo (HLD 0.8). Each repo that is on is an automation.

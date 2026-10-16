@@ -24,6 +24,7 @@ import {
   lateNote,
   setLateAfterMs,
 } from '../src/modules/automations/jobs.ts';
+import { listOpenDrafts, saveDraft } from '../src/modules/automations/drafts.ts';
 import { automations } from '../src/modules/automations/schema.ts';
 import {
   activeConversation,
@@ -76,8 +77,9 @@ const automationText = (text: string) => text.slice(text.indexOf('[Automation "'
 
 beforeEach(() => {
   tg = installFakeTelegram();
-  // The agent: "every morning …" makes a daily automation in the chat it came from; any other
-  // message is answered "re: <it>"; an automation run answers "ran: <its title>".
+  // The agent: "every morning …" proposes a daily automation in the chat it came from (the user
+  // saves it: `say` below); any other message is answered "re: <it>"; an automation run answers
+  // "ran: <its title>".
   vm = installFakeVm(async (d, mcp) => {
     if (d.kind === DeliverKind.AUTOMATION || d.kind === DeliverKind.APP_EVENT) {
       const title = /\[Automation "([^"]+)"\]/.exec(d.text)?.[1];
@@ -86,7 +88,7 @@ beforeEach(() => {
     }
     const said = lastLine(d.text);
     if (said.startsWith('every morning')) {
-      const r = await mcp('create_automation', {
+      const r = await mcp('propose_automation', {
         title: 'Morning PRs',
         instruction: 'Summarise my open pull requests and issues',
         cron: '0 9 * * *',
@@ -176,6 +178,9 @@ describe('the Automations chat: where every run answers', () => {
   it('made in web chat: every run answers there, never in the chat that is open, never active', async () => {
     const user = await chatUser({ plan: 'pro' });
     const { conversationId: made } = await say(user, 'every morning at 9, summarise my PRs');
+    // Tex proposed it; the user saves the draft (the card's Save).
+    const [draft] = await listOpenDrafts(user.id);
+    await saveDraft(user.id, draft!.id, { via: 'web' });
     const [a] = await automationsOf(user.id);
     // Making it started the Automations chat, beside the others.
     const chat = (await findAutomationsChat(user.id))!;
@@ -198,6 +203,7 @@ describe('the Automations chat: where every run answers', () => {
     expect(await textsIn(user.id, chat.id)).toEqual(['ran: Morning PRs', 'ran: Morning PRs']);
     expect(await textsIn(user.id, made)).toEqual([
       'every morning at 9, summarise my PRs',
+      `Here's a draft of "Morning PRs". Nothing runs until you save it.`,
       're: every morning at 9, summarise my PRs',
     ]);
     expect(await textsIn(user.id, fresh.id)).toEqual(['hlo', 're: hlo']);

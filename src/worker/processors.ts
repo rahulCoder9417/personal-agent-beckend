@@ -14,6 +14,7 @@ import {
   handleRunAutomation,
 } from '../modules/automations/jobs.ts';
 import { handleCrewJob } from '../modules/automations/crew-jobs.ts';
+import { expireDrafts } from '../modules/automations/drafts.ts';
 import { handleSendMessage, handleSendRaw } from '../modules/channels/outbound.ts';
 import { handleMessageStatus } from '../modules/channels/status.ts';
 import {
@@ -58,6 +59,7 @@ export function processors(): Processors {
       'check-connection': handleCheckConnection,
       'settle-connection': handleSettleConnection,
       'expire-approvals': async () => expireApprovals(),
+      'expire-automation-drafts': async () => expireDrafts(),
       cleanup: handleCleanup,
       backup: handleBackup,
       'health-check': handleHealthCheck,

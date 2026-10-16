@@ -207,6 +207,8 @@ export interface CurrentTurn {
   turnId: string;
   /** The conversation is the Automations chat (an automation's run, or the user writing there). */
   inAutomationsChat: boolean;
+  /** What the turn is: the user's message, an automation's run, an app event, … */
+  kind?: TurnKind;
 }
 
 /** Never fails the turn: without the record a reply goes to the chat's active conversation. */
@@ -253,6 +255,26 @@ export async function currentTurn(userId: string, sessionKey: string): Promise<C
   } catch (err) {
     logger().warn({ userId, err: String(err) }, 'conversation of the turn not readable');
     return null;
+  }
+}
+
+/** The kinds of turn that are an automation's run: a timer's, and an app event's. */
+const AUTOMATION_RUNS: ReadonlySet<string> = new Set<TurnKind>(['automation', 'app_event']);
+
+/**
+ * Whether the user's turn in progress, in any chat, is an automation's run (a timer or an app
+ * event, pull-request review included). What the agent read during such a run was not written by
+ * the user, so some tools refuse then (schedule_reminder). `unknown`: the record could not be read.
+ */
+export async function automationRunInProgress(userId: string): Promise<boolean | 'unknown'> {
+  try {
+    const raw = await redis().get(turnConversationKey(userId));
+    if (!raw) return false;
+    const kind = (JSON.parse(raw) as { kind?: unknown }).kind;
+    return typeof kind === 'string' && AUTOMATION_RUNS.has(kind);
+  } catch (err) {
+    logger().warn({ userId, err: String(err) }, 'kind of the turn not readable');
+    return 'unknown';
   }
 }
 
@@ -544,6 +566,7 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
     conversationId: conversation.id,
     turnId: input.deliveryId,
     inAutomationsChat: input.inAutomationsChat === true,
+    kind: input.kind,
   });
   const outcome = await deliverTurn(
     input,

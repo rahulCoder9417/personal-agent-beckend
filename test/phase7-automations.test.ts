@@ -208,20 +208,32 @@ describe('Phase 7: automations and reminders', () => {
         composioAccountId: `ca_${randomUUID()}`,
         status: 'active',
       });
+    let draftId = '';
     vmFake.state.agent = async (d, mcp) => {
       if (d.kind === DeliverKind.MESSAGE) {
-        const r = await mcp('create_automation', {
+        const r = await mcp('propose_automation', {
           title: 'boss mail',
           instruction: 'Summarise the email from my boss',
           trigger: { app: 'gmail', event: 'GMAIL_NEW_GMAIL_MESSAGE' },
+          apps: ['gmail'],
           session_key: d.sessionKey,
         });
         expect(r.isError).toBeFalsy();
+        draftId = (JSON.parse(r.text) as { draft_id: string }).draft_id;
       } else if (d.kind === DeliverKind.APP_EVENT) {
         await mcp('send_message', { text: `EVENT: ${d.text}`, session_key: d.sessionKey });
       }
     };
     await tgPost(telegramUpdate(u.chatId, 'when my boss emails me, summarise it'));
+    // Tex proposed it; nothing watches the app until the user saves it (here, in the web app).
+    await waitFor(async () => draftId);
+    expect(await db().select().from(automations).where(eq(automations.userId, u.id))).toEqual([]);
+    const saved = await call(`/v1/automation-drafts/${draftId}/save`, {
+      method: 'POST',
+      token: u.token,
+      body: {},
+    });
+    expect(saved.status).toBe(200);
     const [a] = await waitFor(async () => {
       const rows = await db().select().from(automations).where(eq(automations.userId, u.id));
       return rows.length ? rows : undefined;

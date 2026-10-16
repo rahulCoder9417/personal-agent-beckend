@@ -25,6 +25,7 @@ export function toApiMessage(m: MessageRow) {
     attachments: (m.mediaRef ?? []).map((a) => ({ id: a.id, name: a.name, mimeType: a.mimeType })),
     status: m.status,
     approvalId: m.approvalId,
+    automationDraftId: m.automationDraftId ?? null,
     // Only the web app's own messages have one: it matches its optimistic bubble to the saved one.
     ...(m.clientMessageId ? { clientMessageId: m.clientMessageId } : {}),
     createdAt: m.createdAt.toISOString(),
@@ -279,8 +280,9 @@ export async function recentConversationMessages(
 
 /**
  * A turn's reply: the last message saved with the turn's id (its delivery id) that is not an
- * approval's question. The agent's answer when the turn ended well (the Bridge sends it once, at
- * the end), else what the platform said instead (out of credits, the turn failed).
+ * approval's question, nor a draft the agent proposed. The agent's answer when the turn ended well
+ * (the Bridge sends it once, at the end), else what the platform said instead (out of credits, the
+ * turn failed).
  */
 export async function turnReply(userId: string, turnId: string): Promise<MessageRow | undefined> {
   const [row] = await db()
@@ -292,6 +294,7 @@ export async function turnReply(userId: string, turnId: string): Promise<Message
         eq(messages.eventId, turnId),
         eq(messages.direction, 'out'),
         isNull(messages.approvalId),
+        isNull(messages.automationDraftId),
         isNull(messages.copyOf),
       ),
     )

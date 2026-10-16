@@ -831,6 +831,17 @@ The web app shows new messages and the agent's state without a reload. It keeps 
 4. Each api process listens in Redis. It forwards the event to that user's open connections.
 5. After 25 quiet seconds the api sends a `ping`, so the connection stays open.
 
+### When the stream stops getting through
+
+The connection runs from the browser to the web app's host (Vercel), which passes it on to the api. Two things about that path were seen on the server on 16 October:
+
+- **The host cuts every connection after 5 minutes.** The browser opens a new one at once, and the web app asks again for what it shows, because the stream replays nothing it missed.
+- **The browser's side can break while the host's side stays open.** At 11:12:26 AM the browser opened a new connection while the old one was still being read from the api, its pings going out every 25 seconds, until the host's 5 minutes were up two minutes later. Everything the api wrote to the old one in those two minutes reached nobody, and the api could not tell.
+
+So the web app checks for itself. A connection with nothing at all for 70 seconds (no event and no ping) is taken to be dead and replaced. And 10 seconds after the agent's answer, a thread that still shows the agent at work asks the api again whether the turn ended (on 16 October at 10:32 AM a turn's last two events never reached the page, and "Tex is working…" stayed under the answer).
+
+The api writes one line to its log when a connection closes: how long it was open, how many events and pings it wrote, the last event and how long before the close it went, how long the connection had been quiet, and how many events were still waiting. A write that waits 5 seconds or more, because nothing downstream reads the connection, is logged as a warning. The lines say nothing of what the events hold. A connection the api wrote to until the end (quiet for less than 25 seconds) that the page still didn't hear from was lost after the api: on the host's side or the browser's.
+
 ### The events
 
 | Event | Sent when |

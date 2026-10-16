@@ -48,6 +48,30 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 16 October 2026: "Tex is working…" no longer stays under a finished answer
+
+- **Where it is:** on the branch `fix/working-indicator` in the backend and in the web app. Not merged, not deployed.
+- **Why:** at 10:32 AM you sent "hlo" in web chat. Tex answered "Hey! How can I help you today?", but "Tex is working…" stayed under the answer and your message kept saying "Tex is on it", though the turn was over. What happened, from the server's logs, the message as it is saved and the turn's timing record (India time):
+  1. **10:32:15.** The message was saved and the turn started. The container was asleep and woke in 2.6 seconds.
+  2. **10:32:19.** The agent took the message. The worker marked it "processing" and the agent "busy", and sent both to the web app. That is what "Tex is on it" and "Tex is working…" show.
+  3. **10:32:23.** Tex's answer was saved and sent to the web app. It showed.
+  4. **10:32:25.** The turn ended normally ("done" in its timing record). The worker marked your message "delivered", which is how it is saved now, and the agent "awake", and sent both. The timing record is written only after both have gone to Redis, so they were sent.
+  5. **They never reached the page.** It went on showing the message "processing" and the agent "busy", which happens only without those two. Nothing else could have put the old state back: between 10:32:16 and 10:34:36 the page asked the api for nothing but your profile.
+  6. **10:34:36.** The page's live connection broke, the browser opened a new one and asked again for the thread and the agent's state. That cleared it, about two minutes late. The page had no other way to find out.
+- **Why the events didn't get through:** the live connection runs from the browser to the web app's host (Vercel), which passes it on to the api. Watching the server's connections later that morning showed two things. The host cuts every connection after 5 minutes (10:34:22 to about 10:39:22, and again 10:39:27 to 10:44:27). And the browser's side can break while the host's side stays open: at 11:12:26 the browser opened a new connection while the old one was still being read from the api, a ping every 25 seconds, until 11:14:27. What the api writes in such a gap reaches nobody, and the api can't tell. Where exactly your connection stopped at 10:32 can't be seen in the logs we had; the log lines below show it next time.
+- **What the user notices:** "Tex is working…" goes within about 10 seconds of Tex's answer even when the turn's last events are lost on the way, and a connection that has gone quiet is replaced within about 80 seconds, with what was missed asked for again. Normally nothing changes: the bubble goes a second or two after the answer, as before.
+- **Web app:** three things (they are described in its README):
+  - 10 seconds after Tex's answer, a thread that still shows Tex at work asks the api again for the agent's state and the thread. A turn that really goes on (Tex said it is on it and keeps working) stays at work, because the api says so too.
+  - A connection with nothing at all for 70 seconds (the api pings after 25 quiet seconds) is replaced, and the new one catches up. This is looked at every 10 seconds, and at once when the tab is shown again. A connection the host refused (a 401 or a 502), which the browser gives up for good, is opened again after 3 seconds, then twice as long each time, up to a minute.
+  - A late word never puts Tex back to work: a message's status only moves forward on the page, and the agent's state read from the api gives way to the live connection's when that spoke while the answer was on its way.
+- **Backend:** the api writes one line when a live connection closes: how long it was open, how many events and pings went out, the last event and how long before the close, how long it had been quiet, and how many events were still waiting. A write that waits 5 seconds or more, because nothing downstream reads the connection, is a warning. Nothing of what the events hold is logged.
+- **Cost and speed:** two extra requests (the agent's state and the thread) only when a turn's end is missing 10 seconds after an answer; none otherwise. One log line per connection, about one every 5 minutes for each open tab.
+- **Contracts:** none. **Database:** none.
+- **How it was checked:** web app: a test plays the 10:32 turn with its last two events lost, and the thread stops showing Tex at work 10 seconds after the answer (with the check switched off it stays at work); tests that a late "processing", the answer to sending a message and a list read during the turn never take a delivered message back, that the agent's state from the api gives way to a newer one from the stream, and that a quiet or refused connection is replaced and catches up while a pinged one is kept (each fails with its part switched off). Lint, types, the build and all 851 tests pass. Backend: a test for the closing line (and that no event's text gets into it), the slow-write warning and one line per connection (they fail on the old code). Lint, types and all 944 tests pass. Not yet tried on the server.
+- **Still open:** the stream still has no event ids, so what is sent while a connection is down is not replayed; the web app asks again instead. Sending ids and replaying the last minute's events on reconnect would close that gap; it changes the contract and is only proposed here.
+- **Docs updated:** `backend-report.md` section 12 ("When the stream stops getting through").
+- **Commits:** backend `92126ca`; web app `781407c`, `2a1a440`, `67d23ea`.
+
 ### 15 October 2026: an approval holds exactly what runs, and a request asked again shows as "replaced"
 
 - **Where it is:** on `main` and on the test server (backend), and live in the web app, since 15 October.

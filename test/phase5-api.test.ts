@@ -61,16 +61,20 @@ describe('contract: billing', () => {
       plans: Array<{
         id: string;
         priceCents: number;
+        regularPriceCents: number | null;
         monthlyCredits: number;
         features: string[];
         limits: { browser: boolean };
       }>;
       topUps: Array<{ id: string; credits: number }>;
     }>('listPlans', await call('/v1/billing/plans'), 200);
-    expect(body.plans.map((p) => [p.id, p.priceCents, p.monthlyCredits])).toEqual([
-      ['free', 0, 0],
-      ['pro', 1200, 1500],
-      ['max', 3000, 4500],
+    // Launch prices (charged now) beside the regular prices (shown as plain text), 16 Oct 2026.
+    expect(
+      body.plans.map((p) => [p.id, p.priceCents, p.regularPriceCents, p.monthlyCredits]),
+    ).toEqual([
+      ['free', 0, null, 0],
+      ['pro', 1900, 3000, 1500],
+      ['max', 3000, 5000, 4500],
     ]);
     // Browser use is a Max feature (launch-plan D10): in the feature list and in the limits.
     expect(body.plans.map((p) => [p.id, p.limits.browser])).toEqual([

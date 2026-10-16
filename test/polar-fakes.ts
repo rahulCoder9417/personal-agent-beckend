@@ -185,7 +185,7 @@ export function subscriptionData(o: SubOpts) {
     id: o.subId,
     created_at: o.start.toISOString(),
     modified_at: new Date().toISOString(),
-    amount: 1200,
+    amount: 1900,
     currency: 'usd',
     recurring_interval: 'month',
     recurring_interval_count: 1,

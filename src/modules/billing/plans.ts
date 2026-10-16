@@ -18,7 +18,13 @@ export interface PlanLimits {
 export interface PlanDef {
   id: PlanId;
   name: string;
+  /** What a checkout charges now: the launch price while the plan has one. */
   priceCents: number;
+  /**
+   * The regular price, shown as plain text beside the launch price ("launch price, regular $30"),
+   * never struck out. null when the plan has no launch price.
+   */
+  regularPriceCents: number | null;
   interval: 'month' | null;
   monthlyCredits: number;
   signupCredits: number;
@@ -46,6 +52,7 @@ export const PLANS: Record<PlanId, PlanDef> = {
     id: 'free',
     name: 'Free',
     priceCents: 0,
+    regularPriceCents: null,
     interval: null,
     monthlyCredits: 0,
     signupCredits: SIGNUP_CREDITS,
@@ -70,7 +77,9 @@ export const PLANS: Record<PlanId, PlanDef> = {
   pro: {
     id: 'pro',
     name: 'Pro',
-    priceCents: 1200,
+    // Launch price $19 a month (regular $30), decided 16 Oct 2026; to be revisited.
+    priceCents: 1900,
+    regularPriceCents: 3000,
     interval: 'month',
     monthlyCredits: 1500,
     signupCredits: 0,
@@ -94,7 +103,9 @@ export const PLANS: Record<PlanId, PlanDef> = {
   max: {
     id: 'max',
     name: 'Max',
+    // Launch price $30 a month (regular $50), decided 16 Oct 2026; to be revisited.
     priceCents: 3000,
+    regularPriceCents: 5000,
     interval: 'month',
     monthlyCredits: 4500,
     signupCredits: 0,

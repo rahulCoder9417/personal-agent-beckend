@@ -13,6 +13,7 @@ export function toPlan(p: PlanDef): Schemas['Plan'] {
     id: p.id,
     name: p.name,
     priceCents: p.priceCents,
+    regularPriceCents: p.regularPriceCents,
     interval: p.interval,
     monthlyCredits: p.monthlyCredits,
     signupCredits: p.signupCredits,

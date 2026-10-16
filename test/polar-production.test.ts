@@ -219,7 +219,7 @@ describe('a paused subscription', () => {
         userId: u.id,
         orderId: randomUUID(),
         product: PRODUCTS.pro,
-        netAmount: 1200,
+        netAmount: 1900,
         billingReason: 'subscription_cycle',
       },
       resumed,
@@ -249,7 +249,7 @@ describe('a paused subscription', () => {
           userId: u.id,
           orderId: randomUUID(),
           product: PRODUCTS.pro,
-          netAmount: 1200,
+          netAmount: 1900,
           billingReason: 'subscription_cycle',
         },
         { ...sub, status: 'canceled' },
@@ -312,7 +312,7 @@ describe('polar:check (read-only setup check)', () => {
     async (path: string) => {
       const c = config();
       const answers: Record<string, unknown> = {
-        [`/v1/products/${c.POLAR_PRODUCT_PRO}`]: product(c.POLAR_PRODUCT_PRO!, 1200, true),
+        [`/v1/products/${c.POLAR_PRODUCT_PRO}`]: product(c.POLAR_PRODUCT_PRO!, 1900, true),
         [`/v1/products/${c.POLAR_PRODUCT_MAX}`]: product(c.POLAR_PRODUCT_MAX!, 3000, true),
         [`/v1/products/${c.POLAR_PRODUCT_TOPUP_10}`]: product(
           c.POLAR_PRODUCT_TOPUP_10!,
@@ -363,7 +363,7 @@ describe('polar:check (read-only setup check)', () => {
         'Waitlist discount',
         'Webhook endpoint',
       ]);
-      expect(bad['Pro product']).toContain('price is $6, our plans say $12');
+      expect(bad['Pro product']).toContain('price is $6, our plans say $19');
       expect(bad['Webhook endpoint']).toContain('missing events: order.paid');
       expect(bad['Waitlist discount']).toContain('once');
     });
@@ -371,7 +371,7 @@ describe('polar:check (read-only setup check)', () => {
 
   it('a product priced in several currencies is checked on its dollar price', async () => {
     const c = config();
-    const pro = product(c.POLAR_PRODUCT_PRO!, 1200, true);
+    const pro = product(c.POLAR_PRODUCT_PRO!, 1900, true);
     pro.prices.push({
       amount_type: 'fixed',
       price_amount: 99900,

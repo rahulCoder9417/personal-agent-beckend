@@ -360,7 +360,8 @@ Picture: GoDraw, page 4, "Credits".
 
 | | Free | Pro | Max |
 |---|---|---|---|
-| Price | $0 | $12 a month | $30 a month |
+| Price now (launch price) | $0 | $19 a month | $30 a month |
+| Regular price | | $30 a month | $50 a month |
 | Credits | 100, once, at sign-up | 1,500 every month | 4,500 every month |
 | Apps | 10 | 25 | 25, plus your own tool servers |
 | Automations | 1 | 5 | 50 |
@@ -368,6 +369,8 @@ Picture: GoDraw, page 4, "Credits".
 | Scout's browser | No | No | Yes |
 | Web search through Textcrew | No | No | Yes |
 | When the server is busy | Normal | Normal | First in line |
+
+The launch prices were set on 16 October, to be looked at again later. A checkout charges the launch price. The regular price is shown beside it as plain words ("$19/month, launch price (regular $30)"), never as a struck-out number, because it has never been charged. Waitlist members still get 50% off their first month on top: Pro $9.50, Max $15.
 
 ### What costs credits
 
@@ -446,7 +449,7 @@ One exception to rule 6, by decision: a Max user's container with Scout's browse
 | Audience | Developers and tech founders who manage a team. First use case: pull-request review |
 | Channels | Telegram and the web app. WhatsApp and iMessage are built and switched off |
 | AI | Three ways: own API key, own Claude plan (labelled beta), Textcrew AI on credits |
-| Plans | Free $0, Pro $12, Max $30, top-up $10 for 800 credits. Credits last 90 days |
+| Plans | Free $0, Pro $19 (launch price, regular $30), Max $30 (launch price, regular $50), top-up $10 for 800 credits. Credits last 90 days. Regular prices are shown as plain words, never struck out |
 | The crew | Tex, Byte, Patch, Scout |
 | Web search | Only Scout searches. The engine's own search first; Brave on Max otherwise |
 | The browser | Max plan. It runs inside the user's own container, not at an outside provider |
@@ -516,7 +519,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - Sign-in on Clerk's production setup (15 October). Clerk is the outside service that handles sign-in. Until then it ran on Clerk's development setup, which is meant for building and has test keys. Now it runs on the production setup for `textcrew.in`, with live keys: Clerk answers at `clerk.textcrew.in`, and Google's sign-in screen names Textcrew, through Textcrew's own Google sign-in app. The live web app loads the live key and the api restarted healthy, but nobody has signed up on it yet. Accounts from the development setup do not carry over, so everyone signs up again.
 - Textcrew AI on the Hermes engine. There is no working model key.
 - The user's own API key. Every model call goes to the user's provider with their key, through LiteLLM on our server. There is no key with balance to test it.
-- Payments through Polar. Only in tests and Polar's sandbox design so far; no real payment has gone through. Ready for real money on 16 October (on the branches `feat/polar-production` in the backend, `feat/polar-portal` in the web app and `feat/polar-review` on the landing page, not on `main` yet): the switch from Polar's sandbox to real money is settings only, a read-only check (`polar-check`) compares Polar's products, discount and webhook with our plans, Pricing has **Invoices and card** (Polar's billing page), and a paused subscription is handled. Polar's real account has one product so far, "Text crew Pro Plan" at $6 a month, which does not match our plans; no token and no webhook exist there yet. `backend-report.md` section 28.
+- Payments through Polar. Only in tests and Polar's sandbox design so far; no real payment has gone through. Ready for real money on 16 October (on the branches `feat/polar-production` in the backend, `feat/polar-portal` in the web app and `feat/polar-review` on the landing page, not on `main` yet): the switch from Polar's sandbox to real money is settings only, a read-only check (`polar-check`) compares Polar's products, discount and webhook with our plans, Pricing has **Invoices and card** (Polar's billing page), and a paused subscription is handled. In Polar's real account (16 October): the three products at the launch prices (Textcrew Pro $19 a month, Textcrew Max $30 a month, the top-up $10 once), the waitlist discount and the webhook endpoint are made, and "Describe what you sell" has the new text. The access token is not made yet (Polar asked to sign in again), and the review is not sent. `backend-report.md` section 28.
 - Pull-request review, and Byte pushing code through our git gateway.
 - Crew jobs: a brief for Patch or Byte from chat (the web app's Crew screen and its form were removed on 16 October; the crew is explained in the web app's Help, and Tex sends every change to a repository to Byte and every pull-request review to Patch), the report in its fixed shape, the list of GitHub repos to pick from, the container stopping every program of the job and deleting its folder, and the container sleeping right after. Built on 13 October. Checked with the automated tests (the clean-up with real programs on Linux, not inside gVisor) and the web app's demo mode. Nothing has run against real GitHub, Composio or a container.
 - A memory saved on one engine and used on the other.
@@ -573,7 +576,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 
 - **Polar, before real money** (16 October). Details and steps in "Also waiting on you":
   - **Refund policy** (the terms page has a blank for it; Polar's review looks for one): (a) no refunds except where the law requires, cancel any time; (b) a refund on request within 14 days of a payment, with the credits it added taken back (credits already spent stay as a debt); (c) as (b), but only while most of that payment's credits are unused. Recommended: (b), the simplest to explain, and Polar may refund within 60 days anyway to stop a chargeback.
-  - **The struck-out "regular" prices** on the website ($30 and $50 beside $12 and $30) were never charged. Payment reviewers and consumer rules treat that as a possible misleading discount. (a) Remove them, (b) say "launch price" without a struck-out number, (c) keep them. Recommended: (a) or (b).
+  - **The struck-out "regular" prices:** decided on 16 October, option (b). Pro is $19 a month and Max $30 a month as launch prices, with the regular price ($30, $50) written beside them as plain words and no struck-out number, on the website and in the web app. The prices will be looked at again later.
   - **Moving between Pro and Max.** Polar's account has "Allow multiple subscriptions" off and "Enable subscription plan changes" on. Our app says: cancel the plan, then buy the other one, which means two subscriptions for a few days, and Polar may refuse that checkout. (a) Switch "Allow multiple subscriptions" on (our backend already allows only one plan that renews) and plan changes off, so the app's way is the only way; (b) keep plan changes on in Polar's billing page and send people there to switch (a change applies at once, the new plan's credits come with the next month); (c) leave both as they are and test. Recommended: (a).
 
 ### Smaller open questions
@@ -608,14 +611,14 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - How Free credits should run out sooner (section 7).
 - New keys in place of the four that were pasted into chat.
 - For later: a model key with balance, the legal pages.
-- **Polar, for real money** (prepared on 16 October; Polar's own steps are yours, because they make keys or need your identity). In Polar's dashboard (`polar.sh/dashboard/text-crew`), not the sandbox:
-  1. **Products:** Pro at $12 a month and Max at $30 a month (monthly subscriptions, no trial), and the top-up at $10 once. The existing "Text crew Pro Plan" is $6 a month; change its price to $12 (or archive it and make a new one). The 50% waitlist month is a discount, not a price.
-  2. **Discount:** 50% off, duration "once", no code, on Pro and Max only.
-  3. **Webhook:** Settings → Webhooks → Add Endpoint: `https://api.textcrew.in/webhooks/polar`, format Raw, API version 2026-10, these 11 events: `order.paid`, `subscription.active`, `subscription.updated`, `subscription.canceled`, `subscription.uncanceled`, `subscription.past_due`, `subscription.revoked`, `subscription.paused`, `subscription.resumed`, `refund.created`, `refund.updated`. Let Polar generate the secret.
-  4. **Access token:** Settings → Developers → Create token, with the scopes in `backend-report.md` section 28, "Moving from Polar's sandbox to real money".
-  5. Put the token, the secret, the three product ids, the discount id and `POLAR_SERVER=production` in the laptop's `.env.deploy`. Claude's script copies them to the server without printing them, restarts the api and the worker, and runs the check. Only once the backend branch is deployed.
-  6. **Account review** (Finance → Account): "Set up checkout" turns green once the token and the webhook exist. Then replace "Describe what you sell" with the text Claude prepared (the old one does not name Textcrew or its prices), and press Submit for review. Identity, payout account, website and support email are already done there. Polar may ask for a 100% discount code by email so a reviewer can go from Free to paid; make one with a limit of one use.
-  7. Before submitting, publish the terms page with your blanks filled (legal name, postal address, refund policy, governing law and courts), check that `support@textcrew.in` receives mail, and merge the landing page's `feat/polar-review` (contact email, payments on Privacy, tax and cancelling on Pricing).
+- **Polar, for real money** (prepared on 16 October; most of Polar's dashboard was done by Claude on 16 October with your go-ahead). In Polar's dashboard (`polar.sh/dashboard/text-crew`), not the sandbox:
+  1. **Products: done.** "Textcrew Pro" at $19 a month (the old "Text crew Pro Plan" renamed and repriced; its $6 price is archived), "Textcrew Max" at $30 a month (both monthly, no trial), and "Textcrew top-up: 800 credits" at $10 once. All three are "private": they are bought only through our app's checkout, not picked in Polar's billing page. Each has a short description naming Textcrew, and the plans' descriptions say "Launch price $19/month (regular $30)" in words. The ids are in `.env.deploy`.
+  2. **Discount: done.** "Waitlist: 50% off your first month": 50%, once, no code, on Pro and Max only, one use per customer. Its id is in `.env.deploy`.
+  3. **Webhook: done.** "Textcrew API": `https://api.textcrew.in/webhooks/polar`, format Raw, API version 2026-10, the 11 events: `order.paid`, `subscription.active`, `subscription.updated`, `subscription.canceled`, `subscription.uncanceled`, `subscription.past_due`, `subscription.revoked`, `subscription.paused`, `subscription.resumed`, `refund.created`, `refund.updated`. Its secret went straight into `.env.deploy` (never shown). Until the server has that secret, any event Polar sends is refused; none is expected before then.
+  4. **Access token: yours.** Polar asks you to sign in again before it makes a token, so Claude stopped there. Settings → (scroll to) Developers → Create token. Name `textcrew-api-production`, expiration 365 days (put a reminder for October 2027), and these 9 scopes: `checkouts:write`, `customer_sessions:write`, `subscriptions:write`, `orders:read`, `orders:write`, `customers:read`, `products:read`, `discounts:read`, `webhooks:read`. Press Create Token, press Confirm on "Please sign in again" and sign in, then copy the token (Polar shows it once) and add one line to the laptop's `beckend/.env.deploy`: `POLAR_ACCESS_TOKEN=` followed by the token. Or, after signing in again, ask Claude to make it: the token then goes from Polar's copy button straight into the file.
+  5. `.env.deploy` already has `POLAR_SERVER=production`, the three product ids, the discount id and the webhook secret. Once the token is there and the backend branch is deployed, Claude's script copies the seven lines to the server without printing them, restarts the api and the worker, and runs the check.
+  6. **Account review** (Finance → Account): "Describe what you sell" now has the new text with the launch prices; "What are you selling" is Software / SaaS, and the pricing model is Subscription and One-time purchase. Identity, payout account, website and support email were already done. "Set up checkout" turns green once the token exists. Then press Submit for review. Polar may ask for a 100% discount code by email so a reviewer can go from Free to paid; make one with a limit of one use.
+  7. Before submitting: the website must show the launch prices (landing page branch `feat/launch-prices`, which includes `feat/polar-review`), and `support@textcrew.in` must receive mail. The terms page stays unpublished until you fill its blanks (legal name, postal address, refund policy, governing law and courts).
   8. Test with a 100% discount code, not a real card: Polar treats real-card test purchases as card testing.
 
 ---

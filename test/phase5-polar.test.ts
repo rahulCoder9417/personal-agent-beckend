@@ -149,7 +149,7 @@ describe('Polar events (HLD 7.6)', () => {
     await deliver(subscriptionEvent('subscription.active', sub));
     await deliver(
       orderPaid(
-        { userId: u.id, orderId: randomUUID(), product: PRODUCTS.pro, netAmount: 1200 },
+        { userId: u.id, orderId: randomUUID(), product: PRODUCTS.pro, netAmount: 1900 },
         sub,
       ),
     );
@@ -161,7 +161,7 @@ describe('Polar events (HLD 7.6)', () => {
     const sub: SubOpts = { userId: u.id, subId: randomUUID(), ...periodFromNow() };
     await deliver(
       orderPaid(
-        { userId: u.id, orderId: randomUUID(), product: PRODUCTS.pro, netAmount: 1200 },
+        { userId: u.id, orderId: randomUUID(), product: PRODUCTS.pro, netAmount: 1900 },
         sub,
       ),
     );
@@ -186,7 +186,7 @@ describe('Polar events (HLD 7.6)', () => {
         userId: u.id,
         orderId: randomUUID(),
         product: PRODUCTS.pro,
-        netAmount: 1200,
+        netAmount: 1900,
         billingReason: 'subscription_cycle',
       },
       next,
@@ -304,17 +304,17 @@ describe('Polar events (HLD 7.6)', () => {
     const { u, sub } = await subscribed();
     const orderId = randomUUID();
     await deliver(
-      orderPaid({ userId: u.id, orderId, product: PRODUCTS.pro, netAmount: 1200 }, sub),
+      orderPaid({ userId: u.id, orderId, product: PRODUCTS.pro, netAmount: 1900 }, sub),
     );
     const [payment] = await db().select().from(payments).where(eq(payments.polarOrderId, orderId));
     expect(payment).toMatchObject({
       kind: 'plan',
       credits: 1500,
-      amountCents: 1200,
+      amountCents: 1900,
       polarSubscriptionId: sub.subId,
     });
     expect(await getBalance(u.id)).toBe(1500); // the order itself grants nothing extra
-    await deliver(refundEvent({ orderId, amount: 600 }));
+    await deliver(refundEvent({ orderId, amount: 950 }));
     expect(await getBalance(u.id)).toBe(750);
   });
 

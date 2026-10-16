@@ -256,8 +256,9 @@ async function once(key: string): Promise<boolean> {
  * what it counts. Once per turn, so a job that runs again tells nothing twice.
  * - A run that stopped (a false "only if", a no, no answer): one line in the Automations chat with
  *   the trail, and no copy to Telegram (decision 2). Not a failure.
- * - Otherwise the trail line ("Steps: 1 ✓ 2 ✓ 3 ✓ 4 waiting for your OK") after Tex's answer; the
- *   turn's answer is copied to the chat app with the trail, as a run's answer is.
+ * - Otherwise the trail line ("Steps: 1 ✓ 2 ✓ 3 ✓ 4 waiting for your OK") after Tex's answer, with
+ *   why above it when the run failed; the turn's answer is copied to the chat app with them, as a
+ *   run's answer is.
  * - A failed run counts toward "paused after 3 failures in a row"; a test run counts nothing.
  */
 async function reportRun(
@@ -288,10 +289,12 @@ async function reportRun(
     if (!run.test && opts.first) await countRun(a, true, chat);
     return;
   }
-  await say(trail);
+  // A failed run says why above its trail: Tex may have ended without saying (Tex ending early).
+  const line = run.state === 'failed' && run.stopReason ? `${run.stopReason}\n${trail}` : trail;
+  await say(line);
   // Tex's answer of this turn (the first, or the one after a yes) is copied, as a run's answer is.
   if (opts.first || opts.outcome)
-    await copyToChat(a, await turnReply(a.userId, turnId), { test: run.test, suffix: trail });
+    await copyToChat(a, await turnReply(a.userId, turnId), { test: run.test, suffix: line });
   if (run.test) return;
   if (run.state === 'failed') await countRun(a, false, chat);
   else if (opts.first) await countRun(a, true, chat);

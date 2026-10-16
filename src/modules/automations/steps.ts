@@ -286,6 +286,9 @@ export function decideCondition(c: StepCondition, prev: RunStep | undefined): bo
       // Set when the step was done: from the app's answer, or from Tex's finish_step.
       return prev?.found === true;
     case 'mentions': {
+      // A step that found nothing mentions nothing: "No urgent emails found" holds the word
+      // "urgent", but there is nothing urgent to act on (seen in the 4d run on 16 October).
+      if (prev?.found === false) return false;
       const text = (prev?.result ?? '').toLowerCase();
       return c.words.some((w) => text.includes(w.toLowerCase()));
     }

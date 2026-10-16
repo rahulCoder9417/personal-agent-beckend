@@ -1613,7 +1613,7 @@ Each step has a short id, so moving a step never mixes up results. With steps, t
 3. Tex gets the purpose, the numbered steps and the rules: one at a time, in order, nothing extra.
 4. **An app step:** Tex calls `run_app_action`. It must be the current step's action, or an action of the same app that only reads (to look something up first). The fixed inputs are put in when Tex leaves them out; a changed one is refused. "Ask me first" needs an approval asked for exactly this step of this run.
 5. **A Tex step:** Tex may read the step's apps, then calls `finish_step` with its result in words. A Tex step that tries to change something in an app is refused: changes are app steps, so the user sees each one.
-6. Each result is cut to 4,000 characters and saved, then the pointer moves on. Before the next step its "only if" is checked: "found" means the result was not empty (no emails, an empty list); "mentions" looks for the words, ignoring capitals; "Tex decides" asks Tex, who answers yes or no with one line why in `finish_step` (the trail keeps the line; the canvas marks it as Tex's judgement).
+6. Each result is cut to 4,000 characters and saved, then the pointer moves on. Before the next step its "only if" is checked: "found" means the result was not empty (no emails, an empty list); "mentions" looks for the words, ignoring capitals, and is false when the step before found nothing (since 16 October: "No urgent emails found" holds the word "urgent", but there is nothing urgent; the stop then says "and step 2 found nothing"); "Tex decides" asks Tex, who answers yes or no with one line why in `finish_step` (the trail keeps the line; the canvas marks it as Tex's judgement).
 7. Every tool answer ends with what comes next ("next"): "Now step 3: …", or "The run ends here".
 8. At the end the platform adds one line under Tex's answer: "Steps: 1 ✓ 2 ✓ 3 ✓ 4 waiting for your OK". The answer and that line are copied to Telegram as a run's answer is.
 
@@ -1623,10 +1623,10 @@ Each step has a short id, so moving a step never mixes up results. With steps, t
 
 | Case | What happens |
 |---|---|
-| "Only if" is false | The run stops there, as a success. One line in the Automations chat ("Nothing to do: step 2 runs only if step 1 found something, and it didn't."), no copy to Telegram |
+| "Only if" is false | The run stops there, as a success. One line in the Automations chat ("Nothing to do: step 2 runs only if step 1 found something, and it didn't."), no copy to Telegram. That line is the only message: a `send_message` from Tex after the stop is refused ("Nothing was sent. The run ends here …"), so the user is not told twice |
 | The app refuses the step's action | One more try is allowed; a second failure fails the step and the run |
 | A step fails | The run stops; the steps after it are skipped. It counts toward "paused after 3 failures in a row" |
-| Tex ends the turn early | "Stopped at step 2: Tex ended before finishing it." A failure |
+| Tex ends the turn early | "Stopped at step 2: Tex ended before finishing it." A failure. The platform's line under Tex's answer says so above the trail, since Tex's own answer may not |
 | Too many calls | At most 10 app calls in a step and 30 in a run; past that the run fails |
 | Out of credits | A changing action is refused, its step fails and the run stops |
 | The job runs again | Steps done are not done again. An approved send runs once (an approval is single use) |

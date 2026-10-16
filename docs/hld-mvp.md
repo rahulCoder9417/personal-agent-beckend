@@ -192,6 +192,8 @@ Example: the user texts "email Priya the notes".
 
 An approval works once, and only for the exact action and details the user saw. If the app still refuses it, the agent asks again with corrected details; the earlier request is then marked "replaced", never "denied", because the user did not say no.
 
+**The same question on Telegram too** (16 October). When the user has linked Telegram, a question asked anywhere else (web chat, the Automations chat during an automation's run) is also sent to their Telegram chat, with the same Approve and Deny buttons and a last line saying where it was asked. The first answer wins: deciding is one database step, so a second tap finds it answered. Then every copy on Telegram loses its buttons and says how it ended, for example "✅ Approved on web" or "❌ Denied on Telegram". The question asked in a Telegram chat loses its buttons after a tap too. The agent always goes on in the chat it asked in. On Telegram only a button answers a copy; a plain "yes" there still answers only a question asked in that chat.
+
 ### 5.4 A reminder or an automation
 
 There are three kinds:
@@ -205,7 +207,7 @@ There are three kinds:
 When one fires, it goes down the same path as a normal message, with the saved instruction. So it wakes the container and costs credits like a message does.
 
 - **Where it answers: the Automations chat.** Every run of every automation answers in one conversation of its own, the user's Automations chat, wherever the automation was made. That covers timers, app events, pull-request review verdicts, and the notices (out of credits, paused after three failures). It is never made the active conversation, so it never mixes into the user's own chats. The web app pins it at the top of the chat list, with a mark when a new run arrived. The user can write there to follow up: the agent keeps a context of its own for it, with the runs in mind. The user cannot delete it: it goes only with the account.
-- **A copy on Telegram.** An automation made in a Telegram chat also sends a copy of each answer there, as plain text: the automation's name on the first line, and on the last line that the follow-up happens in the Automations chat. The copy is shown in the Telegram conversation but is not part of its context. Each answer is copied once, also when a job runs again.
+- **A copy on Telegram.** An automation made in a Telegram chat also sends a copy of each answer there, as plain text: the automation's name on the first line, and on the last line that the follow-up happens in the Automations chat. The copy is shown in the Telegram conversation but is not part of its context. Each answer is copied once, also when a job runs again. An automation made in the web app sends the same copy to the user's linked Telegram chat only when the user switched on "Automation runs finish" (below, "Telling the user on Telegram"); it is off at first.
 - **A late run.** A run that was due while the server was off runs when it is back, never skipped. If it starts more than 10 minutes late, the agent says so and says when it was due.
 - **The user's time zone.** Every account starts on UTC. The web app sets the browser's time zone once, while nobody has set one, and never replaces one the user chose.
 
@@ -254,7 +256,7 @@ The rules:
 3. Composio tells our server.
 4. The worker wakes the user's container and tells Tex to have Patch review that pull request.
 5. Patch reads the changes and posts one review with its comments on the pull request.
-6. The user gets a short verdict in the Automations chat, with a copy on Telegram when it is linked.
+6. The user gets a short verdict in the Automations chat, with a copy on Telegram when it is linked and the user's "Pull-request reviews finish" switch is on (it is at first).
 
 Each commit is reviewed once. Patch never merges and never approves. Turning review on is the user's standing permission for these comments, on that repo only.
 
@@ -265,6 +267,12 @@ Each commit is reviewed once. Patch never merges and never approves. Turning rev
 3. Tex hands it to Patch or Byte. They clone into a folder of the job's own, and may start what the job needs there (an install, the app, the tests). A large review may be split into up to three Patch reviews at the same time.
 4. The report comes back in a fixed shape: the verdict, the findings or changes with file and line, the tests run with their results, and what was not checked. It goes to the chat it was asked in, and the platform keeps it on the job. If the brief asked for it, it is also posted on the pull request as one review comment (Patch), put in the pull request Byte opens, or opened as an issue.
 5. After the turn, the container itself stops every program of the job and deletes its folder. Then the container goes to sleep at once, unless something else is running there.
+
+When the job was asked in the web app and Telegram is linked, a short notice goes to Telegram as well, in addition to the report in the chat: "✅ Byte finished: Fix the login redirect in acme/web. Done. Pull request: … Tests passed. Report: <link to the conversation>", or "❌ Patch couldn't finish: … <why>". A job asked on Telegram has its report there already, so it gets no extra notice.
+
+**Telling the user on Telegram** (16 October). Settings → General has "Tell me on Telegram when…", shown once Telegram is linked, with three switches: crew jobs finish (on at first), pull-request reviews finish (on), and automation runs finish (off; it is about automations made in the web app, since those made on Telegram always answer there). A notice on Telegram is always in addition to the chat the work was asked in, never instead of it. Nothing is sent when Telegram is not linked, is switched off, or blocked the bot. Each notice is sent once, also when a job runs again.
+
+**Quiet hours.** Also in that group: quiet hours, 22:00 to 08:00 in the user's time zone at first, which the user can change or switch off. During quiet hours every Telegram message still arrives at once, but silently: the phone makes no sound. Nothing is held back.
 
 From chat, posting the review on the pull request needs an ordinary approval first. (A brief sent by an app through the API carries its own tick for that, which is the user's yes for that one review, on that pull request, for that job only. No app sends one now.)
 
@@ -478,6 +486,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - The Automations chat: every run, verdict and automation notice answering there, pinned in the web app's chat list with a mark for a new run, and a copy of each answer on Telegram for an automation made there. Built on 13 October, after your decision for a separate automation chat. Checked with the automated tests, and the web app's part in its demo mode in a browser. No real run has gone through it yet. The conversations that automations made for themselves earlier that day stay as ordinary chats.
 - Automations on a canvas, phase 1 (16 October, on the branch `feat/automations-canvas` in the backend and the web app, not on `main` yet): each automation's own page draws it as five boxes (section 5.4), read-only, with a list on phones, and each card on the Automations page has the same steps as a small strip. The API now says where the copy of each answer goes and the trigger's settings, and reads one automation. Checked with the automated tests and the web app's demo mode. No database change.
 - Automations from the chat as drafts, phase 2 (16 October, on the same branch, and in the vm-manager for the Bridge's instructions): Tex proposes anything more than a plain reminder with `propose_automation`; the platform checks it and saves a draft that never runs; web chat shows it as a card with a small diagram and Save, Telegram as an outline with the link and a Save button; the link opens it on the canvas with Save, Save paused and Discard. A draft lasts 7 days, at most 20 are open, and asking again replaces the old one. `create_automation` is no longer Tex's, and `schedule_reminder` is refused during an automation's run. Checked with the automated tests, the web app's demo mode, and end to end on the laptop with the real backend and the web app (stand-ins only for Tex, Composio and Telegram); not yet tried on the server with a real Tex and Telegram. It needs the database update (migration 0026) and the new agent image when it goes to the server.
+- Notices and approvals on Telegram (16 October, on the branch `feat/notify-telegram` in the backend and the web app, not on `main` yet): "Tell me on Telegram when…" in Settings → General with three switches and quiet hours, a short notice when a crew job from the web app finishes, the copy of a web-made automation's answer when switched on, every approval asked on Telegram too with the buttons taken away once answered anywhere, and silent messages at night (sections 5.3 and 5.6). Checked with the automated tests and the web app's build; no real Telegram message has gone through it yet. It needs the database update (migration 0027) when it goes to the server.
 
 ### Not finished
 

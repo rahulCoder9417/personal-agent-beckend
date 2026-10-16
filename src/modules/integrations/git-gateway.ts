@@ -1,8 +1,12 @@
 // Git gateway (HLD section 5.1): real git for the user's GitHub without a GitHub token in the
 // container. The api forwards the three git smart-HTTP requests to github.com with the token of
 // the user's active Composio GitHub connection. The token is never logged or stored.
+import { and, eq } from 'drizzle-orm';
+import { db } from '../../shared/db/client.ts';
 import { activeConnections } from './apps.ts';
 import { composio } from './composio.ts';
+import { isFastForward, packCommits, PackError } from './git-pack.ts';
+import { gitCreatedBranches } from './tables.ts';
 
 export type GitService = 'git-upload-pack' | 'git-receive-pack';
 
@@ -42,6 +46,41 @@ const REQUEST_HEADERS = [
   'git-protocol',
   'user-agent',
 ];
+
+/** The pack of a push to an existing branch is read whole to check it; a bigger one is asked about. */
+const MAX_CHECKED_PACK_BYTES = 64 * 1024 * 1024;
+const ZERO_ID = /^0+$/;
+
+/** One branch a push updates that already exists, as the approver is asked about it. */
+export interface PushUpdateCheck {
+  owner: string;
+  repo: string;
+  branch: string;
+  /** Not a fast-forward, or it could not be told. */
+  force: boolean;
+  /** The agent made this branch through the gateway. */
+  createdByAgent: boolean;
+}
+
+export type PushApproval =
+  { ok: true; release: () => Promise<void> } | { ok: false; message: string };
+
+/**
+ * Decides on the branches a push updates that already exist (wiring.ts: the orchestrator's
+ * approvals). Until it is set, every such push is refused.
+ */
+let approvePushes: (
+  userId: string,
+  updates: PushUpdateCheck[],
+) => Promise<PushApproval> = async () => ({
+  ok: false,
+  message:
+    "A push to a branch that already exists needs your user's OK, and it can't be asked now.",
+});
+
+export function setPushApprover(fn: typeof approvePushes): void {
+  approvePushes = fn;
+}
 
 let upstream: typeof fetch = (input, init) => fetch(input, init);
 const tokens = new Map<string, { token: string; expires: number }>();
@@ -170,9 +209,12 @@ function concat(chunks: Uint8Array[]): Uint8Array {
  * Reads the command list at the start of a git-receive-pack request (pkt-lines up to the first
  * flush) and returns it with a stream that replays the whole body for forwarding.
  */
-export async function readPushCommands(
-  body: ReadableStream<Uint8Array> | null,
-): Promise<{ commands: PushCommand[]; replay: ReadableStream<Uint8Array> }> {
+export async function readPushCommands(body: ReadableStream<Uint8Array> | null): Promise<{
+  commands: PushCommand[];
+  replay: ReadableStream<Uint8Array>;
+  /** Where the bytes after the command list start, in the replayed body. */
+  bodyStart: number;
+}> {
   if (!body) throw new GitGatewayError(400, 'Empty push request');
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
@@ -227,7 +269,7 @@ export async function readPushCommands(
       return reader.cancel(reason);
     },
   });
-  return { commands, replay };
+  return { commands, replay, bodyStart: at + 4 };
 }
 
 /** Push rules: branches only, never the default branch, no deletes (HLD section 5.1). */
@@ -248,6 +290,103 @@ export function checkPush(commands: PushCommand[], defaultBranchName: string): v
     }
   }
 }
+
+/** The pack in what follows a push's command list: push options (pkt-lines and a flush) may come first. */
+export function packOf(rest: Buffer): Buffer {
+  if (rest.length === 0 || rest.subarray(0, 4).toString('latin1') === 'PACK') return rest;
+  let at = 0;
+  for (;;) {
+    if (rest.length - at < 4) throw new PackError('no pack');
+    const len = Number.parseInt(rest.subarray(at, at + 4).toString('latin1'), 16);
+    if (Number.isNaN(len) || (len > 0 && len < 4)) throw new PackError('no pack');
+    if (len === 0) return rest.subarray(at + 4);
+    at += len;
+  }
+}
+
+async function readAll(stream: ReadableStream<Uint8Array>, max: number): Promise<Buffer | null> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > max) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
+
+/** GitHub's compare API: is `ancestor` an ancestor of (or the same as) `commit`? */
+async function isAncestorOnGitHub(
+  repo: GitRepo,
+  token: string,
+  ancestor: string,
+  commit: string,
+): Promise<boolean> {
+  const res = await upstream(
+    `${GITHUB_API_URL}/repos/${repo.owner}/${repo.repo}/compare/${ancestor}...${commit}`,
+    {
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: 'application/vnd.github+json',
+        'user-agent': 'personal-agent-git-gateway',
+      },
+      signal: AbortSignal.timeout(30_000),
+    },
+  );
+  if (res.status === 404) {
+    await res.body?.cancel();
+    return false;
+  }
+  if (!res.ok) {
+    await res.body?.cancel();
+    throw new PackError(`GitHub answered ${res.status} to the compare`);
+  }
+  const body = (await res.json()) as { status?: unknown };
+  return body.status === 'ahead' || body.status === 'identical';
+}
+
+const repoKey = (repo: GitRepo) => ({
+  owner: repo.owner.toLowerCase(),
+  repo: repo.repo.toLowerCase(),
+});
+
+/** The branches of this repository the agent made through the gateway, of those named. */
+async function createdByAgent(userId: string, repo: GitRepo): Promise<Set<string>> {
+  const key = repoKey(repo);
+  const rows = await db()
+    .select({ branch: gitCreatedBranches.branch })
+    .from(gitCreatedBranches)
+    .where(
+      and(
+        eq(gitCreatedBranches.userId, userId),
+        eq(gitCreatedBranches.owner, key.owner),
+        eq(gitCreatedBranches.repo, key.repo),
+      ),
+    );
+  return new Set(rows.map((r) => r.branch));
+}
+
+async function rememberCreated(userId: string, repo: GitRepo, branches: string[]): Promise<void> {
+  if (!branches.length) return;
+  const key = repoKey(repo);
+  await db()
+    .insert(gitCreatedBranches)
+    .values(branches.map((branch) => ({ userId, ...key, branch })))
+    .onConflictDoNothing();
+}
+
+/** Account deletion: the branches the user's agent made. */
+export async function deleteUserGitBranches(userId: string): Promise<void> {
+  await db().delete(gitCreatedBranches).where(eq(gitCreatedBranches.userId, userId));
+}
+
+const branchOf = (ref: string) => ref.slice('refs/heads/'.length);
 
 function forwardHeaders(from: Headers, token: string): Headers {
   const out = new Headers({ authorization: basicAuth(token) });
@@ -316,25 +455,81 @@ export async function gitRpc(input: {
   body: ReadableStream<Uint8Array> | null;
 }): Promise<{ response: Response; pushed: PushCommand[] }> {
   const token = await githubTokenFor(input.userId);
-  let body = input.body;
+  let body: ReadableStream<Uint8Array> | Buffer | null = input.body;
   let pushed: PushCommand[] = [];
+  let release: () => Promise<void> = async () => {};
   if (input.service === 'git-receive-pack') {
     if (input.headers.get('content-encoding')) {
       throw new GitGatewayError(400, 'This kind of push is not supported');
     }
-    const { commands, replay } = await readPushCommands(body);
+    const { commands, replay, bodyStart } = await readPushCommands(body);
     if (commands.length) checkPush(commands, await defaultBranch(input.repo, token));
     pushed = commands;
     body = replay;
+    const updates = commands.filter((c) => !ZERO_ID.test(c.oldId));
+    if (updates.length) {
+      // A branch that already exists: is this a fast-forward, and may it go through?
+      const whole = await readAll(replay, MAX_CHECKED_PACK_BYTES);
+      let commits: Map<string, string[]> | null = null;
+      try {
+        commits = whole ? packCommits(packOf(whole.subarray(bodyStart))) : null;
+      } catch (err) {
+        if (!(err instanceof PackError)) throw err;
+      }
+      const made = await createdByAgent(input.userId, input.repo);
+      const checks: PushUpdateCheck[] = [];
+      for (const c of updates) {
+        let ff = false;
+        if (commits) {
+          try {
+            ff = await isFastForward(c.oldId, c.newId, commits, (a, b) =>
+              isAncestorOnGitHub(input.repo, token, a, b),
+            );
+          } catch (err) {
+            if (!(err instanceof PackError)) throw err;
+          }
+        }
+        const branch = branchOf(c.ref);
+        checks.push({
+          owner: input.repo.owner,
+          repo: input.repo.repo,
+          branch,
+          force: !ff,
+          createdByAgent: made.has(branch),
+        });
+      }
+      const decision = await approvePushes(input.userId, checks);
+      if (!decision.ok) throw new GitGatewayError(403, decision.message);
+      release = decision.release;
+      if (!whole) {
+        // Too big to check, but approved as a force push: it goes through as it is.
+        await release();
+        throw new GitGatewayError(
+          413,
+          'This push is too big for the gateway to check. Push fewer or smaller commits at a time.',
+        );
+      }
+      body = whole;
+    }
   }
   const { owner, repo } = input.repo;
-  const res = await upstream(`${GITHUB_URL}/${owner}/${repo}.git/${input.service}`, {
-    method: 'POST',
-    headers: forwardHeaders(input.headers, token),
-    body,
-    duplex: 'half',
-    redirect: 'manual',
-    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-  } as RequestInit);
-  return { response: await relay(input.userId, input.repo, res), pushed };
+  let response: Response;
+  try {
+    const res = await upstream(`${GITHUB_URL}/${owner}/${repo}.git/${input.service}`, {
+      method: 'POST',
+      headers: forwardHeaders(input.headers, token),
+      body,
+      ...(body instanceof Buffer ? {} : { duplex: 'half' }),
+      redirect: 'manual',
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    } as RequestInit);
+    response = await relay(input.userId, input.repo, res);
+  } catch (err) {
+    // GitHub did not take the push: an approval it used can be used again.
+    await release();
+    throw err;
+  }
+  const created = pushed.filter((c) => ZERO_ID.test(c.oldId)).map((c) => branchOf(c.ref));
+  await rememberCreated(input.userId, input.repo, created);
+  return { response, pushed };
 }

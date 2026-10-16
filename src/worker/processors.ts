@@ -14,7 +14,7 @@ import {
   handleComposioTrigger,
   handleRunAutomation,
 } from '../modules/automations/jobs.ts';
-import { handleCrewJob } from '../modules/automations/crew-jobs.ts';
+import { handleCrewJob, handleCrewRerunAnswer } from '../modules/automations/crew-jobs.ts';
 import { expireDrafts } from '../modules/automations/drafts.ts';
 import { handleSendMessage, handleSendRaw } from '../modules/channels/outbound.ts';
 import { handleSettleApproval } from '../modules/channels/notify.ts';
@@ -39,7 +39,11 @@ export function processors(): Processors {
     inbound: {
       'process-message': handleProcessMessage,
       'web-message': handleWebMessage,
-      'process-approval': handleProcessApproval,
+      // A "run the crew job again" answer starts the job; any other wakes the agent with it.
+      'process-approval': async (job) => {
+        const rerun = await handleCrewRerunAnswer(job);
+        return rerun === undefined ? handleProcessApproval(job) : rerun;
+      },
       'automation-turn': handleAutomationTurn,
       'composio-trigger': handleComposioTrigger,
       'crew-job': handleCrewJob,

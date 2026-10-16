@@ -154,6 +154,15 @@ export const prReviews = pgTable(
  * agent (docs/backend-report.md, "The crew"). The row is the job's state and its claim: a job
  * moves queued → running → done | failed once, so a re-run of its queue job never starts it twice.
  */
+/**
+ * One thing a crew job's run was refused, as the user is shown it. `command`: a command or a file
+ * change (`tool` is Claude Code's tool, `target` the command or the file). `git_push`: a push to a
+ * branch that already existed, `force` when it rewrites the branch's history.
+ */
+export type CrewJobItem =
+  | { kind: 'command'; tool: string; target: string; why: string }
+  | { kind: 'git_push'; owner: string; repo: string; branch: string; force: boolean };
+
 export const crewJobs = pgTable(
   'crew_jobs',
   {
@@ -200,6 +209,16 @@ export const crewJobs = pgTable(
      * Set in the same step as the permission check, so it covers one review only.
      */
     postedAt: timestamp({ withTimezone: true }),
+    /**
+     * What the job's run was refused because the brief does not cover it (a command that needs the
+     * user's OK, a push to a branch that already existed): listed for the user after the run, with
+     * an Approve button that runs the job again with exactly these allowed.
+     */
+    blocked: jsonb().$type<CrewJobItem[]>().notNull().default([]),
+    /** A run again of an earlier job: the items the user approved for it, each usable once. */
+    approved: jsonb().$type<CrewJobItem[]>().notNull().default([]),
+    /** The job this one runs again (after the user approved what the earlier run was refused). */
+    rerunOf: text(),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
     startedAt: timestamp({ withTimezone: true }),
     finishedAt: timestamp({ withTimezone: true }),

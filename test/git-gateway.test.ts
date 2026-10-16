@@ -225,12 +225,19 @@ describe('git gateway', () => {
     expect(seen.some((s) => s.url.endsWith('/git-receive-pack'))).toBe(false);
     expect(await auditFor(user.id)).toHaveLength(0);
 
-    // `main` is an ordinary branch in this repo.
+    // `main` is an ordinary branch in this repo: a new one goes through. (A push to a branch
+    // that already exists needs the user's OK: test/agent-approvals.test.ts.)
     const ok = await git('acme/app/git-receive-pack', token, {
       method: 'POST',
-      body: pushBody([[A, B, 'refs/heads/main']]),
+      body: pushBody([[ZERO, B, 'refs/heads/main']]),
     });
     expect(ok.status).toBe(200);
+    const existing = await git('acme/app/git-receive-pack', token, {
+      method: 'POST',
+      body: pushBody([[A, B, 'refs/heads/feature']]),
+    });
+    expect(existing.status).toBe(403);
+    expect(await existing.text()).toContain("needs your user's OK");
   });
 
   it('refuses a push when the default branch can’t be checked', async () => {

@@ -55,6 +55,7 @@ describe('Caddy: /mcp and /git are closed to the internet', () => {
       '/git/:owner/:repo/info/refs',
       '/mcp',
       '/mcp/files/:id',
+      '/mcp/gate',
     ]);
     for (const p of internal) expect(blocked(p), p).toBe(true);
     const open = paths.filter((p) => !internal.includes(p));
@@ -66,6 +67,7 @@ describe('Caddy: /mcp and /git are closed to the internet', () => {
       '/MCP',
       '/mcp/',
       '/mcp/files/att_1',
+      '/mcp/gate',
       '/git',
       '/git/acme/repo/info/refs',
     ])

@@ -65,3 +65,21 @@ export const composioTriggers = pgTable(
   },
   (t) => [index().on(t.userId)],
 );
+
+/**
+ * Branches the agent made on GitHub through the git gateway: the push that created the branch went
+ * through it. A later push to such a branch that only adds commits needs no approval; a push to any
+ * other branch that already existed, and a force push, need the user's yes (docs/backend-report.md,
+ * "The git gateway"). Owner and repo are stored in lower case.
+ */
+export const gitCreatedBranches = pgTable(
+  'git_created_branches',
+  {
+    userId: text().notNull(),
+    owner: text().notNull(),
+    repo: text().notNull(),
+    branch: text().notNull(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex().on(t.userId, t.owner, t.repo, t.branch)],
+);

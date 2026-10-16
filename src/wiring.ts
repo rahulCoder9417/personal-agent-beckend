@@ -8,7 +8,12 @@ import {
   resumeAfterCredits,
   setAutomationLimit,
 } from './modules/automations/automations.ts';
-import { deleteUserCrewJobs } from './modules/automations/crew-jobs.ts';
+import {
+  crewBranchName,
+  crewJobInProgress,
+  deleteUserCrewJobs,
+  recordCrewJobBlocked,
+} from './modules/automations/crew-jobs.ts';
 import { handleDraftButton } from './modules/automations/drafts.ts';
 import {
   chargeAppAction,
@@ -36,6 +41,8 @@ import { wireChannels } from './modules/channels/register.ts';
 import { publish } from './modules/channels/stream.ts';
 import { parseSessionKey, sessionKeyFor } from './modules/channels/types.ts';
 import { activeConnections, deleteUserConnections } from './modules/integrations/apps.ts';
+import { deleteUserGitBranches, setPushApprover } from './modules/integrations/git-gateway.ts';
+import { decidePushes, setGateCrewHooks } from './modules/orchestrator/gate.ts';
 import { deleteUserByokKeys } from './modules/integrations/byok.ts';
 import { setInboundPriority } from './modules/events/intake.ts';
 import { deleteUserMcpServers, sandboxMcpConfig } from './modules/integrations/mcp-servers.ts';
@@ -186,6 +193,24 @@ export function wireModules(): void {
     allowlist: async (userId) => (await sandboxMcpConfig(userId)).domains,
   });
 
+  // Approvals for the agent's own actions: the git gateway asks before a push to a branch that
+  // already existed; during a crew job's run the gate keeps what the brief does not cover.
+  setPushApprover(decidePushes);
+  setGateCrewHooks({
+    jobInProgress: async (userId) => {
+      const job = await crewJobInProgress(userId);
+      if (!job) return null;
+      return {
+        id: job.id,
+        member: job.member,
+        owner: job.owner,
+        repo: job.repo,
+        ownBranch: job.member === 'byte' ? crewBranchName(job) : null,
+      };
+    },
+    recordBlocked: recordCrewJobBlocked,
+  });
+
   setLifecycleHooks({
     // Sign-up grant (respecting the free-credit cap) + LiteLLM key, before the sandbox.
     onboard: async (userId) => {
@@ -197,6 +222,7 @@ export function wireModules(): void {
       await deleteUserMcpServers(userId);
       await deleteUserAutomations(userId);
       await deleteUserCrewJobs(userId);
+      await deleteUserGitBranches(userId);
       // Last: it throws when Composio could not remove an account, and the job tries again.
       await deleteUserConnections(userId);
     },

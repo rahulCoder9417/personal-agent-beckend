@@ -5,6 +5,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { db, type Tx } from '../../shared/db/client.ts';
 import { getBalance, ledgerKeyExists, lockUserCredits, spendInTx } from './credits.ts';
+import { maybeQueueAutoTopUp } from './auto-topup.ts';
 import { afterCreditsRemoved } from './enforce.ts';
 import { isChargeOfKind, itemCreditsFor, restoreItemChargesInTx } from './item-charges.ts';
 import { MICRO_USD_PER_CREDIT } from './plans.ts';
@@ -83,6 +84,7 @@ export async function chargePaidTool(
   const balance = await getBalance(userId);
   // The last credit went: close the AI budget and pause automations (HLD 7.5).
   if (charged > 0 && balance <= 0) await afterCreditsRemoved(userId);
+  if (charged > 0) await maybeQueueAutoTopUp(userId, balance);
   return { charged, balance };
 }
 

@@ -1,6 +1,6 @@
 // Composition root: connects modules through their exported hooks. Imported by api and worker.
 import { toBalance } from './api/billing-presenters.ts';
-import { markBlocked } from './modules/auth/links.ts';
+import { listLinks, markBlocked } from './modules/auth/links.ts';
 import { getActiveUserCached } from './modules/auth/users.ts';
 import {
   deleteUserAutomations,
@@ -17,6 +17,7 @@ import {
   getLiteLLMKey,
   hasCredits,
   offboardBilling,
+  onAutoTopUpTurnedOff,
   onBalanceDepleted,
   onboardBilling,
   onCreditsAdded,
@@ -33,7 +34,7 @@ import {
 import { queueOutbound, setBlockedHandler } from './modules/channels/outbound.ts';
 import { wireChannels } from './modules/channels/register.ts';
 import { publish } from './modules/channels/stream.ts';
-import { parseSessionKey } from './modules/channels/types.ts';
+import { parseSessionKey, sessionKeyFor } from './modules/channels/types.ts';
 import { activeConnections, deleteUserConnections } from './modules/integrations/apps.ts';
 import { deleteUserByokKeys } from './modules/integrations/byok.ts';
 import { setInboundPriority } from './modules/events/intake.ts';
@@ -53,6 +54,7 @@ import { setSandboxConfigProvider } from './modules/orchestrator/sandbox.ts';
 import { connectAiText, setTurnHooks } from './modules/orchestrator/turn.ts';
 import { setAppActionCharger } from './modules/platform-mcp/tools/apps.ts';
 import { setPaidToolCharger, setWebSearchPlanCheck } from './modules/platform-mcp/tools/web.ts';
+import { isChannelEnabled } from './shared/config.ts';
 
 let wired = false;
 
@@ -127,6 +129,24 @@ export function wireModules(): void {
     await publishCredits(userId);
   });
   setAutomationLimit((plan) => planLimits(plan).automations);
+
+  // Auto top-up switched itself off (declined twice, no card, refused): the user is told in web
+  // chat, and on each linked Telegram chat as a copy without the purchase link.
+  onAutoTopUpTurnedOff(async (userId, notice) => {
+    const web = isChannelEnabled('web')
+      ? await queueOutbound({ userId, sessionKey: sessionKeyFor('web'), text: notice.web })
+      : undefined;
+    if (!isChannelEnabled('telegram')) return;
+    for (const link of await listLinks(userId)) {
+      if (link.channel !== 'telegram' || link.blocked) continue;
+      await queueOutbound({
+        userId,
+        sessionKey: sessionKeyFor('telegram', link.externalId),
+        text: notice.chat,
+        ...(web ? { copyOf: web.id } : {}),
+      });
+    }
+  });
 
   // Scout's browser is part of the Max plan (HLD 11.3). When a plan changes, a system job tells
   // the vm-manager to switch it on or off.

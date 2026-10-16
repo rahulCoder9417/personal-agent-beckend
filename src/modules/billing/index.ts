@@ -7,6 +7,8 @@ export {
   onCreditsAdded,
   onPlanChanged,
   onTurnBilled,
+  onAutoTopUpTurnedOff,
+  type AutoTopUpNotice,
   type BalanceListener,
 } from './hooks.ts';
 export { getLiteLLMKey, ownKeyInUse } from './litellm.ts';

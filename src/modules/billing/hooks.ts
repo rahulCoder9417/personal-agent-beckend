@@ -40,6 +40,30 @@ export function onTurnBilled(fn: BalanceListener): () => void {
   return () => turnBilled.delete(fn);
 }
 
+/** What to tell the user when auto top-up switched itself off: web chat text, chat-app text. */
+export type AutoTopUpNotice = { web: string; chat: string };
+export type AutoTopUpListener = (userId: string, notice: AutoTopUpNotice) => void | Promise<void>;
+const autoTopUpOff = new Set<AutoTopUpListener>();
+
+/** Called once when auto top-up switched itself off (declined twice, no card, refused). */
+export function onAutoTopUpTurnedOff(fn: AutoTopUpListener): () => void {
+  autoTopUpOff.add(fn);
+  return () => autoTopUpOff.delete(fn);
+}
+
+export async function fireAutoTopUpTurnedOff(userId: string, notice: AutoTopUpNotice) {
+  for (const fn of [...autoTopUpOff]) {
+    try {
+      await fn(userId, notice);
+    } catch (err) {
+      logger().error(
+        { hook: 'auto_topup_off', userId, err: (err as Error).message },
+        'billing hook failed',
+      );
+    }
+  }
+}
+
 async function fire(listeners: Set<BalanceListener>, userId: string, hook: string): Promise<void> {
   for (const fn of [...listeners]) {
     try {

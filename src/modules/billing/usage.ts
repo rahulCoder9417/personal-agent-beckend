@@ -13,6 +13,7 @@ import { getUser } from '../auth/users.ts';
 import { vm } from '../orchestrator/vm.ts';
 import { restoreAppActionChargesInTx } from './app-actions.ts';
 import { restorePaidToolChargesInTx } from './paid-tools.ts';
+import { maybeQueueAutoTopUp } from './auto-topup.ts';
 import { chargeInTx, getBalance, lockUserCredits, restoreChargesInTx } from './credits.ts';
 import { afterCreditsAdded } from './enforce.ts';
 import { fireBalanceDepleted } from './hooks.ts';
@@ -191,6 +192,7 @@ export async function syncUsageForUser(
     return { charged: 0, periodStart: null, periodEnd: null, balance: await getBalance(userId) };
   const balance = await getBalance(userId);
   if (out.charged > 0 && balance <= 0) await fireBalanceDepleted(userId);
+  if (out.charged > 0) await maybeQueueAutoTopUp(userId, balance);
   return { ...out, balance };
 }
 

@@ -1,7 +1,13 @@
 // Polar fakes for Phase 5 tests: a fake API client and Standard Webhooks signing.
 import { randomUUID } from 'node:crypto';
 import { Webhook } from 'standardwebhooks';
-import { setPolarClient, type PolarClient } from '../src/modules/billing/polar.ts';
+import {
+  PolarHttpError,
+  setPolarClient,
+  type FinalizeOutcome,
+  type PolarClient,
+  type SavedCard,
+} from '../src/modules/billing/polar.ts';
 import { POLAR_SECRET } from './billing-fakes.ts';
 
 // --- Polar ------------------------------------------------------------------------------------
@@ -29,6 +35,66 @@ export class FakePolar implements PolarClient {
       throw new Error('Polar PATCH /v1/subscriptions failed: 503');
     }
     this.uncancelled.push(subscriptionId);
+  }
+
+  // --- off-session charges (auto top-up) ---
+  /** The saved card per user (external id). Missing → a default Visa; null → none. */
+  cards = new Map<string, SavedCard | null>();
+  /** Draft orders made, with their status as Polar would keep it. */
+  orders = new Map<
+    string,
+    { customerId: string; productId: string; metadata: Record<string, string>; status: string }
+  >();
+  /** Finalize calls, in order (an order id each). */
+  finalized: string[] = [];
+  /** What the next finalize calls answer (default: paid). 'crash' charges, then throws. */
+  finalizeScript: Array<FinalizeOutcome['outcome'] | 'crash' | 'timeout'> = [];
+  /** When set, creating a draft order is refused with this status. */
+  refuseDraft: number | null = null;
+
+  async savedCard(externalCustomerId: string): Promise<SavedCard | null> {
+    if (this.cards.has(externalCustomerId)) return this.cards.get(externalCustomerId) ?? null;
+    return {
+      customerId: `cus_${externalCustomerId}`,
+      paymentMethodId: `pm_${externalCustomerId}`,
+      brand: 'visa',
+      last4: '4242',
+    };
+  }
+  async createDraftOrder(input: Parameters<PolarClient['createDraftOrder']>[0]) {
+    if (this.refuseDraft)
+      throw new PolarHttpError(
+        this.refuseDraft,
+        'Customer has no billing address',
+        'POST /v1/orders/',
+      );
+    const orderId = randomUUID();
+    this.orders.set(orderId, { ...input, status: 'draft' });
+    return { orderId };
+  }
+  async finalizeOrder(orderId: string): Promise<FinalizeOutcome> {
+    this.finalized.push(orderId);
+    const order = this.orders.get(orderId);
+    if (!order) throw new PolarHttpError(404, 'Order not found', 'finalize');
+    if (order.status !== 'draft') return { outcome: 'not_draft' };
+    const next = this.finalizeScript.shift() ?? 'paid';
+    if (next === 'timeout') throw new Error('The operation was aborted due to timeout');
+    if (next === 'crash') {
+      order.status = 'paid'; // charged at Polar, but the answer never came back
+      throw new Error('socket hang up');
+    }
+    if (next === 'paid') order.status = 'paid';
+    if (next === 'declined') return { outcome: 'declined', reason: 'Your card was declined.' };
+    if (next === 'refused')
+      return { outcome: 'refused', reason: 'Off-session charges are not enabled' };
+    return next === 'not_draft' ? { outcome: 'not_draft' } : { outcome: 'paid' };
+  }
+  async orderStatus(orderId: string) {
+    return this.orders.get(orderId)?.status ?? 'unknown';
+  }
+  /** Card charges that went through (orders paid). */
+  get paidOrders() {
+    return [...this.orders.entries()].filter(([, o]) => o.status === 'paid').map(([id]) => id);
   }
 }
 

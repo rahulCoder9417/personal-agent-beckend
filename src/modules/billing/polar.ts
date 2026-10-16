@@ -42,10 +42,71 @@ export interface PolarClient {
   cancelAtPeriodEnd(subscriptionId: string): Promise<void>;
   /** PATCH /v1/subscriptions/{id} { cancel_at_period_end: false }: un-cancel before it ends. */
   uncancel(subscriptionId: string): Promise<void>;
+  /**
+   * GET /v1/customers/external/{external_id}/payment-methods: the customer's default saved card
+   * (or the first one). Null when Polar has no customer or no saved method for this user.
+   */
+  savedCard(externalCustomerId: string): Promise<SavedCard | null>;
+  /** POST /v1/orders/: a draft order for an off-session charge (nothing is charged yet). */
+  createDraftOrder(input: {
+    customerId: string;
+    productId: string;
+    metadata: Record<string, string>;
+  }): Promise<{ orderId: string }>;
+  /** POST /v1/orders/{id}/finalize: charges the saved card now, off-session. */
+  finalizeOrder(orderId: string, paymentMethodId?: string): Promise<FinalizeOutcome>;
+  /** GET /v1/orders/{id}: the order's status (draft, pending, paid, refunded, …). */
+  orderStatus(orderId: string): Promise<string>;
+}
+
+export interface SavedCard {
+  customerId: string;
+  paymentMethodId: string;
+  brand: string;
+  last4: string;
+}
+
+/**
+ * What finalizing a draft order gave. `paid`: charged (order.paid follows). `declined`: 402, the
+ * card was declined, there is no method, or it needs 3-D Secure, which cannot happen off-session.
+ * `refused`: 403 (off-session charges not switched on for us) or another refusal. `not_draft`: 412,
+ * the order was finalized before (a re-run).
+ */
+export type FinalizeOutcome =
+  | { outcome: 'paid' }
+  | { outcome: 'declined'; reason: string }
+  | { outcome: 'refused'; reason: string }
+  | { outcome: 'not_draft' };
+
+/** A Polar answer that is not 2xx. `reason` is Polar's short message (never card data). */
+export class PolarHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly reason: string,
+    what: string,
+  ) {
+    super(`Polar ${what} failed: ${status}`);
+  }
+  /** Polar's own refusal (4xx other than rate limiting): trying again won't change it. */
+  get refusal(): boolean {
+    return this.status >= 400 && this.status < 500 && this.status !== 429;
+  }
+}
+
+/** Polar's error body: `{ detail: "…" }` or `{ error, detail }`. Kept short. */
+function reasonOf(text: string): string {
+  try {
+    const body = JSON.parse(text) as { detail?: unknown; error?: unknown };
+    const d = typeof body.detail === 'string' ? body.detail : body.error;
+    if (typeof d === 'string' && d) return d.slice(0, 200);
+  } catch {
+    // not JSON
+  }
+  return '';
 }
 
 class HttpPolar implements PolarClient {
-  private async request<T>(method: string, path: string, body: unknown): Promise<T> {
+  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const c = config();
     if (!c.POLAR_ACCESS_TOKEN) throw new Error('POLAR_ACCESS_TOKEN is not set');
     const res = await fetch(new URL(path, POLAR_API_URLS[c.POLAR_SERVER]), {
@@ -56,11 +117,12 @@ class HttpPolar implements PolarClient {
         accept: 'application/json',
         'polar-version': POLAR_API_VERSION,
       },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(15_000),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      // Finalizing an order charges the card while we wait: give it longer.
+      signal: AbortSignal.timeout(path.endsWith('/finalize') ? 60_000 : 15_000),
     });
-    if (!res.ok) throw new Error(`Polar ${method} ${path} failed: ${res.status}`);
     const text = await res.text();
+    if (!res.ok) throw new PolarHttpError(res.status, reasonOf(text), `${method} ${path}`);
     return (text ? JSON.parse(text) : {}) as T;
   }
 
@@ -90,6 +152,66 @@ class HttpPolar implements PolarClient {
       cancel_at_period_end: false,
     });
   }
+
+  async savedCard(externalCustomerId: string): Promise<SavedCard | null> {
+    type Method = {
+      id: string;
+      type: string;
+      customer_id: string;
+      is_default?: boolean;
+      method_metadata?: { brand?: string | null; last4?: string | null };
+    };
+    let out: { items?: Method[] };
+    try {
+      out = await this.request<{ items?: Method[] }>(
+        'GET',
+        `/v1/customers/external/${encodeURIComponent(externalCustomerId)}/payment-methods?limit=100`,
+      );
+    } catch (err) {
+      if (err instanceof PolarHttpError && err.status === 404) return null; // no customer yet
+      throw err;
+    }
+    const items = out.items ?? [];
+    const pick = items.find((m) => m.is_default) ?? items[0];
+    if (!pick) return null;
+    return {
+      customerId: pick.customer_id,
+      paymentMethodId: pick.id,
+      brand: pick.method_metadata?.brand ?? pick.type,
+      last4: pick.method_metadata?.last4 ?? '',
+    };
+  }
+
+  async createDraftOrder(input: Parameters<PolarClient['createDraftOrder']>[0]) {
+    const out = await this.request<{ id: string }>('POST', '/v1/orders/', {
+      customer_id: input.customerId,
+      product_id: input.productId,
+      metadata: input.metadata,
+    });
+    return { orderId: out.id };
+  }
+
+  async finalizeOrder(orderId: string, paymentMethodId?: string): Promise<FinalizeOutcome> {
+    try {
+      await this.request('POST', `/v1/orders/${encodeURIComponent(orderId)}/finalize`, {
+        ...(paymentMethodId ? { payment_method_id: paymentMethodId } : {}),
+      });
+      return { outcome: 'paid' };
+    } catch (err) {
+      if (!(err instanceof PolarHttpError) || !err.refusal) throw err; // retried by the job
+      if (err.status === 412) return { outcome: 'not_draft' };
+      if (err.status === 402) return { outcome: 'declined', reason: err.reason || 'declined' };
+      return { outcome: 'refused', reason: err.reason || `refused (${err.status})` };
+    }
+  }
+
+  async orderStatus(orderId: string): Promise<string> {
+    const out = await this.request<{ status?: string }>(
+      'GET',
+      `/v1/orders/${encodeURIComponent(orderId)}`,
+    );
+    return out.status ?? 'unknown';
+  }
 }
 
 let client: PolarClient | undefined;
@@ -106,7 +228,7 @@ export function setPolarClient(fake: PolarClient | undefined): void {
 
 // --- products ---------------------------------------------------------------------------------
 
-function productFor(kind: 'plan' | 'topup', id: string): string {
+export function productFor(kind: 'plan' | 'topup', id: string): string {
   const c = config();
   const map: Record<string, string | undefined> = {
     'plan:pro': c.POLAR_PRODUCT_PRO,

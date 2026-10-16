@@ -48,6 +48,34 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 16 October 2026: the privacy page's promises made true
+
+- **Where it is:** on the branch `fix/privacy-retention` in the backend, the vm-manager, the landing page and the web app. Not on `main`, not on the server.
+- **Why:** HLD section 12 asked "change the backend, or the page?" about four gaps between textcrew.in/privacy and what the backend keeps. You left the choice to Claude: fix the backend where it falls short, and make the page say exactly what is true. The four gaps: the page said backups are kept 14 days (the backend keeps 7); "fully cleared within 30 days", while the archives of users' files were never deleted; raw events "kept 30 days", while a failed one was never removed; and a deleted account's row kept its email and name.
+- **What the user notices:** nothing in use. Deleting an account now also deletes every backup copy of the user's files at once. The privacy page, the home page, the web app's Delete account line and its Help say backups are kept 7 days, and what goes when. The web app's Settings no longer marks "Your own API key" as "Recommended": only the Claude plan has been tried end to end, and it is still marked Beta, so no choice is recommended now.
+- **Backend:**
+  - The daily clean-up removes every saved event older than 30 days, whatever its state: done, ignored, failed, or still waiting. A provider resends an event within hours or a few days, so the duplicate check never needs a key that old, and a worker start queues again only events of the last 7 days.
+  - The account deletion job has a last step: the `users` row stays, with its id, its Clerk id and the time it was deleted, so the money records and a late Clerk webhook still find it. Its email becomes `deleted-<id>@deleted.invalid` (an address that can never get mail), its name "Deleted user" and its time zone UTC. A "user updated" from Clerk that arrives after the deletion no longer writes the row again (it would have put the email back). Safe to run again.
+  - `BACKUP_KEEP_DAYS` (7) now says it must stay equal to the vm-manager's new setting.
+- **vm-manager:** the vm-manager writes the archives of users' folders as root, into folders only root may open, so the worker can't delete them. Two changes there, both safe to run again: `DeleteSandbox` deletes all of that user's archives (and folders left empty), and a new hourly loop deletes every archive older than `SNAPSHOT_KEEP_DAYS` (7 by default). Only files named like an archive are touched; the database dumps in the same folder are not.
+- **Cost and speed:** less disk on the server, since old archives no longer pile up. The hourly loop lists the backup folder once; nothing measurable.
+- **Contracts:** `openapi.yaml`: none. `vm.proto`: none (the RPCs behave more strictly; no new fields).
+- **Database:** none. No migration.
+- **How it was checked:**
+  - Backend: a new test file (old failed, waiting and finished events removed, recent ones kept, a second run removes nothing more; the deleted account's row keeps its id, Clerk id and deletion time with the placeholders, another user untouched; a second run changes nothing; a late Clerk update and a late Clerk deletion don't bring the email back). Lint, types and the OpenAPI check pass. The full run: 1014 of 1016 tests passed. The two that failed are not this change: the coupon test timed out under load and passes alone; the "no reminder during a run" test in `automation-drafts.test.ts` fails the same way on `main` (a timing race in the test: on `main` it failed in 1 of 3 runs of the whole file, and every time when run alone).
+  - vm-manager: two new tests (deleting a user removes all their archives, not another user's whose id starts the same, and not the dump; a folder left empty goes; a re-run is fine. Pruning keeps an archive 7 days less an hour old, deletes it 2 hours later, keeps newer archives and other files). `go vet`, the linter (0 issues) and `go test ./...` pass, the race test too.
+  - Landing page: lint, types and the build pass. Nothing links to `/terms`.
+  - Web app: two new text tests (Delete account says 7 days and no "30 days"; no choice says "Recommended", the Claude plan keeps Beta) and one for Help. Lint, types, all 941 tests and the build pass.
+  - Not tried on the server.
+- **Still open:**
+  - The deploy: the backend and the vm-manager of this branch, then the landing page's privacy change and the web app. The page is only true once the vm-manager runs this version. The vm-manager deletes old archives within an hour of starting.
+  - Two copies on the server are not covered by the 7 days, if they are there: `backups/neon-move-<time>/` from the move to Neon, and the old local `postgres` volume the move kept. Delete both by hand once you trust Neon.
+  - An off-server copy (`BACKUP_UPLOAD_CMD`, empty today) would need its own 7-day rule, and it doesn't see deletions.
+  - Disconnecting an app still does not try again when Composio can't remove it (HLD section 12).
+  - The terms page stays on the landing page's `legal/google-limited-use-and-terms` branch until you fill its placeholders.
+- **Docs updated:** `hld-mvp.md` section 12 (built list, the open question settled, a hand step); `backend-report.md` sections 33 (deletion steps, what stays) and 37 (backups, clean-up, what can go wrong) and the list of gaps; the vm-manager's README (`SnapshotVolume`); the landing page's README.
+- **Commits:** backend `193307e`, `4a19dbf` and this entry; vm-manager `7fd56bd`; landing page `a80b290` (the Google data section and the Limited Use statement, taken from `2e553e5`), `3b22024`; web app `2e19d2b`.
+
 ### 16 October 2026: automations on a canvas, phase 2 (drafts from the chat)
 
 - **Where it is:** on `main` and on the test server (backend with migration 0026, and vm-manager), and live in the web app, since 16 October.

@@ -771,7 +771,7 @@ describe('during an automation run: no reminder', () => {
       runAt: new Date(Date.now() + 300),
       sessionKey: 'web',
     });
-    await waitFor(async () => results.timer, 15_000);
+    await waitFor(async () => results['timer-draft'], 15_000);
     expect(results.timer!.isError).toBe(true);
     expect(results.timer!.text).toMatch(/A reminder can't be set while an automation runs/);
     expect(results['timer-draft']!.isError, results['timer-draft']!.text).toBe(false);
@@ -803,7 +803,7 @@ describe('during an automation run: no reminder', () => {
         'webhook-timestamp': '1',
       },
     });
-    await waitFor(async () => results.event, 15_000);
+    await waitFor(async () => results['event-draft'], 15_000);
     expect(results.event!.isError).toBe(true);
     expect(results.event!.text).toMatch(/A reminder can't be set while an automation runs/);
 

@@ -12,6 +12,7 @@ import {
   revokeLiteLLMKey,
   syncLiteLLMKey,
 } from '../src/modules/billing/litellm.ts';
+import { chatTuning } from '../src/modules/billing/model-tuning.ts';
 import { litellmKeys } from '../src/modules/billing/schema.ts';
 import { syncUsageForUser } from '../src/modules/billing/usage.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
@@ -107,7 +108,12 @@ describe('saving an own key puts it in use', () => {
     expect(id).toMatch(/^own-[0-9a-f]{24}$/);
     expect(id).not.toContain(u.id);
     expect([...llm.models.values()]).toEqual([
-      { id, model: 'anthropic/claude-sonnet-5-5', apiKey: ANT_KEY },
+      {
+        id,
+        model: 'anthropic/claude-sonnet-5-5',
+        apiKey: ANT_KEY,
+        params: chatTuning('anthropic', 'claude-sonnet-5-5'),
+      },
     ]);
     // The container's name and the quick-reply model both go there, with the user's key.
     const own = { provider: 'anthropic', model: 'claude-sonnet-5-5', apiKey: ANT_KEY };
@@ -163,7 +169,12 @@ describe('saving an own key puts it in use', () => {
     await saveOk(u.token, 'anthropic', { apiKey: ANT_KEY });
     await saveOk(u.token, 'anthropic', { apiKey: ANT_KEY_2, model: 'claude-opus-5-5' });
     expect([...llm.models.values()]).toEqual([
-      { id: ownModelName(u.id), model: 'anthropic/claude-opus-5-5', apiKey: ANT_KEY_2 },
+      {
+        id: ownModelName(u.id),
+        model: 'anthropic/claude-opus-5-5',
+        apiKey: ANT_KEY_2,
+        params: chatTuning('anthropic', 'claude-opus-5-5'),
+      },
     ]);
     expect(agentCall(u.id).apiKey).toBe(ANT_KEY_2);
   });

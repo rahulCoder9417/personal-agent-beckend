@@ -55,6 +55,25 @@ describe('LiteLLM model calls (own keys)', () => {
     ]);
   });
 
+  it("the model's extra settings (prompt cache, effort) go in litellm_params; the model and key stay", async () => {
+    const params = {
+      cache_control_injection_points: [{ location: 'message', role: 'system' }],
+      output_config: { effort: 'low' },
+      model: 'not-this',
+      api_key: 'not-this',
+    };
+    await litellm().saveModel({ ...model, params }, { exists: false });
+    expect(seen[0]!.body).toEqual({
+      ...expectedBody,
+      litellm_params: {
+        cache_control_injection_points: [{ location: 'message', role: 'system' }],
+        output_config: { effort: 'low' },
+        model: 'anthropic/claude-sonnet-5-5',
+        api_key: USER_KEY,
+      },
+    });
+  });
+
   it('a known model is replaced in place; if LiteLLM lost it (400), it is created', async () => {
     await litellm().saveModel(model, { exists: true });
     expect(seen.map((s) => s.path)).toEqual(['/model/update']);

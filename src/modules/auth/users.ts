@@ -154,6 +154,53 @@ export async function markUserDeleted(clerkId: string): Promise<User | undefined
   return row;
 }
 
+/** What the user is told on Telegram (backend-report.md, "Notices on Telegram"). */
+export interface NotificationSettings {
+  crewJobs: boolean;
+  prReviews: boolean;
+  automationRuns: boolean;
+  quietHours: { enabled: boolean; start: string; end: string };
+}
+
+/** A change to some of them: only the fields given change. */
+export interface NotificationSettingsPatch {
+  crewJobs?: boolean;
+  prReviews?: boolean;
+  automationRuns?: boolean;
+  quietHours?: { enabled?: boolean; start?: string; end?: string };
+}
+
+/**
+ * The user's notice settings. A copy of the row kept from before these columns existed (for a
+ * minute after the update reaches the server) has none of them: the defaults then.
+ */
+export function notificationSettingsOf(user: User): NotificationSettings {
+  const u = user as Partial<User>;
+  return {
+    crewJobs: u.notifyCrewJobs ?? true,
+    prReviews: u.notifyPrReviews ?? true,
+    automationRuns: u.notifyAutomationRuns ?? false,
+    quietHours: {
+      enabled: u.quietHoursOn ?? true,
+      start: u.quietHoursStart ?? '22:00',
+      end: u.quietHoursEnd ?? '08:00',
+    },
+  };
+}
+
+function notificationColumns(patch: NotificationSettingsPatch | undefined) {
+  if (!patch) return {};
+  const q = patch.quietHours;
+  return {
+    ...(patch.crewJobs !== undefined ? { notifyCrewJobs: patch.crewJobs } : {}),
+    ...(patch.prReviews !== undefined ? { notifyPrReviews: patch.prReviews } : {}),
+    ...(patch.automationRuns !== undefined ? { notifyAutomationRuns: patch.automationRuns } : {}),
+    ...(q?.enabled !== undefined ? { quietHoursOn: q.enabled } : {}),
+    ...(q?.start !== undefined ? { quietHoursStart: q.start } : {}),
+    ...(q?.end !== undefined ? { quietHoursEnd: q.end } : {}),
+  };
+}
+
 /** True stamps the time now, keeping a time already there; false clears it. */
 const firstRunMark = (column: AnyPgColumn, on: boolean) =>
   on ? sql`coalesce(${column}, now())` : null;
@@ -161,6 +208,7 @@ const firstRunMark = (column: AnyPgColumn, on: boolean) =>
 /**
  * A time zone given here counts as set: the web app never replaces it with the browser's.
  * `onboardingCompleted` and `gettingStartedDismissed` set or clear the web app's first-run marks.
+ * `notifications` changes only the notice settings it names.
  */
 export async function updateProfile(
   userId: string,
@@ -169,14 +217,16 @@ export async function updateProfile(
     timezone?: string;
     onboardingCompleted?: boolean;
     gettingStartedDismissed?: boolean;
+    notifications?: NotificationSettingsPatch;
   },
   tx: Tx = db(),
 ): Promise<User> {
-  const { onboardingCompleted, gettingStartedDismissed, ...profile } = patch;
+  const { onboardingCompleted, gettingStartedDismissed, notifications, ...profile } = patch;
   const [row] = await tx
     .update(users)
     .set({
       ...profile,
+      ...notificationColumns(notifications),
       ...(profile.timezone !== undefined ? { timezoneSet: true } : {}),
       ...(onboardingCompleted !== undefined
         ? { onboardingCompletedAt: firstRunMark(users.onboardingCompletedAt, onboardingCompleted) }

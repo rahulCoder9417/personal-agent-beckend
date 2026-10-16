@@ -5,6 +5,8 @@ import {
   deleteAutomation,
   listAutomations,
   toApiAutomation,
+  copyChannel,
+  copyRules,
   whereRunsAnswer,
 } from '../../automations/automations.ts';
 import {
@@ -148,7 +150,8 @@ defineTool({
   description: "Your user's automations and reminders.",
   input: {},
   async run({ userId }) {
-    return (await listAutomations(userId)).map(toApiAutomation);
+    const [rows, rule] = await Promise.all([listAutomations(userId), copyRules(userId)]);
+    return rows.map((a) => toApiAutomation(a, copyChannel(rule, a)));
   },
 });
 

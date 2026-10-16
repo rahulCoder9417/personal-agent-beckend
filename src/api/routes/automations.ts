@@ -1,9 +1,12 @@
 import {
+  copyChannel,
+  copyRules,
   deleteAutomation,
   getAutomation,
   listAutomations,
   setEnabled,
   toApiAutomation,
+  type Automation,
 } from '../../modules/automations/automations.ts';
 import {
   discardDraft,
@@ -40,23 +43,29 @@ function draftRefusal(err: unknown): unknown {
   }
 }
 
+/** The automation for the API, with where a copy of its answers goes now (the user's switches). */
+async function withCopyTo(a: Automation) {
+  return toApiAutomation(a, copyChannel(await copyRules(a.userId), a));
+}
+
 export const automationRoutes = [
   route('listAutomations', async (c) => {
-    const rows = await listAutomations(c.get('user').id);
-    return c.json({ items: rows.map(toApiAutomation) }, 200);
+    const userId = c.get('user').id;
+    const [rows, rule] = await Promise.all([listAutomations(userId), copyRules(userId)]);
+    return c.json({ items: rows.map((a) => toApiAutomation(a, copyChannel(rule, a))) }, 200);
   }),
 
   // One automation, for its own page in the web app (drawn as a flow). Filtered by the user.
   route('getAutomation', async (c, { params }) => {
     const row = await getAutomation(c.get('user').id, params.automationId);
     if (!row) throw notFound('Automation not found');
-    return c.json(toApiAutomation(row), 200);
+    return c.json(await withCopyTo(row), 200);
   }),
 
   route('updateAutomation', async (c, { params, body }) => {
     const row = await setEnabled(c.get('user').id, params.automationId, body.enabled, 'user');
     if (!row) throw notFound('Automation not found');
-    return c.json(toApiAutomation(row), 200);
+    return c.json(await withCopyTo(row), 200);
   }),
 
   route('deleteAutomation', async (c, { params }) => {
@@ -85,7 +94,7 @@ export const automationRoutes = [
         enabled: body?.enabled !== false,
         via: 'web',
       });
-      return c.json({ draft: toApiDraft(draft), automation: toApiAutomation(automation) }, 200);
+      return c.json({ draft: toApiDraft(draft), automation: await withCopyTo(automation) }, 200);
     } catch (err) {
       throw draftRefusal(err);
     }

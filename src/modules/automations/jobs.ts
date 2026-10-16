@@ -2,18 +2,22 @@ import type { Job } from 'bullmq';
 import { eq } from 'drizzle-orm';
 import { config, isChannelEnabled } from '../../shared/config.ts';
 import { db } from '../../shared/db/client.ts';
-import { ownsChat } from '../auth/links.ts';
 import { isValidTimezone } from '../auth/users.ts';
 import { automationsChat } from '../channels/conversations.ts';
 import { turnReply, type MessageRow } from '../channels/messages.ts';
 import { queueOutbound } from '../channels/outbound.ts';
 import { WEB_APP_NAME } from '../channels/purchase-links.ts';
-import { parseSessionKey } from '../channels/types.ts';
 import { getEvent, ingestEvent } from '../events/intake.ts';
 import type { ComposioTriggerEvent } from '../integrations/composio.ts';
 import { runTurn, type TurnKind, type TurnOutcome } from '../orchestrator/turn.ts';
 import { IGNORED } from '../../worker/ignored.ts';
-import { findByTriggerRef, recordRun, setEnabled, type Automation } from './automations.ts';
+import {
+  copyRules,
+  findByTriggerRef,
+  recordRun,
+  setEnabled,
+  type Automation,
+} from './automations.ts';
 import { finishPrReview, preparePrReview } from './pr-review.ts';
 import { automations } from './schema.ts';
 
@@ -125,20 +129,18 @@ export function copyText(a: Pick<Automation, 'kind' | 'title'>, text: string): s
 }
 
 /**
- * Made in a chat app (its session key is a Telegram chat): a copy of `message`, which is kept in
- * the Automations chat, is sent there as well, as plain text. It is saved in that chat's current
- * conversation, to be shown there, marked as a copy: it never becomes part of the agent's context
- * in that chat. Once per message, so a job that runs again sends no second copy. Nothing is sent
- * to a chat that is no longer the user's, that blocked the bot, or whose channel is switched off.
+ * A copy of `message`, which is kept in the Automations chat, is sent to the chat app the user's
+ * settings name (copyRules) as well, as plain text. It is saved in that chat's current conversation, to be shown there, marked
+ * as a copy: it never becomes part of the agent's context in that chat. Once per message, so a job
+ * that runs again sends no second copy.
  */
 async function copyToChat(a: Automation, message: MessageRow | undefined): Promise<void> {
-  const target = parseSessionKey(a.sessionKey);
-  if (!message || !target || target.channel === 'web' || !isChannelEnabled(target.channel)) return;
-  const link = await ownsChat(a.userId, target.channel, target.externalChatId ?? '');
-  if (!link || link.blocked) return;
+  if (!message) return;
+  const target = (await copyRules(a.userId))(a);
+  if (!target) return;
   await queueOutbound({
     userId: a.userId,
-    sessionKey: a.sessionKey,
+    sessionKey: target,
     text: copyText(a, message.text),
     copyOf: message.id,
   });

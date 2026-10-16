@@ -1361,6 +1361,16 @@ The worker's start used to drop such a run at times. On start the worker sets ev
 - **After a restart.** The timers live in the job queue, which can lose its data. So every time the worker starts, it sets the timer of every enabled automation again. A timer that is still there is left as it is, so a run that came due while the worker was stopped is not lost. It runs late and says so (above).
 - **The job queue lost its jobs.** A run whose job was lost is put back from the saved event. It still knows its automation and when it was due.
 
+### What the web app draws: the canvas
+
+The web app shows each automation on a page of its own as five boxes: the trigger, Tex's instruction, the apps, "asks you first" and the results (`hld-mvp.md`, section 5.4). Everything it draws comes from the api:
+
+- **One automation:** `GET /v1/automations/{id}`. It answers only for the user's own automations; another user's, or a deleted one, is "not found". A finished one-time reminder is left out of the list but is still found by its id, so an old link to it still opens.
+- **Where the copy goes:** `copyTo` says which chat app gets a copy of each run's answer: `telegram` for an automation made in a Telegram chat (and for a pull-request review turned on while Telegram was linked), and empty for one made in web chat. It comes from the chat the automation was made in, which the table already kept. The answers themselves always go to the Automations chat.
+- **The trigger's settings:** an app-event automation now shows its settings as they were given when it was made, for example the owner and repository a pull-request review watches. They were saved before, but the api gave only the app and the event. An automation made without settings shows none.
+
+Nothing new is saved for this. Example: Rahul's "every Monday at 9" made on Telegram reads `copyTo: telegram`, so its Results box says "Automations chat" and "Copy to Telegram".
+
 ### What can go wrong
 
 - **The plan limit is reached.** The tool says how many the plan allows. Nothing is saved.
@@ -3141,7 +3151,7 @@ This section says what the web app can do through the api, group by group. Almos
 | Apps | See the app list with status and plan, and which apps can be connected on this server. Start connecting an app. Disconnect one |
 | MCP servers | List the user's own MCP servers. Add one (Max plan), rename it, switch it on or off, remove it |
 | Own AI keys | See which providers have a key and which one is in use, never the key itself. Set, replace or remove one |
-| Automations | List reminders and automations, with why one is paused (by the user, after failures, out of credits, or by Textcrew support). Pause, resume or delete one |
+| Automations | List reminders and automations, with why one is paused (by the user, after failures, out of credits, or by Textcrew support), where the copy of each answer goes and the trigger's settings. Read one. Pause, resume or delete one |
 | Pull-request review | List the repositories with review on. Turn review on or off for one |
 | Agent settings and the Claude sign-in | See the container's state and which engine runs. Choose the engine, and Claude Code's model and thinking effort. Start, finish or undo the Claude sign-in |
 | The crew | See the four members, which are available, and the state of Scout's browser |

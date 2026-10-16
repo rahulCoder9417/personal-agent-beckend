@@ -11,7 +11,7 @@ Six files make up the docs:
 | `aws-setup.md` | The test server: what was done, the commands, the problems and their fixes |
 | `domain-setup.md` | The domain `textcrew.in`: where it was bought, who answers DNS, each name, and how to add or move one |
 | `engines-proposal.md` | A proposal, not built: adding Codex and other bring-your-own engines, with OpenAI's rules and the decisions to make |
-| `automations-flow-proposal.md` | A proposal, not built: automations shown and made on a canvas (React Flow), and drafts Tex makes from the chat, with the decisions to make |
+| `automations-flow-proposal.md` | A proposal: automations shown and made on a canvas (React Flow), and drafts Tex makes from the chat, with the decisions to make. You chose option A, with C to follow. Phase 1 is built (section 5.4) |
 | `optimization-log.md` | Every change made to the backend and the vm-manager while we optimize the product, by feature, in plain words |
 
 **The pictures** are in GoDraw, in the canvas named **"Textcrew MVP: high-level design"**. It has five pages. Each section below says which page shows it.
@@ -210,6 +210,22 @@ When one fires, it goes down the same path as a normal message, with the saved i
 - **The user's time zone.** Every account starts on UTC. The web app sets the browser's time zone once, while nobody has set one, and never replaces one the user chose.
 
 An automation pauses itself at zero credits, or after three failures in a row. The shortest allowed interval is 15 minutes.
+
+**On a canvas.** Each automation has a page of its own in the web app, `/automations/aut_…`, opened from its card. It shows the automation as five boxes joined by arrows, left to right:
+
+| Box | What it shows | Example |
+|---|---|---|
+| Trigger | When it runs, and whether it is on or paused | "Every Monday at 9:00 AM, your time" |
+| Tex's instruction | The title and the instruction | "List my open pull requests in acme/web" |
+| Apps Tex may use | The trigger's app; for older automations, "Your connected apps, as needed" | GitHub |
+| Asks you first | The platform's fixed rule | "Sending, deleting or paying waits for your OK" |
+| Results | The Automations chat, and the chat app a copy goes to | "Automations chat", "Copy to Telegram" |
+
+- It only shows. Nothing is changed on it yet (that is phase 3 of `automations-flow-proposal.md`).
+- The drawing library is React Flow (MIT licence, version 12.12.0, about 59 KB). It loads on that page only. Its small "React Flow" link in the corner stays, as you decided.
+- **Phones** (under 768 pixels wide) get the same five boxes as a list of cards. A "List view" switch shows the list on a wide screen too.
+- **The cards** on the Automations page each have the same five steps as a small strip of plain text, without the library.
+- For the picture the API now says two things it kept to itself: where the copy of each answer goes (`copyTo`: Telegram, or none), and the trigger's settings (for example the repository a pull-request review watches). `GET /v1/automations/{id}` reads one automation.
 
 ### 5.5 A pull request gets reviewed
 
@@ -437,6 +453,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - Approvals that hold exactly what runs (15 October, on the branch `fix/approval-args`, not on `main` yet). The founder's test email of that evening was never sent: Tex asked with an input Gmail doesn't have (`to` instead of `recipient_email`), the approved run failed, and Tex asked a second time. Now such a request is refused before the user sees it, the approved details run as saved, and a request asked again shows as "replaced" in the web app. Checked with the automated tests only.
 - Unread conversations (16 October, on the branch `feat/unread-dot` in the backend and the web app, not on `main` yet): a blue dot in the web app's chat list on a conversation with a message from the agent that the user has not seen, on web and Telegram conversations and the Automations chat. Opening the conversation marks it read. Checked with the automated tests and the web app's demo mode. It needs the database update (migration 0025) when it goes to the server, and the web app works with the backend before and after.
 - The Automations chat: every run, verdict and automation notice answering there, pinned in the web app's chat list with a mark for a new run, and a copy of each answer on Telegram for an automation made there. Built on 13 October, after your decision for a separate automation chat. Checked with the automated tests, and the web app's part in its demo mode in a browser. No real run has gone through it yet. The conversations that automations made for themselves earlier that day stay as ordinary chats.
+- Automations on a canvas, phase 1 (16 October, on the branch `feat/automations-canvas` in the backend and the web app, not on `main` yet): each automation's own page draws it as five boxes (section 5.4), read-only, with a list on phones, and each card on the Automations page has the same steps as a small strip. The API now says where the copy of each answer goes and the trigger's settings, and reads one automation. Checked with the automated tests and the web app's demo mode. No database change.
 
 ### Not finished
 

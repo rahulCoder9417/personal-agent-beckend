@@ -92,3 +92,29 @@ export function approvalAskText(summary: string, channel: Channel): string {
   const ended = /[!?]$/u.test(sentence) ? sentence : `${sentence}.`;
   return HAS_BUTTONS.has(channel) ? `${ended} Approve or Deny below.` : ended;
 }
+
+/** Where an answer came from (`decidedVia`: `web`, `telegram:button`, …), as the user says it. */
+function placeOf(via: string | null | undefined): string | null {
+  const channel = (via ?? '').split(':')[0];
+  if (channel === 'web') return 'web';
+  if (channel === 'telegram') return 'Telegram';
+  if (channel === 'whatsapp') return 'WhatsApp';
+  if (channel === 'imessage') return 'iMessage';
+  return null;
+}
+
+/**
+ * The line put under an approval's question on Telegram once it can no longer be answered, in
+ * place of its buttons: "✅ Approved on web", "❌ Denied on Telegram", or how it ended otherwise.
+ */
+export function approvalEndNote(
+  status: 'approved' | 'rejected' | 'replaced' | 'expired',
+  via?: string | null,
+): string {
+  const place = placeOf(via);
+  const on = place ? ` on ${place}` : '';
+  if (status === 'approved') return `✅ Approved${on}`;
+  if (status === 'rejected') return `❌ Denied${on}`;
+  if (status === 'replaced') return 'Replaced by a newer request.';
+  return via === 'admin' ? 'Cancelled by Textcrew support.' : 'Expired: no answer came in time.';
+}

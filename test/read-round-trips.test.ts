@@ -27,7 +27,7 @@ import { turnsBilled } from './billing-helpers.ts';
 import { installDbMeter, meter, queriesSoFar, setDbDelays } from './db-meter.ts';
 import { setTelegramApi, telegramApi } from '../src/modules/channels/adapters/telegram.ts';
 import { installFakeTelegram, installFakeVm, telegramUpdate } from './fakes.ts';
-import { call, chatUser, waitFor } from './helpers.ts';
+import { call, chatUser, testApp, waitFor } from './helpers.ts';
 
 function sendTelegram(update: unknown) {
   return call('/webhooks/telegram', {
@@ -243,11 +243,17 @@ describe('a chat turn', () => {
     let afterReply = 0;
     const m = await measure('Chat turn: send to the end of the job', async () => {
       const start = performance.now();
-      const res = await call('/v1/messages', {
+      // Until the 202, as the browser waits for it (the test helper `call` would also wait for the
+      // writes the api does after it).
+      const res = await testApp().request('/v1/messages', {
         method: 'POST',
-        token: user.token,
+        headers: { authorization: `Bearer ${user.token}`, 'content-type': 'application/json' },
         // As the web app sends it: with the conversation open on screen.
-        body: { text: 'what is on my calendar', clientMessageId: randomUUID(), conversationId },
+        body: JSON.stringify({
+          text: 'what is on my calendar',
+          clientMessageId: randomUUID(),
+          conversationId,
+        }),
       });
       expect(res.status).toBe(202);
       toAccepted = Math.round(performance.now() - start);

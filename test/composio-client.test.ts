@@ -1,6 +1,7 @@
 // The real Composio wiring (composio.ts), with the SDK replaced by a stand-in that records what is
 // asked of it: one SDK client per process with no npm version check, and an action run without
 // asking Composio for the action's description each time (before: about 0.3 s per run).
+import type * as ComposioCore from '@composio/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const made: Array<Record<string, unknown>> = [];
@@ -25,7 +26,7 @@ const GMAIL_SEND = {
 };
 
 vi.mock('@composio/core', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('@composio/core')>();
+  const orig = await importOriginal<typeof ComposioCore>();
   class FakeComposio {
     tools = {
       getRawComposioToolBySlug: async (slug: string) => {

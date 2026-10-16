@@ -18,7 +18,7 @@ This repo holds the **backend**: one TypeScript codebase run as **two processes*
 - **Contracts first:** a new or changed endpoint means editing `openapi/openapi.yaml` first, then regenerating types, then writing code. Never change the gRPC proto from this repo.
 - **Tests with every change.** Write the "done when…" checks as automated tests. Run lint, type-check and tests before saying a task is done, and report real results (paste failures; never claim a pass you didn't see).
 - **Small commits** after each working step, with clear messages.
-- **Log every change** in `docs/1optimization-log.md` (a new entry for every fix or feature, newest first): plain words, no code, written in the same piece of work as the change. That file says what an entry holds. A change in the vm-manager is logged there too. The older `docs/optimization-log.md` is closed: never add to or edit it.
+- **Log every change** in `docs/2optimization-log.md` (a new entry for every fix or feature, newest first): plain words, no code, written in the same piece of work as the change. That file says what an entry holds. A change in the vm-manager is logged there too. The older `docs/1optimization-log.md` and `docs/optimization-log.md` are closed: never add to or edit them.
 - **Ask when the HLD is unclear or seems wrong.** Don't silently invent behaviour. If you disagree with the design, say so and propose a change to the HLD.
 
 ## Stack (don't swap without asking)

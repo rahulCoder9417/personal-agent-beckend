@@ -864,13 +864,14 @@ Telegram wants digital goods sold inside the app to be paid with its own currenc
 
 What the user asks for in the web app is answered in the web app. A short notice can go to their linked Telegram chat as well, so they hear when it is done. Telegram is always in addition to the chat the work was asked in, never instead of it. (Built on 16 October.)
 
-**The setting.** Settings → General has "Tell me on Telegram when…", shown once Telegram is linked. It has three switches, saved on the user's row in `users`:
+**The setting.** Settings → General has "Tell me on Telegram when…", shown once Telegram is linked. It has four switches, saved on the user's row in `users`:
 
 | Switch | At first | What it sends |
 |---|---|---|
 | Byte or Patch finishes a job | On | A notice when a crew job asked anywhere but Telegram ends (section 20) |
 | Pull-request reviews finish | On | A copy of each review's verdict (section 19) |
 | Automation runs finish | Off | A copy of each answer of an automation made in the web app. One made on Telegram always sends its answer there (section 18) |
+| An automation needs my OK | On | The same question, with Approve and Deny, when an automation's run asks for an OK (section 15, "The same question on Telegram too"). Questions asked in the web app never go to Telegram |
 
 The web app reads and changes them through `PATCH /v1/me` (`notifications`). A change names only what changes.
 
@@ -1203,7 +1204,7 @@ The platform decides by these words in the action's name. There are two exceptio
 1. The agent calls `request_approval` with a short summary, the action's name and its exact inputs. The tool asks for the summary as what the agent will do, starting with the verb: "Send the notes to priya@example.com".
 2. For an app's action, the api first checks the inputs against the action's own list of inputs, which Composio gives (next part). Inputs that don't fit are refused at once, and the user sees nothing.
 3. The api saves it in the table `approvals` as `pending`, with its inputs. It expires after 24 hours.
-4. The api sends Tex's question to the chat the request came from. It is made from the summary, so it is there at once and costs nothing: no model is asked. "I'd like to " goes before the summary, its first word in small letters, and the way to answer goes after it: "I'd like to send the notes to priya@example.com. Approve or Deny below." In web chat the message carries the approval, and the web app shows the Approve and Deny card right under it, with the inputs under the action's own names. Telegram and WhatsApp show two buttons, Approve and Deny. iMessage has no buttons, so the line "Reply YES to approve or NO to deny." is added instead of "Approve or Deny below.". A summary that does not start with a common verb ("send", "delete", "pay", "create" and about 50 more) is kept as written: "I'd like your OK for this: ...". When the request came from anywhere but Telegram and the user has linked Telegram, the same question also goes to their Telegram chat, with the same two buttons and a last line: "Asked in the web app. Tex carries on there after your answer." (next part).
+4. The api sends Tex's question to the chat the request came from. It is made from the summary, so it is there at once and costs nothing: no model is asked. "I'd like to " goes before the summary, its first word in small letters, and the way to answer goes after it: "I'd like to send the notes to priya@example.com. Approve or Deny below." In web chat the message carries the approval, and the web app shows the Approve and Deny card right under it, with the inputs under the action's own names. Telegram and WhatsApp show two buttons, Approve and Deny. iMessage has no buttons, so the line "Reply YES to approve or NO to deny." is added instead of "Approve or Deny below.". A summary that does not start with a common verb ("send", "delete", "pay", "create" and about 50 more) is kept as written: "I'd like your OK for this: ...". When an automation's run asked, the same question can also go to the user's Telegram chat, with the same two buttons and a last line: "Asked by one of your automations. Tex carries on in the web app after your answer." (next part). A question asked in the web app stays there.
 5. The tool answers "pending" at once, with the question the user now sees. It tells the agent to end its turn and not to repeat the question or say it is waiting: the user already sees both. The agent never waits inside a turn. In the web app the turn has paused: the "working" sign stops and a line under the card says "Waiting for your OK".
 6. The user taps a button, types "yes" or "no", or decides in the web app. A typed answer goes to the newest waiting approval in that chat.
 7. The api records the answer in the activity log ("Approved: ..." or "Denied: ..."). A job then wakes the agent with a new message: "The user APPROVED ..." or "The user REJECTED ... Don't do it. Tell them in one short sentence that you won't." It goes to the conversation the approval was asked in, not to the one that is open now. In the web app Tex shows as working again from the tap until it answers.
@@ -1213,7 +1214,22 @@ The platform decides by these words in the action's name. There are two exceptio
 
 ### The same question on Telegram too
 
-Since 16 October an approval reaches the user wherever they are. One asked in web chat, or in the Automations chat during an automation's run, is sent to the linked Telegram chat as well. No switch is needed: an approval always goes when Telegram is linked.
+An automation runs while the user is away, so its question is sent to their linked Telegram chat as well. A question the user caused in the web app stays in the web app: they are there already. (Built on 16 October for every approval; later that day narrowed to automations, after the founder found his web-chat questions on Telegram too.)
+
+| Who asked | Where the question goes |
+|---|---|
+| The user, in web chat (Tex, Scout, Claude Code) | Web chat only |
+| A crew job or a pull-request review the user started in the web app, and its "run it again?" | The web app only |
+| "Run once now" on an automation (a test run) | The Automations chat only: the user just pressed the button |
+| An automation's run (a timer or an app event, a pull-request review included) | The Automations chat, and Telegram too while "An automation needs my OK" is on |
+| What that run goes on to ask after the user's answer, and a crew job that run started (its "run it again?" included) | The same as the run |
+| The user, in a Telegram chat | That Telegram chat, as before: it is asked there already |
+
+**The switch.** "An automation needs my OK" is the fourth switch of "Tell me on Telegram when…" in Settings → General (section 10), on at first. Off: an automation's question waits in the Automations chat only. Nothing goes when Telegram is not linked, is switched off on the server, or blocked the bot. Quiet hours count as for any Telegram message: it arrives silently.
+
+**How the platform knows.** The worker notes on the turn whose work it is: an automation's run, the turn after an answer to one of that run's questions, or a crew job that run started. An approval asked during that turn keeps the automation's id (`approvals.automationId`), and a crew job keeps it too (`crew_jobs.automationId`). The note comes from the worker, never from anything the agent says. When the note can't be read, the question stays in the chat it was asked in, the cautious way.
+
+Once a question is on Telegram:
 
 1. **The first answer wins.** Recording the answer is one step in the database, which only changes an approval that is still waiting. A second answer, from the other chat, finds it answered.
 2. **The other copies lose their buttons.** Right after the answer, a job edits every message of that approval on Telegram: the copy, and the question itself when it was asked there. The buttons go, and a line is added under the text: "✅ Approved on web", "❌ Denied on Telegram". So a tapped question loses its buttons too. A request that was replaced, expired or cancelled by support gets its own line ("Replaced by a newer request.", "Expired: no answer came in time.", "Cancelled by Textcrew support."). In the web app the card already shows the outcome.
@@ -1594,7 +1610,7 @@ The web app shows it pinned at the top of the chat list, apart from the dated li
 5. Once per message: a message can be copied once. A job that runs again after the copy was made sends nothing more.
 6. No copy goes to a chat that is no longer linked to the user, that blocked the bot, or whose channel is switched off.
 
-An approval a run asks for is sent to Telegram too, like any approval (section 15).
+An approval a run asks for is sent to Telegram too while the user's "An automation needs my OK" switch is on, as it is at first (section 15, "The same question on Telegram too"). A test run's ("Run once now") stays in the Automations chat.
 
 The notice "paused after 3 failures" is copied the same way. What the agent says after the user answers an approval that a run asked for stays in the Automations chat only: the user answered in the web app, where the follow-up is.
 
@@ -3461,7 +3477,7 @@ There are three databases: the backend's, the vm-manager's and LiteLLM's. Each p
 | channels | `attachments` | Files uploaded in the web app or received in a chat |
 | orchestrator | `sandbox_tokens` | The hash of each container's token and the user it belongs to |
 | orchestrator | `agent_settings` | The chosen engine, the AI choice, when Claude was connected, and Claude Code's model and thinking effort |
-| orchestrator | `approvals` | Risky actions waiting for a yes or no, with their exact details: an app's action, a crew job, one of Claude Code's commands, a git push, running a crew job again |
+| orchestrator | `approvals` | Risky actions waiting for a yes or no, with their exact details: an app's action, a crew job, one of Claude Code's commands, a git push, running a crew job again; and the automation whose run asked, if one did (section 15) |
 | orchestrator | `memories` | Short facts about the user that every engine gets |
 | orchestrator | `chat_engines` | Which engine last finished a turn in each conversation |
 | orchestrator | `turn_timings` | Where each turn's time went, stage by stage, for 30 days. Never any text (section 9) |
@@ -3474,7 +3490,7 @@ There are three databases: the backend's, the vm-manager's and LiteLLM's. Each p
 | automations | `automations` | Reminders, repeating tasks and app-event tasks, each with the chat it was made in, the apps its runs may use, its "ask me first", and for one made by hand the save's one-time key. Its runs answer in the Automations chat. A column that held a conversation per automation until 13 October is no longer used |
 | automations | `automation_drafts` | Automations the agent proposed, or the user's own version from the canvas, not saved yet, with their state (open, saved, discarded, replaced, expired), who made them, the chat they were proposed in, the automation a change is for, and the automation a saved one made. Removed after 30 days (section 18, "Drafts") |
 | automations | `pr_reviews` | One row per reviewed pull-request commit, so none is reviewed twice |
-| automations | `crew_jobs` | One row per crew job: the brief, where the report goes, its state, the report itself, what its run was refused (`blocked`), and for a job run again, the job it repeats and what the user approved for it |
+| automations | `crew_jobs` | One row per crew job: the brief, where the report goes, its state, the report itself, what its run was refused (`blocked`), for a job run again, the job it repeats and what the user approved for it, and the automation whose run started it, if one did |
 | billing | `subscriptions` | Each paid plan: user, Polar id, status, period |
 | billing | `payments` | Polar orders seen, to trace refunds back to a user |
 | billing | `credit_grants` | Each batch of credits: source, amount, what is left, expiry |

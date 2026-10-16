@@ -33,6 +33,13 @@ export const approvals = pgTable(
       .notNull()
       .default('pending'),
     sessionKey: text().notNull(),
+    /**
+     * The automation whose work asked: its run, the turn after an answer to one of its approvals,
+     * or a crew job its run started. Null: the user's own chat asked (web or Telegram). Only an
+     * automation's approval is copied to Telegram (the user's switch). No foreign key: the
+     * automation is the automations module's, and may be deleted meanwhile.
+     */
+    automationId: text(),
     expiresAt: timestamp({ withTimezone: true }).notNull(),
     decidedAt: timestamp({ withTimezone: true }),
     decidedVia: text(),

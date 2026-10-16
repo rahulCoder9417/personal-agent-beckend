@@ -192,6 +192,8 @@ export interface NotificationSettings {
   crewJobs: boolean;
   prReviews: boolean;
   automationRuns: boolean;
+  /** An approval asked by an automation's run goes to Telegram too. */
+  automationApprovals: boolean;
   quietHours: { enabled: boolean; start: string; end: string };
 }
 
@@ -200,6 +202,7 @@ export interface NotificationSettingsPatch {
   crewJobs?: boolean;
   prReviews?: boolean;
   automationRuns?: boolean;
+  automationApprovals?: boolean;
   quietHours?: { enabled?: boolean; start?: string; end?: string };
 }
 
@@ -213,6 +216,7 @@ export function notificationSettingsOf(user: User): NotificationSettings {
     crewJobs: u.notifyCrewJobs ?? true,
     prReviews: u.notifyPrReviews ?? true,
     automationRuns: u.notifyAutomationRuns ?? false,
+    automationApprovals: u.notifyAutomationApprovals ?? true,
     quietHours: {
       enabled: u.quietHoursOn ?? true,
       start: u.quietHoursStart ?? '22:00',
@@ -228,6 +232,9 @@ function notificationColumns(patch: NotificationSettingsPatch | undefined) {
     ...(patch.crewJobs !== undefined ? { notifyCrewJobs: patch.crewJobs } : {}),
     ...(patch.prReviews !== undefined ? { notifyPrReviews: patch.prReviews } : {}),
     ...(patch.automationRuns !== undefined ? { notifyAutomationRuns: patch.automationRuns } : {}),
+    ...(patch.automationApprovals !== undefined
+      ? { notifyAutomationApprovals: patch.automationApprovals }
+      : {}),
     ...(q?.enabled !== undefined ? { quietHoursOn: q.enabled } : {}),
     ...(q?.start !== undefined ? { quietHoursStart: q.start } : {}),
     ...(q?.end !== undefined ? { quietHoursEnd: q.end } : {}),

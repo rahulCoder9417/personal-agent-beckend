@@ -16,7 +16,7 @@ import {
 } from '../../automations/crew-jobs.ts';
 import { consumeApproval, START_CREW_JOB_ACTION } from '../../orchestrator/approvals.ts';
 import { approvals } from '../../orchestrator/schema.ts';
-import { turnConversationId } from '../../orchestrator/turn.ts';
+import { turnConversationId, turnForAutomation } from '../../orchestrator/turn.ts';
 import { defineTool, ToolError } from '../registry.ts';
 import { resolveSession } from './core.ts';
 
@@ -113,6 +113,8 @@ defineTool({
         source: 'chat',
         sessionKey,
         conversationId: await turnConversationId(userId, sessionKey),
+        // Started during an automation's work: the job's own questions are the automation's too.
+        automationId: await turnForAutomation(userId),
       });
       return {
         job_id: job.id,

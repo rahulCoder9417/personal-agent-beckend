@@ -58,6 +58,11 @@ export const users = pgTable('users', {
   notifyPrReviews: boolean().notNull().default(true),
   notifyAutomationRuns: boolean().notNull().default(false),
   /**
+   * An approval asked by an automation's run goes to Telegram too, with its buttons. One asked in
+   * the web app never does; one asked on Telegram is asked there anyway.
+   */
+  notifyAutomationApprovals: boolean().notNull().default(true),
+  /**
    * Quiet hours, `HH:MM` in the user's time zone: Telegram messages are sent silently in between.
    * A start after the end runs over midnight.
    */

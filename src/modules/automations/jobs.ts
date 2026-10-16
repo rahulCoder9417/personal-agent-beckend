@@ -173,6 +173,8 @@ async function runAutomationTurn(
   const chat = await automationsChat(a.userId);
   const outcome = await runTurn({
     automationId: a.id,
+    // An approval its run asks may go to Telegram too. Not for a test run: that is the user's own.
+    forAutomation: a.id,
     userId: a.userId,
     deliveryId,
     kind,

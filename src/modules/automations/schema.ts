@@ -219,6 +219,12 @@ export const crewJobs = pgTable(
     approved: jsonb().$type<CrewJobItem[]>().notNull().default([]),
     /** The job this one runs again (after the user approved what the earlier run was refused). */
     rerunOf: text(),
+    /**
+     * The automation whose run started this job (or the earlier job, for a run again). Null: the
+     * user asked for it, in the web app or a chat. Its approvals follow the automation's rule for
+     * Telegram copies.
+     */
+    automationId: text(),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
     startedAt: timestamp({ withTimezone: true }),
     finishedAt: timestamp({ withTimezone: true }),

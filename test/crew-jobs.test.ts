@@ -7,6 +7,7 @@ import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DeliverKind } from '../proto-gen/vm/v1/vm_pb.ts';
 import { channelLinks } from '../src/modules/auth/schema.ts';
+import { createAutomation } from '../src/modules/automations/automations.ts';
 import type { toApiCrewJob } from '../src/modules/automations/crew-jobs.ts';
 import {
   checkBrief,
@@ -19,7 +20,7 @@ import {
 import { crewJobs } from '../src/modules/automations/schema.ts';
 import { conversations, messages } from '../src/modules/channels/schema.ts';
 import { events } from '../src/modules/events/schema.ts';
-import { closeQueues } from '../src/modules/events/queues.ts';
+import { closeQueues, queue } from '../src/modules/events/queues.ts';
 import { clearRepoCache, LIST_REPOS_ACTION } from '../src/modules/integrations/github-repos.ts';
 import { connections } from '../src/modules/integrations/tables.ts';
 import { START_CREW_JOB_ACTION } from '../src/modules/orchestrator/approvals.ts';
@@ -716,6 +717,48 @@ describe('start_crew_job, from chat', () => {
       .where(and(eq(messages.userId, u.id), eq(messages.direction, 'in')));
     expect(done.conversationId).toBe(asked[0]!.conversationId);
     expect(jobTurns(u.id)).toHaveLength(1);
+    // Asked by the user, not by an automation: its questions stay in the web app.
+    expect((await jobRow(first.job_id)).automationId).toBeNull();
+  });
+
+  it("started during an automation's run: the job is that automation's work; given on the crew page: the user's", async () => {
+    const u = await dev();
+    const got: McpResult[] = [];
+    vmFake.state.agent = async (d, mcp) => {
+      if (JSON.parse(d.metadataJson ?? '{}').crew_job) {
+        await mcp('send_message', { text: REPORT, session_key: d.sessionKey });
+        return;
+      }
+      got.push(
+        await mcp('start_crew_job', {
+          member: 'patch',
+          owner: 'acme',
+          repo: 'web',
+          pull_number: 7,
+          session_key: d.sessionKey,
+        }),
+      );
+      await mcp('send_message', { text: 'Patch is on it.', session_key: d.sessionKey });
+    };
+    const auto = await createAutomation({
+      userId: u.id,
+      title: 'Nightly review',
+      instruction: 'Ask Patch to review acme/web PR 7',
+      sessionKey: 'web',
+      cron: '0 2 * * *',
+    });
+    await queue('scheduled').add(
+      'run-automation',
+      { automationId: auto.id, userId: u.id },
+      { jobId: `fire-${randomUUID()}` },
+    );
+    await waitFor(async () => (got.length ? got : null));
+    const { job_id } = JSON.parse(got[0]!.text) as { job_id: string };
+    expect((await jobRow(job_id)).automationId).toBe(auto.id);
+    await finished(u.token, job_id);
+
+    const given = await created(u.token, byteBrief());
+    expect((await jobRow(given.id)).automationId).toBeNull();
   });
 
   it("posting Patch's review on the pull request needs the user's yes for that exact brief", async () => {

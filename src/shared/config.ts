@@ -192,6 +192,14 @@ export const configSchema = z.object({
   LITELLM_AGENT_MODEL: z.string().default('agent-default'),
   /** What the agent model means on paid plans (Free: LITELLM_CHEAP_MODEL). */
   LITELLM_PREMIUM_MODEL: z.string().default('claude'),
+  /**
+   * The model name Hermes's crew (Byte, Patch, Scout) calls (vm-manager LITELLM_CREW_MODEL); a
+   * per-key alias like the agent model. LiteLLM tells the crew's calls from the lead's by it, so
+   * the crew thinks at medium effort while chat stays at low.
+   */
+  LITELLM_CREW_MODEL: z.string().default('agent-crew'),
+  /** What the crew model means on paid plans: the premium model at medium effort (Free: cheap). */
+  LITELLM_PREMIUM_CREW_MODEL: z.string().default('claude-crew'),
 
   /**
    * The channels that are switched on, comma-separated (HLD 0.3). Launch: Telegram and the web

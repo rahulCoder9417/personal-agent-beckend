@@ -150,7 +150,18 @@ const jobTurns = (userId: string) =>
   vmFake.deliveries.filter(
     (d) => d.userId === userId && JSON.parse(d.metadataJson ?? '{}').crew_job,
   );
-const settle = () => new Promise((r) => setTimeout(r, 700));
+/**
+ * Waits until every job of the user is over, and its container's stops were asked for. A test that
+ * leaves jobs running would have them finish during the next test, which then sees another user's
+ * turn or stop (a fixed wait of 700 ms was not enough when the machine was busy).
+ */
+const allOver = (userId: string) =>
+  waitFor(async () => {
+    const rows = await db().select().from(crewJobs).where(eq(crewJobs.userId, userId));
+    if (!rows.every((r) => r.status === 'done' || r.status === 'failed')) return false;
+    // Each job that ran a turn asks for the stop once it is over.
+    return vmFake.stops.filter((st) => st.userId === userId).length >= jobTurns(userId).length;
+  }, 20_000);
 
 async function agentToken(userId: string): Promise<string> {
   await ensureSandbox(userId);
@@ -454,7 +465,12 @@ describe('running a job', () => {
     expect(sent.map((m) => [m.text, m.conversationId])).toEqual([[REPORT, done.conversationId]]);
 
     // The job's work is over: a polite stop, which the vm-manager may refuse.
-    expect(vmFake.stops).toEqual([{ userId: u.id, force: false, reason: 'crew job finished' }]);
+    // (Asked right after the job is marked done; only this test's user's stops are counted.)
+    const stops = await waitFor(async () => {
+      const mine = vmFake.stops.filter((st) => st.userId === u.id);
+      return mine.length ? mine : null;
+    });
+    expect(stops).toEqual([{ userId: u.id, force: false, reason: 'crew job finished' }]);
 
     const list = await expectContract<{ items: ApiJob[]; nextCursor: string | null }>(
       'listCrewJobs',
@@ -843,7 +859,7 @@ describe('start_crew_job, from chat', () => {
         })
       ).isError,
     ).toBe(false);
-    await settle();
+    await allOver(u.id);
   });
 });
 

@@ -29,8 +29,8 @@ describe('LiteLLM key per user', () => {
     const key = llm.byUser(u.id)!;
     expect(llm.calls.filter((c) => c === 'generate')).toHaveLength(1);
     // Containers call `agent-default`; on Free the key aliases it to the cheap model.
-    expect(key.models).toEqual(['agent-default', 'cheap']);
-    expect(key.aliases).toEqual({ 'agent-default': 'cheap' });
+    expect(key.models).toEqual(['agent-default', 'agent-crew', 'cheap']);
+    expect(key.aliases).toEqual({ 'agent-default': 'cheap', 'agent-crew': 'cheap' });
     expect(key.maxBudget).toBeCloseTo(0.4, 6); // 100 credits ÷ 2.5 ÷ 100
     expect(await getLiteLLMKey(u.id)).toBe(key.key);
     // Stored encrypted, never in plaintext.
@@ -52,12 +52,19 @@ describe('agent model alias follows the plan', () => {
     await db().update(users).set({ plan: 'pro' }).where(eq(users.id, u.id));
     await syncLiteLLMKey(u.id);
     const key = llm.byUser(u.id)!;
-    expect(key.models).toEqual(['agent-default', 'cheap', 'claude', 'gpt']);
-    expect(key.aliases).toEqual({ 'agent-default': 'claude' });
+    expect(key.models).toEqual([
+      'agent-default',
+      'agent-crew',
+      'cheap',
+      'claude',
+      'gpt',
+      'claude-crew',
+    ]);
+    expect(key.aliases).toEqual({ 'agent-default': 'claude', 'agent-crew': 'claude-crew' });
     await db().update(users).set({ plan: 'free' }).where(eq(users.id, u.id));
     await syncLiteLLMKey(u.id);
-    expect(key.models).toEqual(['agent-default', 'cheap']);
-    expect(key.aliases).toEqual({ 'agent-default': 'cheap' });
+    expect(key.models).toEqual(['agent-default', 'agent-crew', 'cheap']);
+    expect(key.aliases).toEqual({ 'agent-default': 'cheap', 'agent-crew': 'cheap' });
   });
 });
 

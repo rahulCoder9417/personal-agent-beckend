@@ -93,6 +93,13 @@ async function linkedUser() {
   return { user, number };
 }
 
+/**
+ * The wakes of this user's container. A simple message's container is woken while Jev decides and
+ * nobody waits for that wake, so under load it can reach the fake vm-manager during the next
+ * test, as another user's wake: each test counts only its own user's.
+ */
+const wakesOf = (userId: string) => wakes.filter((id) => id === userId);
+
 async function inboundStatus(userId: string, text: string) {
   const rows = await db().select().from(messages).where(eq(messages.userId, userId));
   return rows.find((r) => r.direction === 'in' && r.text === text)?.status;
@@ -110,8 +117,8 @@ describe('Phase 6: Jev routing', () => {
     await waitFor(async () => (await inboundStatus(user.id, 'hi, how are you?')) === 'delivered');
     // The container was woken while Jev decided (WAKE_WHILE_ROUTING), and it just idles. Nobody
     // waits for that wake, so it may reach the vm-manager after the answer went out.
-    await waitFor(async () => wakes.length > 0);
-    expect(wakes).toEqual([user.id]);
+    await waitFor(async () => wakesOf(user.id).length > 0);
+    expect(wakesOf(user.id)).toEqual([user.id]);
     expect(vmFake.deliveries).toHaveLength(0);
 
     expect(jevCalls).toHaveLength(1);
@@ -177,7 +184,7 @@ describe('Phase 6: Jev routing', () => {
     jevAnswer = { route: 'task', confidence: 0.88, apps: ['gmail'] };
     await postWhatsapp(waWebhook([waText(number, 'email Bob the invoice')]));
     await waitFor(async () => wa.sent.find((m) => m.text === 'echo: email Bob the invoice'));
-    expect(wakes).toEqual([user.id]);
+    expect(wakesOf(user.id)).toEqual([user.id]);
     expect(vmFake.deliveries).toHaveLength(1);
     const meta = JSON.parse(
       (vmFake.deliveries[0] as unknown as { metadataJson: string }).metadataJson,

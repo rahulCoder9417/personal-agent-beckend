@@ -670,9 +670,13 @@ describe('run once now', () => {
     const a = await expectContract<ApiAutomation>('createAutomation', await create(u, weekly), 201);
     for (let i = 0; i < 10; i++) expect((await runNow(u, a.id)).status).toBe(202);
     expect((await runNow(u, a.id)).status).toBe(429);
-    // The ten runs are not what this test is about: they are taken off the queue.
+    // The ten runs are not what this test is about: they are taken off the queue. A worker may take
+    // one between the listing and the removal (it is then locked): that one just runs.
     for (const job of await queue('inbound').getJobs(['waiting', 'prioritized', 'delayed']))
-      if ((job.data as { automationId?: string }).automationId === a.id) await job.remove();
+      if ((job.data as { automationId?: string }).automationId === a.id)
+        await job.remove().catch((err: unknown) => {
+          if (!/locked by another worker/.test(String(err))) throw err;
+        });
 
     const broke = await person({ apps: ['github'] });
     const b = await expectContract<ApiAutomation>(

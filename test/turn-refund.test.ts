@@ -20,7 +20,7 @@ import { startWorkers } from '../src/worker/runner.ts';
 import { FakeLiteLLM, installFakes, member } from './billing-fakes.ts';
 import { ledgerMatchesGrants, ledgerOf } from './billing-helpers.ts';
 import { installFakeVm } from './fakes.ts';
-import { call, chatUser, expectContract, waitFor } from './helpers.ts';
+import { call, chatUser, expectContract, finishedJob, waitFor } from './helpers.ts';
 
 const APOLOGY =
   "Sorry, something went wrong on our side and I couldn't finish that. You weren't charged for it. Please try again.";
@@ -46,12 +46,9 @@ const messagesOf = (userId: string, direction: 'in' | 'out') =>
 const reversalsOf = async (userId: string) =>
   (await ledgerOf(userId)).filter((l) => l.reason === 'reversal');
 
-/** The refund job's last state, once it has one. */
-async function refundJobDone(key: string) {
-  const job = await queue('system').getJob(`refund-${key.replaceAll(':', '-')}`);
-  const state = await job?.getState();
-  return state === 'completed' || state === 'failed' ? { job: job!, state } : null;
-}
+/** The refund job, once it has finished (read after its state says so: helpers.finishedJob). */
+const refundJobDone = (key: string) =>
+  finishedJob(queue('system'), `refund-${key.replaceAll(':', '-')}`);
 
 describe('a turn that fails on our side', () => {
   it("LiteLLM's spend log fails: the user still gets the apology and the message ends", async () => {
@@ -87,7 +84,7 @@ describe('a turn that fails on our side', () => {
 
     // The refund ran as its own job: every try read the spend log, the last one gave back the rest.
     const key = `fault:${vm.deliveries[0]!.deliveryId}`;
-    const done = await waitFor(() => refundJobDone(key));
+    const done = await refundJobDone(key);
     expect(done.state).toBe('completed');
     expect(done.job.returnvalue).toEqual({ restored: 0, aiSkipped: true });
     expect(llm.spendLogReads).toBe(5);
@@ -132,7 +129,7 @@ describe('the refund job', () => {
     await queueTurnRefund(u.id, turn);
     await queueTurnRefund(u.id, turn); // same job id: not added again
 
-    const done = await waitFor(() => refundJobDone(turn.idempotencyKey));
+    const done = await refundJobDone(turn.idempotencyKey);
     expect(done.state).toBe('completed');
     expect(done.job.attemptsMade).toBe(3);
     expect(done.job.returnvalue).toEqual({ restored: 6 });
@@ -143,7 +140,7 @@ describe('the refund job', () => {
     // Queued again later (the old job gone): the idempotency keys give nothing more.
     await done.job.remove();
     await queueTurnRefund(u.id, turn);
-    const again = await waitFor(() => refundJobDone(turn.idempotencyKey));
+    const again = await refundJobDone(turn.idempotencyKey);
     expect(again.job.returnvalue).toEqual({ restored: 0 });
     expect(await getBalance(u.id)).toBe(100);
     expect(await ledgerMatchesGrants(u.id)).toBe(true);
@@ -162,7 +159,7 @@ describe('the refund job', () => {
     llm.spendLogFailures = 'always';
     const turn = { startedAt, endedAt, idempotencyKey: `fault:evt_${randomUUID()}` };
     await queueTurnRefund(u.id, turn);
-    const done = await waitFor(() => refundJobDone(turn.idempotencyKey));
+    const done = await refundJobDone(turn.idempotencyKey);
     expect(done.state).toBe('completed');
     expect(done.job.attemptsMade).toBe(5);
     expect(done.job.returnvalue).toEqual({ restored: 4, aiSkipped: true });

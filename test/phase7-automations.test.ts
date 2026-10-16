@@ -125,7 +125,8 @@ describe('Phase 7: automations and reminders', () => {
       if (d.kind === DeliverKind.MESSAGE) {
         const r = await mcp('schedule_reminder', {
           text: 'call mom',
-          run_at: new Date(Date.now() + 1500).toISOString(),
+          // Far enough ahead that a busy machine can't make it a moment already past.
+          run_at: new Date(Date.now() + 3000).toISOString(),
           session_key: d.sessionKey,
         });
         expect(r.isError).toBeFalsy();
@@ -136,7 +137,7 @@ describe('Phase 7: automations and reminders', () => {
     };
     await tgPost(telegramUpdate(u.chatId, 'remind me to call mom in a moment'));
     await waitFor(async () => tg.sent.find((m) => m.text === 'OK, I will remind you.'));
-    const reminder = await waitFor(async () => fired('call mom')[0], 15_000);
+    const reminder = await waitFor(async () => fired('call mom')[0], 20_000);
     expect(reminder.chatId).toBe(String(u.chatId));
     expect(reminder.text.split('\n')[0]).toBe('⏰ Reminder: call mom');
     expect(reminder.text).toMatch(
@@ -185,16 +186,20 @@ describe('Phase 7: automations and reminders', () => {
     const before = fired('every-2s').length;
     start();
     await reregisterAll();
-    await waitFor(async () => fired('every-2s').length >= before + 2, 15_000);
+    await waitFor(async () => fired('every-2s').length >= before + 2, 20_000);
     await expectContract(
       'deleteAutomation',
       await call(`/v1/automations/${a.id}`, { method: 'DELETE', token: u.token }),
       204,
     );
+    // A run already handed to the container finishes, and its copy to Telegram can come late
+    // when the machine is busy. What must stop is new runs: count the turns the container gets.
+    const runs = () =>
+      vmFake.deliveries.filter((d) => d.userId === u.id && d.kind === DeliverKind.AUTOMATION);
     await new Promise((r) => setTimeout(r, 2500));
-    const after = fired('every-2s').length;
-    await new Promise((r) => setTimeout(r, 3000));
-    expect(fired('every-2s').length).toBe(after);
+    const after = runs().length;
+    await new Promise((r) => setTimeout(r, 4000)); // two more periods of the timer
+    expect(runs().length).toBe(after);
   });
 
   it('an app-event automation fires from a Composio trigger, only for its owner', async () => {

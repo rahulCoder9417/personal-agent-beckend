@@ -171,17 +171,25 @@ export function modelsForPlan(plan: PlanId): string[] {
 
 /**
  * Per-key model aliases: containers always call `agent-default` (LITELLM_AGENT_MODEL); on Free
- * it means the cheap model, on paid plans the premium one.
+ * it means the cheap model, on paid plans the premium one. Hermes's crew calls `agent-crew`
+ * (LITELLM_CREW_MODEL): the cheap model on Free, the premium model at medium effort on paid plans.
  */
 export function aliasesForPlan(plan: PlanId): Record<string, string> {
   const c = config();
-  const target = PLANS[plan].limits.models === 'cheap' ? cheapModel() : c.LITELLM_PREMIUM_MODEL;
-  return { [c.LITELLM_AGENT_MODEL]: target };
+  const cheap = PLANS[plan].limits.models === 'cheap';
+  return {
+    [c.LITELLM_AGENT_MODEL]: cheap ? cheapModel() : c.LITELLM_PREMIUM_MODEL,
+    [c.LITELLM_CREW_MODEL]: cheap ? cheapModel() : c.LITELLM_PREMIUM_CREW_MODEL,
+  };
 }
 
-/** What the user's LiteLLM key may call: the agent alias plus the plan's models. */
+/** What the user's LiteLLM key may call: the two aliases, the plan's models, the crew's model. */
 export function keyModelsForPlan(plan: PlanId): string[] {
-  return [config().LITELLM_AGENT_MODEL, ...modelsForPlan(plan)];
+  const c = config();
+  const crew = PLANS[plan].limits.models === 'cheap' ? [] : [c.LITELLM_PREMIUM_CREW_MODEL];
+  return [
+    ...new Set([c.LITELLM_AGENT_MODEL, c.LITELLM_CREW_MODEL, ...modelsForPlan(plan), ...crew]),
+  ];
 }
 
 // --- credit maths (HLD 7.2) -------------------------------------------------------------------

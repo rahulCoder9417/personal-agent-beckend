@@ -50,7 +50,7 @@ interface FakeKey {
 }
 
 /** The server's own models (infra/litellm/config.yaml), paid with the server's provider keys. */
-export const SERVER_MODELS = ['cheap', 'claude', 'gpt', 'whisper'];
+export const SERVER_MODELS = ['cheap', 'claude', 'claude-crew', 'gpt', 'whisper'];
 
 export class FakeLiteLLM implements LiteLLMClient {
   keys = new Map<string, FakeKey>();

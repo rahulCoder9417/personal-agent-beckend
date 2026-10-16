@@ -10,7 +10,13 @@ import {
 } from '../../modules/channels/conversations.ts';
 import { listMessages, toApiMessage } from '../../modules/channels/messages.ts';
 import { attachments } from '../../modules/channels/schema.ts';
-import { enqueueStreamEvent, subscribe, type StreamEvent } from '../../modules/channels/stream.ts';
+import {
+  enqueueStreamEvent,
+  eventsSince,
+  subscribe,
+  writesNext,
+  type StreamEvent,
+} from '../../modules/channels/stream.ts';
 import {
   deleteUserConversation,
   openWebConversation,
@@ -148,11 +154,14 @@ export const chatRoutes = [
     return c.json({ id, name, sizeBytes: file.size, mimeType }, 201);
   }),
 
-  route('streamEvents', (c) => {
+  route('streamEvents', (c, { query }) => {
     const userId = c.get('user').id;
+    // The last event the client got: the browser sends the header when it reconnects by itself.
+    const lastEventId = (c.req.header('last-event-id') ?? query.lastEventId ?? '').slice(0, 64);
     return streamSSE(c, async (stream) => {
       const queue: StreamEvent[] = [];
       let wake: (() => void) | undefined;
+      // Subscribed before the record is read, so nothing falls between the two.
       const unsubscribe = await subscribe(userId, (e) => {
         enqueueStreamEvent(queue, e);
         wake?.();
@@ -162,16 +171,26 @@ export const chatRoutes = [
         unsubscribe();
         life.closed();
       });
-      const write = async (event: string, data: string) => {
+      const write = async (event: string, data: string, id?: string) => {
         const started = life.writing(event);
-        await stream.writeSSE({ event, data });
+        await stream.writeSSE({ event, data, ...(id ? { id } : {}) });
         life.written(event, started);
       };
-      await write('ready', '{}');
+      const missed = lastEventId ? await missedEvents(userId, lastEventId) : null;
+      // The newest id written: an event both replayed and heard live is written once, and a draft
+      // sent before an event already written is dropped (the next draft has the whole text).
+      let newest = missed ? lastEventId : undefined;
+      const writeEvent = async (e: StreamEvent) => {
+        if (!writesNext(newest, e)) return;
+        if (e.id) newest = e.id;
+        await write(e.type, JSON.stringify({ type: e.type, data: e.data }), e.id);
+      };
+      await write('ready', JSON.stringify({ resumed: missed !== null }));
+      for (const e of missed ?? []) await writeEvent(e);
       while (!stream.aborted) {
         const next = queue.shift();
         if (next) {
-          await write(next.type, JSON.stringify(next));
+          await writeEvent(next);
           continue;
         }
         await Promise.race([new Promise<void>((r) => (wake = r)), stream.sleep(25_000)]);
@@ -182,6 +201,16 @@ export const chatRoutes = [
     });
   }),
 ];
+
+/** The events after `lastEventId`, or null when they can't be known (the client catches up itself). */
+async function missedEvents(userId: string, lastEventId: string): Promise<StreamEvent[] | null> {
+  try {
+    return await eventsSince(userId, lastEventId);
+  } catch (err) {
+    logger().warn({ userId, err: String(err) }, 'live stream: recent events not readable');
+    return null;
+  }
+}
 
 /** A write to the live stream that waits this long means nothing downstream is reading it. */
 export const STREAM_WRITE_SLOW_MS = 5_000;

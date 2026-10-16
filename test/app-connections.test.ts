@@ -243,6 +243,7 @@ describe('app connections: the worker runs the check', () => {
     const [job] = await checkJobs(conn.id);
     await job!.promote(); // "15 seconds later"
     await waitFor(async () => (await rowsOf(user.id))[0]!.status === 'active');
-    expect(await job!.getState()).toBe('completed');
+    // The row is written before the job is marked done: wait for that too.
+    await waitFor(async () => (await job!.getState()) === 'completed');
   });
 });

@@ -1,8 +1,9 @@
 // Notices and approvals on Telegram (docs/backend-report.md, "Notices on Telegram"): the user's
 // three switches and quiet hours, a short notice when a crew job asked in the web app ends, the copy
-// of a pull-request review's verdict and of a web-made automation's answer, every approval asked
-// on Telegram too with the first answer winning and the other copies losing their buttons, and
-// silent messages during quiet hours. Nothing goes to Telegram when it isn't linked.
+// of a pull-request review's verdict and of a web-made automation's answer, an automation's
+// approval asked on Telegram too (its own switch) with the first answer winning and the other
+// copies losing their buttons, an approval asked in the web app staying there, and silent messages
+// during quiet hours. Nothing goes to Telegram when it isn't linked.
 import { randomUUID } from 'node:crypto';
 import type { Job, Worker } from 'bullmq';
 import { and, eq, isNotNull } from 'drizzle-orm';
@@ -15,10 +16,9 @@ import {
   noticeCrewJob,
   reportSummary,
 } from '../src/modules/automations/crew-notice.ts';
-import { handleCrewJob } from '../src/modules/automations/crew-jobs.ts';
+import { handleCrewJob, offerCrewRerun } from '../src/modules/automations/crew-jobs.ts';
 import { automations, crewJobs } from '../src/modules/automations/schema.ts';
 import { setTelegramApi } from '../src/modules/channels/adapters/telegram.ts';
-import { activeConversation } from '../src/modules/channels/conversations.ts';
 import { isQuietTime } from '../src/modules/channels/notify.ts';
 import { queueOutbound } from '../src/modules/channels/outbound.ts';
 import { messages } from '../src/modules/channels/schema.ts';
@@ -26,6 +26,7 @@ import { closeQueues, queue } from '../src/modules/events/queues.ts';
 import { connections } from '../src/modules/integrations/tables.ts';
 import { approvalEndNote } from '../src/modules/orchestrator/approval-text.ts';
 import { requestApproval } from '../src/modules/orchestrator/approvals.ts';
+import { approvals } from '../src/modules/orchestrator/schema.ts';
 import { db } from '../src/shared/db/client.ts';
 import { newId } from '../src/shared/ids.ts';
 import { wireModules } from '../src/wiring.ts';
@@ -104,6 +105,7 @@ type Me = {
     crewJobs: boolean;
     prReviews: boolean;
     automationRuns: boolean;
+    automationApprovals: boolean;
     quietHours: { enabled: boolean; start: string; end: string };
   };
 };
@@ -119,13 +121,14 @@ const settle = () => new Promise((r) => setTimeout(r, 600));
 // --- the setting -----------------------------------------------------------------------------
 
 describe('"Tell me on Telegram when…": the setting', () => {
-  it('starts with crew jobs and reviews on, web automations off, quiet hours 22:00 to 08:00', async () => {
+  it('starts with crew jobs, reviews and automation approvals on, web automations off, quiet hours 22:00 to 08:00', async () => {
     const user = await chatUser();
     const me = await expectContract<Me>('getMe', await call('/v1/me', { token: user.token }), 200);
     expect(me.notifications).toEqual({
       crewJobs: true,
       prReviews: true,
       automationRuns: false,
+      automationApprovals: true,
       quietHours: { enabled: true, start: '22:00', end: '08:00' },
     });
   });
@@ -143,18 +146,24 @@ describe('"Tell me on Telegram when…": the setting', () => {
       crewJobs: true,
       prReviews: true,
       automationRuns: true,
+      automationApprovals: true,
       quietHours: { enabled: true, start: '23:30', end: '08:00' },
     });
     const off = await expectContract<Me>(
       'updateMe',
       await patchMe(user.token, {
-        notifications: { crewJobs: false, quietHours: { enabled: false } },
+        notifications: {
+          crewJobs: false,
+          automationApprovals: false,
+          quietHours: { enabled: false },
+        },
       }),
       200,
     );
     expect(off.notifications).toMatchObject({
       crewJobs: false,
       automationRuns: true,
+      automationApprovals: false,
       quietHours: { enabled: false, start: '23:30', end: '08:00' },
     });
     // The end given, the start kept: the same time is refused.
@@ -481,39 +490,114 @@ const decide = (u: TestUser, id: string, decision: 'approve' | 'deny') =>
 const answerTurns = (userId: string) =>
   vm.deliveries.filter((d) => d.userId === userId && d.kind === DeliverKind.APPROVAL_ANSWER);
 
-describe('approvals on Telegram everywhere', () => {
-  it('asked in web chat: the same question on Telegram; answered on web, the copy loses its buttons', async () => {
-    const u = await person();
-    const a = await requestApproval({
-      userId: u.id,
-      sessionKey: 'web',
-      summary: 'Send an email to priya@example.com with subject "Notes"',
+describe('approvals on Telegram: an automation’s, not the web app’s', () => {
+  /** In each turn the agent asks for what `summary` gives, or else just answers. */
+  const asking = (summary: (d: Delivery) => string | null) => {
+    vm.state.agent = async (d, mcp) => {
+      const s = summary(d);
+      if (s) await mcp('request_approval', { summary: s, session_key: d.sessionKey });
+      else await mcp('send_message', { text: 'ok', session_key: d.sessionKey });
+    };
+  };
+  const waitApprovals = (userId: string, n: number) =>
+    waitFor(async () => {
+      const rows = await db()
+        .select()
+        .from(approvals)
+        .where(eq(approvals.userId, userId))
+        .orderBy(approvals.createdAt);
+      return rows.length >= n ? rows : null;
     });
-    const [copy] = await waitFor(async () => (sentTo(u.chatId).length ? sentTo(u.chatId) : null));
-    expect(copy!.body.text).toBe(
-      'I\'d like to send an email to priya@example.com with subject "Notes". Approve or Deny below.\n\n' +
-        'Asked in the web app. Tex carries on there after your answer.',
+  const telegramRows = (userId: string) =>
+    db()
+      .select()
+      .from(messages)
+      .where(and(eq(messages.userId, userId), eq(messages.channel, 'telegram')));
+  const writeOnWeb = async (u: TestUser, text: string) =>
+    expectContract(
+      'sendMessage',
+      await call('/v1/messages', {
+        method: 'POST',
+        token: u.token,
+        body: { text, clientMessageId: randomUUID() },
+      }),
+      202,
     );
+  const inboxSweep = (u: TestUser) =>
+    createAutomation({
+      userId: u.id,
+      title: 'Inbox sweep',
+      instruction: 'x',
+      sessionKey: 'web',
+      cron: '0 9 * * *',
+    });
+  const fireAutomation = async (u: TestUser) => {
+    const a = await inboxSweep(u);
+    await queue('scheduled').add(
+      'run-automation',
+      { automationId: a.id, userId: u.id },
+      { jobId: `fire-${randomUUID()}` },
+    );
+    return a;
+  };
+  const SUMMARY = 'Send an email to priya@example.com with subject "Notes"';
+  const ASK =
+    'I\'d like to send an email to priya@example.com with subject "Notes". Approve or Deny below.';
+  const BY_AUTOMATION =
+    'Asked by one of your automations. Tex carries on in the web app after your answer.';
+
+  it('asked in web chat: it stays in the web app, nothing goes to Telegram', async () => {
+    const u = await person();
+    asking((d) => (d.kind === DeliverKind.MESSAGE ? SUMMARY : null));
+    await writeOnWeb(u, 'email Priya the notes');
+    const [a] = await waitApprovals(u.id, 1);
+    expect(a!.automationId).toBeNull();
+    const [asked] = await db()
+      .select()
+      .from(messages)
+      .where(and(eq(messages.userId, u.id), eq(messages.approvalId, a!.id)));
+    expect(asked!.channel).toBe('web');
+
+    await expectContract('decideApproval', await decide(u, a!.id, 'approve'), 200);
+    const [turn] = await waitFor(async () => (answerTurns(u.id).length ? answerTurns(u.id) : null));
+    expect(turn!.sessionKey).toBe('web');
+    await settle();
+    expect(sentTo(u.chatId)).toEqual([]);
+    expect(editsIn(u.chatId)).toEqual([]);
+    expect(await telegramRows(u.id)).toEqual([]);
+  });
+
+  it('asked by an automation’s run: the same question on Telegram; answered on web, the copy loses its buttons', async () => {
+    const u = await person();
+    asking((d) => (d.kind === DeliverKind.AUTOMATION ? SUMMARY : null));
+    const auto = await fireAutomation(u);
+    const [a] = await waitApprovals(u.id, 1);
+    expect(a!.automationId).toBe(auto.id);
+    const [copy] = await waitFor(async () => (sentTo(u.chatId).length ? sentTo(u.chatId) : null));
+    expect(copy!.body.text).toBe(`${ASK}\n\n${BY_AUTOMATION}`);
     expect(buttonsOf(copy!)?.map((b) => b.callback_data)).toEqual([
-      `apr:${a.id}:yes`,
-      `apr:${a.id}:no`,
+      `apr:${a!.id}:yes`,
+      `apr:${a!.id}:no`,
     ]);
 
-    await expectContract('decideApproval', await decide(u, a.id, 'approve'), 200);
+    await expectContract('decideApproval', await decide(u, a!.id, 'approve'), 200);
     const [edit] = await waitFor(async () => (editsIn(u.chatId).length ? editsIn(u.chatId) : null));
     expect(edit!.body).toEqual({
       chat_id: u.chatId,
-      message_id: Number(await sentMessageId(u, a.id)),
-      text:
-        'I\'d like to send an email to priya@example.com with subject "Notes". Approve or Deny below.\n\n' +
-        'Asked in the web app. Tex carries on there after your answer.\n\n✅ Approved on web',
+      message_id: Number(await sentMessageId(u, a!.id)),
+      text: `${ASK}\n\n${BY_AUTOMATION}\n\n✅ Approved on web`,
     });
     expect(edit!.body).not.toHaveProperty('reply_markup');
 
-    // The agent goes on in web chat, in the conversation the question was asked in.
+    // The agent goes on in the Automations chat, where the question was asked.
     const [turn] = await waitFor(async () => (answerTurns(u.id).length ? answerTurns(u.id) : null));
     expect(turn!.sessionKey).toBe('web');
-    const webChat = await activeConversation(u.id, 'web');
+    const [asked] = await db()
+      .select()
+      .from(messages)
+      .where(
+        and(eq(messages.userId, u.id), eq(messages.approvalId, a!.id), eq(messages.channel, 'web')),
+      );
     const [answer] = await waitFor(async () => {
       const rows = await db()
         .select()
@@ -521,10 +605,10 @@ describe('approvals on Telegram everywhere', () => {
         .where(and(eq(messages.userId, u.id), eq(messages.eventId, turn!.deliveryId)));
       return rows.length ? rows : null;
     });
-    expect(answer!.conversationId).toBe(webChat.id);
+    expect(answer!.conversationId).toBe(asked!.conversationId);
 
     // A late tap on the copy: the first answer won.
-    await tgPost(telegramButton(Number(u.chatId), `apr:${a.id}:no`));
+    await tgPost(telegramButton(Number(u.chatId), `apr:${a!.id}:no`));
     const late = await waitFor(async () =>
       sentTo(u.chatId).find((c) => String(c.body.text).includes('already answered')),
     );
@@ -533,22 +617,74 @@ describe('approvals on Telegram everywhere', () => {
     expect(answerTurns(u.id)).toHaveLength(1);
   });
 
-  it('denied with a tap on the Telegram copy: web chat goes on, the copy says so', async () => {
+  it('denied on the Telegram copy: the run goes on in the web app, and its next question is copied too', async () => {
     const u = await person();
-    const a = await requestApproval({
-      userId: u.id,
-      sessionKey: 'web',
-      summary: 'Delete the draft',
-    });
+    // The run asks; in the turn after the answer, the same run's work asks one more thing.
+    asking((d) =>
+      d.kind === DeliverKind.AUTOMATION
+        ? 'Delete the draft'
+        : d.kind === DeliverKind.APPROVAL_ANSWER && answerTurns(u.id).length === 1
+          ? 'Archive the thread'
+          : null,
+    );
+    const auto = await fireAutomation(u);
+    const [a] = await waitApprovals(u.id, 1);
     await waitFor(async () => (sentTo(u.chatId).length ? true : null));
-    await tgPost(telegramButton(Number(u.chatId), `apr:${a.id}:no`));
+    await tgPost(telegramButton(Number(u.chatId), `apr:${a!.id}:no`));
     const [edit] = await waitFor(async () => (editsIn(u.chatId).length ? editsIn(u.chatId) : null));
     expect(String(edit!.body.text)).toMatch(/\n\n❌ Denied on Telegram$/);
     const [turn] = await waitFor(async () => (answerTurns(u.id).length ? answerTurns(u.id) : null));
     expect(turn!.sessionKey).toBe('web');
     expect(turn!.approved).toBe(false);
     // The web app is answered too: deciding again there is refused.
-    await expectContract('decideApproval', await decide(u, a.id, 'approve'), 409);
+    await expectContract('decideApproval', await decide(u, a!.id, 'approve'), 409);
+
+    // The turn after the answer is still the automation's work.
+    const [, next] = await waitApprovals(u.id, 2);
+    expect(next!.automationId).toBe(auto.id);
+    const second = await waitFor(async () =>
+      sentTo(u.chatId).find((c) =>
+        String(c.body.text).startsWith("I'd like to archive the thread"),
+      ),
+    );
+    expect(buttonsOf(second)?.map((b) => b.callback_data)).toEqual([
+      `apr:${next!.id}:yes`,
+      `apr:${next!.id}:no`,
+    ]);
+  });
+
+  it('nothing on Telegram for an automation’s approval while "An automation needs my OK" is off', async () => {
+    const u = await person();
+    await setNotifications(u, { automationApprovals: false });
+    asking((d) => (d.kind === DeliverKind.AUTOMATION ? SUMMARY : null));
+    const auto = await fireAutomation(u);
+    const [a] = await waitApprovals(u.id, 1);
+    expect(a!.automationId).toBe(auto.id);
+    // Still answered in the web app as usual.
+    await expectContract('decideApproval', await decide(u, a!.id, 'approve'), 200);
+    await waitFor(async () => (answerTurns(u.id).length ? true : null));
+    await settle();
+    expect(sentTo(u.chatId)).toEqual([]);
+    expect(await telegramRows(u.id)).toEqual([]);
+  });
+
+  it('a test run ("Run once now") is the user’s own: its approval stays in the web app', async () => {
+    const u = await person();
+    asking((d) => (d.kind === DeliverKind.AUTOMATION ? SUMMARY : null));
+    const a = await inboxSweep(u);
+    await expectContract(
+      'runAutomationNow',
+      await call(`/v1/automations/${a.id}/run`, {
+        method: 'POST',
+        token: u.token,
+        body: { clientRequestId: randomUUID() },
+      }),
+      202,
+    );
+    const [asked] = await waitApprovals(u.id, 1);
+    expect(asked!.automationId).toBeNull();
+    await settle();
+    expect(sentTo(u.chatId)).toEqual([]);
   });
 
   it('asked on Telegram: no second copy, and its own buttons go after the tap', async () => {
@@ -570,23 +706,84 @@ describe('approvals on Telegram everywhere', () => {
     expect(turn!.sessionKey).toBe(`telegram:${u.chatId}`);
   });
 
+  it('asked on Telegram by an automation’s work: asked there once, whatever the switch', async () => {
+    const u = await person();
+    await setNotifications(u, { automationApprovals: false });
+    await requestApproval({
+      userId: u.id,
+      sessionKey: `telegram:${u.chatId}`,
+      summary: 'Send an email to priya@example.com',
+      automationId: 'aut_x',
+    });
+    await waitFor(async () => (sentTo(u.chatId).length ? true : null));
+    await settle();
+    expect(sentTo(u.chatId)).toHaveLength(1);
+  });
+
+  it('a crew job’s "run it again?" follows who started the job', async () => {
+    const offer = async (u: TestUser, automationId: string | null) => {
+      const [row] = await db()
+        .insert(crewJobs)
+        .values({
+          id: newId('crj'),
+          userId: u.id,
+          member: 'byte',
+          source: automationId ? 'chat' : 'app',
+          owner: 'acme',
+          repo: 'web',
+          branch: 'main',
+          instructions: 'Fix login',
+          sessionKey: 'web',
+          status: 'done',
+          automationId,
+          blocked: [
+            {
+              kind: 'command',
+              tool: 'Bash',
+              target: 'curl -s https://x.test',
+              why: 'it reaches the internet',
+            },
+          ],
+        })
+        .returning();
+      await offerCrewRerun(u.id, row!.id, null);
+      const [a] = await waitApprovals(u.id, 1);
+      return a!;
+    };
+    // Given in the web app: the question stays there.
+    const web = await person();
+    expect((await offer(web, null)).automationId).toBeNull();
+    // Started by an automation's run: copied to Telegram while the switch is on.
+    const byRun = await person();
+    const a = await offer(byRun, 'aut_x');
+    expect(a.automationId).toBe('aut_x');
+    const [copy] = await waitFor(async () =>
+      sentTo(byRun.chatId).length ? sentTo(byRun.chatId) : null,
+    );
+    expect(String(copy!.body.text)).toMatch(/^I'd like to run Byte's job/);
+    expect(String(copy!.body.text).endsWith(`\n\n${BY_AUTOMATION}`)).toBe(true);
+    expect(buttonsOf(copy!)?.map((b) => b.callback_data)).toEqual([
+      `apr:${a.id}:yes`,
+      `apr:${a.id}:no`,
+    ]);
+    await settle();
+    expect(sentTo(web.chatId)).toEqual([]);
+  });
+
   it('nothing goes to Telegram when it is not linked', async () => {
     const u = await person({ telegram: false });
     const a = await requestApproval({
       userId: u.id,
       sessionKey: 'web',
       summary: 'Pay the invoice',
+      automationId: 'aut_x',
     });
     await expectContract('decideApproval', await decide(u, a.id, 'approve'), 200);
     await waitFor(async () => (answerTurns(u.id).length ? true : null));
     await settle();
     // (Other tests' late messages may still arrive meanwhile: only this user's would name it.)
     expect(tg.filter((c) => JSON.stringify(c.body).includes('invoice'))).toEqual([]);
-    const own = await db()
-      .select()
-      .from(messages)
-      .where(and(eq(messages.userId, u.id), eq(messages.channel, 'telegram')));
-    expect(own).toEqual([]);
+    expect(await telegramRows(u.id)).toEqual([]);
   });
 
   it('says how each approval ended', () => {

@@ -57,10 +57,10 @@ Each entry has a heading with the date and the name of the feature, then the par
 - **Cost and speed:** none.
 - **Contracts:** none.
 - **Database:** none.
-- **How it was checked:** the landing page's lint and build passed, the built terms page has no placeholder left, and `textcrew.in/terms` was opened after the deploy.
+- **How it was checked:** the landing page's lint and build passed, the built terms page has no placeholder left, and after the deploy `textcrew.in/terms` answered 200 with Rahul Kumar, Chandigarh and the 14-day refund; Pricing links to it.
 - **Still open:** the full privacy policy (the privacy page is still a summary).
 - **Docs updated:** `hld-mvp.md` section 12 (the refund decision marked decided, and the lines that said the terms page was waiting), `backend-report.md` section 28, "Refunds and chargebacks" (the rule and who makes a refund).
-- **Commits:** landing page `71e3c5f` (the filled terms page) and the merge `b88e836`; backend COMMIT_ID (these docs).
+- **Commits:** landing page `71e3c5f` (the filled terms page) and the merge `b88e836`; backend 92ffcfa (these docs).
 
 ### 16 October 2026: automations with steps, the real run on the test server (4d) and its fixes
 

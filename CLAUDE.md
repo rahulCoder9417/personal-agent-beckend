@@ -54,7 +54,7 @@ Fill these in during Phase 0 and keep them current:
 - OpenAPI lint: `pnpm openapi:lint` · Regenerate API types: `pnpm openapi:gen`
 - Regenerate gRPC client: `pnpm proto:gen`
 - Migrations: `pnpm db:generate && pnpm db:migrate`
-- Sync the spec to the frontend: `pnpm openapi:sync` (copies to `../user-frontend/ignore/`)
+- Sync the spec to the frontend: `pnpm openapi:sync` (copies to `../user-frontend-web/ignore/`)
 
 ## Paths
 

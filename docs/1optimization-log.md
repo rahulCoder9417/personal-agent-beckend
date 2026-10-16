@@ -50,7 +50,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 16 October 2026: automations on a canvas, phase 2 (drafts from the chat)
 
-- **Where it is:** on the branch `feat/automations-canvas` in the backend, the vm-manager and the web app, not on `main` yet. Not on the test server.
+- **Where it is:** on `main` and on the test server (backend with migration 0026, and vm-manager), and live in the web app, since 16 October.
 - **Why:** your decisions on `automations-flow-proposal.md`: anything more than a plain reminder goes through a draft the user saves, on web and Telegram; Telegram gets a Save button and the link; the web chat card has Save; drafts last 7 days, at most 20 open. It also closes a gap: a run that read an outsider's email could talk Tex into making an automation the user never saw.
 - **What the user notices:**
   - Asking "every Monday at 9, send me my open pull requests" no longer makes the automation at once. Tex proposes it, and the chat shows it as a draft that has not been saved.
@@ -87,7 +87,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 16 October 2026: automations on a canvas, phase 1 (read-only)
 
-- **Where it is:** on the branch `feat/automations-canvas` in the backend and the web app, not on `main` yet. Not on the test server.
+- **Where it is:** on `main` and on the test server (backend), and live in the web app, since 16 October.
 - **Why:** you approved `automations-flow-proposal.md` (option A, with C to follow). Phase 1 shows today's automations as a flow before anything can be built by hand.
 - **What the user notices:** each automation card on the Automations page has a small strip of its five steps and opens a page of its own. That page draws the automation as five boxes joined by arrows: when it runs, what Tex does, the apps, "asks you first" and where the results go (the Automations chat, and "Copy to Telegram" for one made there). Clicking a box, or Tab and Enter, opens its details under the canvas (beside it on a very wide screen). Phones, and anyone who picks "List view", get the same boxes as a list. Nothing can be changed on the canvas yet; pausing, resuming and deleting work as on the card.
 - **Backend:** the api reads one automation (`GET /v1/automations/{id}`), only the user's own. Each automation now also says where the copy of each answer goes (`copyTo`: Telegram, or none) and its trigger's settings, for example the repository a pull-request review watches. Both were already in the table; the api did not give them out.

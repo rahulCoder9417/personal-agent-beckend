@@ -2320,7 +2320,8 @@ A plan decides how many credits a user gets each month and what they may use. Th
 
 | | Free | Pro | Max |
 |---|---|---|---|
-| Price | $0 | $12 a month | $30 a month |
+| Price (launch price, charged now) | $0 | $19 a month | $30 a month |
+| Regular price | | $30 a month | $50 a month |
 | Credits | 100 once, at sign-up | 1,500 every month | 4,500 every month |
 | Apps | 10, a fixed list | All 25 | All 25 |
 | Automations | 1 | 5 | 50 |
@@ -2331,6 +2332,7 @@ A plan decides how many credits a user gets each month and what they may use. Th
 | Queue priority | Last | Middle | First |
 | Textcrew AI models | Cheap model only | All models | All models |
 
+- **Launch prices.** Pro and Max have a launch price (what a checkout charges, $19 and $30) and a regular price ($30 and $50). The plans list in the API gives both (`priceCents` and `regularPriceCents`; Free has no regular price). The web app and the website show the regular price as plain words beside the launch price, never struck out, because it has never been charged. Polar's products are priced at the launch price, and the Polar check compares them with it. Set on 16 October, to be looked at again later.
 - **Sign-up credits.** Every new account gets 100 credits once. They last 90 days. They are given when the account is set up, together with the user's LiteLLM key. If the monthly cap on free credits is reached, they are not given (see "Coupon codes").
 - **Automations:** a repo with pull-request review switched on counts as one.
 - **An own MCP server** is a tool server the user adds to their agent.
@@ -2501,7 +2503,7 @@ A chargeback is a payment the cardholder disputes with their bank. Polar sends n
 
 ### The waitlist offer
 
-Waitlist members get 50% off the first month: Pro for $6, or Max for $15. The api adds the discount to a checkout only when all of this is true:
+Waitlist members get 50% off the first month: Pro for $9.50, or Max for $15. The api adds the discount to a checkout only when all of this is true:
 
 1. The discount is set up (`POLAR_WAITLIST_DISCOUNT_ID`).
 2. The checkout is for a plan, not a top-up.
@@ -2538,7 +2540,7 @@ Before taking payments, a read-only check compares Polar's setup with our plans:
 |---|---|
 | Server | Which Polar system is in use, and the API version |
 | Access token | That it is set (every line below also proves it works) |
-| Pro product, Max product | A monthly subscription, not archived, no free trial, one fixed price in US dollars that matches our plan ($12, $30) |
+| Pro product, Max product | A monthly subscription, not archived, no free trial, one fixed price in US dollars that matches what our plan charges now ($19, $30) |
 | Top-up product | A one-time purchase of $10 |
 | Waitlist discount | 50% off, once, no code anyone could type, on Pro and Max and not on the top-up. Not set means the waitlist offer is off |
 | Webhook endpoint | One endpoint for `<PUBLIC_API_URL>/webhooks/polar`, switched on, format "raw", API version `2026-10`, with every event in the table above |

@@ -48,6 +48,39 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 16 October 2026: the databases' move to Neon in Singapore, prepared (not run)
+
+- **Where it is:** on the branch `ops/neon-singapore`, not merged, since 16 October. **Prepared only: nothing has been run.** The server still uses Neon in Ohio. The move waits for you to create the new Neon project.
+- **Why:** every trip to the database from the Mumbai server to Neon in Ohio takes about 209 to 260 ms, and a reply still makes about a dozen of them one after another. You approved preparing a move to Neon's Singapore region, about 35 to 60 ms away. Neon can't move a project to another region, so this is a new project and a copy of the data.
+- **What the user notices:** nothing yet. After the move, about 2.5 seconds less on every message, and faster pages in the web app. During the move, about 5 minutes (at most about 10) in which the bot doesn't answer and the web app shows errors.
+- **Backend:** a new one-off script, `move-neon-region.sh`, next to the first move's script, built the same way:
+  - It reads the three Singapore addresses from `compose.env`, where you put them as `NEW_*` lines.
+  - It checks everything before it stops anything. The three addresses must be there, must not point at the Ohio host, must be direct (not pooled) and must name the same database as today. Both projects must answer and run the same Postgres version (18 in Ohio, checked on the server today). Every extension in use must exist in Singapore, and the new databases must be empty. It also points out when a new address's encryption setting differs from today's.
+  - Then it stops the api, worker, vm-manager and LiteLLM, and copies each database. It compares every table's row count on both sides. Only then does it switch the addresses in `compose.env`, keeping the Ohio ones as `OLD_*`, and run the deploy, which starts everything and checks health.
+  - If a step fails before the switch, `compose.env` is untouched and the services start again on Ohio, which was only read.
+  - It has a dry run that prints the plan and the checks, and a rollback that is one swap back.
+  - LiteLLM is stopped too, though only the other three were named: it writes its own records, and a write during the copy would be lost.
+  - Checked on the server (read only): the Ohio project runs Postgres 18.6. The server only uses the `agent`, `vm_manager` and `litellm` databases. The landing page's `neondb` is not used by the server, so it stays in Ohio. The word "neondb" in `compose.env` is only part of the user name, `neondb_owner`.
+- **Cost and speed:** about 35 to 60 ms a trip instead of 209 to 260 ms, so about 2.5 s off a Telegram reply, the vm-manager's own trips shorter as well, and every page faster. Expected from Neon's region distances, not measured yet. Neon's bill: the server's always-on compute moves to the new project, and the Ohio project is then used only by the landing page. No new AWS cost.
+- **Contracts:** none.
+- **Database:** no change to any table. The same three databases, in a new place.
+- **How it was checked:** 16 new automated tests. They run the script with stand-in Postgres tools, because there is no database or Docker in the test run. They check:
+  - that the script parses, and that it refuses: a missing or empty new address, a missing current address, the old host, a pooled address, another database name, a new database that has tables (before stopping anything), and another Postgres version;
+  - that an unknown option is rejected;
+  - that the dry run prints the plan and changes nothing;
+  - the whole move: each database dumped and restored, `compose.env` switched with the old addresses kept as `OLD_*`, other lines left in place, the file readable only by its owner, and a copy of the old file kept;
+  - the rollback and its dry run;
+  - row counts that differ stopping the move before the switch;
+  - that no password is printed.
+
+  Results: 16 of 16 pass. The full run on the branch, rebased on today's `main`: lint and type check clean, 1,048 of 1,048 tests pass in 91 files. An earlier full run, before the rebase, had 2 to 7 failures that changed from one run to the next. They were in tests this change doesn't touch (automation drafts, crew jobs), and `main` has since fixed that timing race. Not run against a real database or on the server.
+- **Still open:**
+  - Your steps in the Neon console (`aws-setup.md`, section 8, "Moving the databases to Neon in Singapore"): the new project in Singapore on Postgres 18, the three databases, and the three direct addresses in `compose.env` as `NEW_*`.
+  - Then merge, deploy, the dry run, the move and the checks.
+  - After about a week of good replies, delete the three Ohio databases (not the project, which holds the waitlist) and the `OLD_*` lines.
+- **Docs updated:** `aws-setup.md`, sections 6, 8 (the runbook) and 14.
+- **Commits:** backend `783380e` (the script and its tests), `6617291` (the runbook), `6b755b3` (this entry) and the commit that adds the results to this entry.
+
 ### 16 October 2026: the privacy page's promises made true
 
 - **Where it is:** on the branch `fix/privacy-retention` in the backend, the vm-manager, the landing page and the web app. Not on `main`, not on the server.

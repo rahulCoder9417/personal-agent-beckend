@@ -10,6 +10,7 @@ import { conversationFor, noteMessage, type ConversationRow } from './conversati
 import { getMessageById, setMessageStatus, toApiMessage, type MessageRow } from './messages.ts';
 import { messages } from './schema.ts';
 import { publish } from './stream.ts';
+import { inQuietHours } from './notify.ts';
 import { noteSendingToChat } from './typing.ts';
 import {
   parseSessionKey,
@@ -176,6 +177,8 @@ export async function handleSendMessage(job: Job): Promise<unknown> {
       ...(data.buttons ? { buttons: data.buttons } : {}),
       ...(data.template ? { template: data.template } : {}),
     });
+    // The user's quiet hours: a Telegram message still goes now, without a sound.
+    if (target.channel === 'telegram' && (await inQuietHours(msg.userId))) content.silent = true;
     // The saved message keeps the text as it was written; a chat app gets it as plain text.
     // "typing…" in that chat pauses first, so it can't come back under this message.
     await noteSendingToChat(target.channel, target.externalChatId ?? '');

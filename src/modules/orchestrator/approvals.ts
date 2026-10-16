@@ -5,13 +5,20 @@ import { conflict, notFound } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
 import { audit } from '../admin/audit.ts';
 import { conversationOfApproval } from '../channels/messages.ts';
+import { copyApprovalQuestion, settleApprovalMessages } from '../channels/notify.ts';
 import { queueOutbound } from '../channels/outbound.ts';
 import { publish } from '../channels/stream.ts';
 import type { InboundMessage } from '../channels/types.ts';
 import { whileTyping } from '../channels/typing.ts';
 import { ingestEvent } from '../events/intake.ts';
 import { IGNORED } from '../../worker/ignored.ts';
-import { APPROVE_TITLE, approvalAskText, channelOfSession, DENY_TITLE } from './approval-text.ts';
+import {
+  APPROVE_TITLE,
+  approvalAskText,
+  approvalEndNote,
+  channelOfSession,
+  DENY_TITLE,
+} from './approval-text.ts';
 import { approvals } from './schema.ts';
 import { runTurn, turnMessageFields } from './turn.ts';
 
@@ -84,7 +91,11 @@ export async function requestApproval(input: {
     })
     .returning();
   const a = row!;
-  await queueOutbound({
+  const buttons = [
+    { id: `apr:${a.id}:yes`, title: APPROVE_TITLE },
+    { id: `apr:${a.id}:no`, title: DENY_TITLE },
+  ];
+  const asked = await queueOutbound({
     userId: input.userId,
     sessionKey: input.sessionKey,
     // Asked during a turn: the question belongs to that turn's conversation.
@@ -92,10 +103,12 @@ export async function requestApproval(input: {
     text: approvalAskText(a.summary, channelOfSession(input.sessionKey)),
     approvalId: a.id,
     template: 'approval',
-    buttons: [
-      { id: `apr:${a.id}:yes`, title: APPROVE_TITLE },
-      { id: `apr:${a.id}:no`, title: DENY_TITLE },
-    ],
+    buttons,
+  });
+  // Asked elsewhere: the same question on the user's Telegram too. The first answer wins.
+  await copyApprovalQuestion(input.userId, asked, {
+    text: approvalAskText(a.summary, 'telegram'),
+    buttons,
   });
   await publish(input.userId, 'approval.created', toApiApproval(a));
   await audit({
@@ -174,6 +187,8 @@ export async function decideApproval(
     throw conflict(`Approval is already ${existing.status}`);
   }
   await publish(userId, 'approval.resolved', toApiApproval(row));
+  const outcome = approve ? 'approved' : 'rejected';
+  await settleApprovalMessages(userId, id, outcome, approvalEndNote(outcome, via));
   await audit({
     userId,
     actor: 'user',
@@ -341,6 +356,7 @@ export async function replaceApproval(
     .returning();
   if (!row) return null;
   await publish(userId, 'approval.resolved', toApiApproval(row));
+  await settleApprovalMessages(userId, row.id, 'replaced', approvalEndNote('replaced'));
   await audit({
     userId,
     actor: 'agent',
@@ -358,7 +374,10 @@ export async function expireApprovals(): Promise<number> {
     .set({ status: 'expired' })
     .where(and(eq(approvals.status, 'pending'), lte(approvals.expiresAt, new Date())))
     .returning();
-  for (const r of rows) await publish(r.userId, 'approval.resolved', toApiApproval(r));
+  for (const r of rows) {
+    await publish(r.userId, 'approval.resolved', toApiApproval(r));
+    await settleApprovalMessages(r.userId, r.id, 'expired', approvalEndNote('expired'));
+  }
   return rows.length;
 }
 
@@ -450,5 +469,6 @@ export async function cancelApproval(
     throw conflict(`Approval is already ${existing.status}`);
   }
   await publish(row.userId, 'approval.resolved', toApiApproval(row));
+  await settleApprovalMessages(row.userId, id, 'expired', approvalEndNote('expired', 'admin'));
   return row;
 }

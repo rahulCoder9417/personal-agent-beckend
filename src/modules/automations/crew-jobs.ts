@@ -25,6 +25,7 @@ import type { PrCommentTarget } from '../integrations/catalog.ts';
 import { sleepNow } from '../orchestrator/sandbox.ts';
 import { runTurn, type TurnOutcome } from '../orchestrator/turn.ts';
 import { IGNORED } from '../../worker/ignored.ts';
+import { noticeCrewJob } from './crew-notice.ts';
 import { crewJobs } from './schema.ts';
 
 export type CrewJob = typeof crewJobs.$inferSelect;
@@ -664,8 +665,14 @@ export async function handleCrewJob(job: Job): Promise<unknown> {
   try {
     if (!(await connectionForToolkit(claimed.userId, 'github'))) {
       await finish(claimed, 'failed', 'GitHub is not connected.');
-      await tell(
+      const told = await tell(
         `I couldn't start "${jobTitle(claimed)}": GitHub is not connected. Connect it in the web app and give the job again.`,
+      );
+      await noticeCrewJob(
+        claimed,
+        jobTitle(claimed),
+        'GitHub is not connected.',
+        told.conversationId,
       );
       return null;
     }
@@ -684,6 +691,11 @@ export async function handleCrewJob(job: Job): Promise<unknown> {
         title: jobTitle(claimed),
       },
     });
+    // The notice on Telegram goes before the job is marked finished: a queue job that runs again
+    // after a crash in between sends none twice (one per job), and one is never lost.
+    const failure = outcome === 'done' ? null : (OUTCOME_ERRORS[outcome] ?? 'The job was not run.');
+    const reported = (await getCrewJob(claimed.userId, claimed.id)) ?? claimed;
+    await noticeCrewJob(reported, jobTitle(claimed), failure, conversationId);
     if (outcome === 'done') await finish(claimed, 'done');
     else await finish(claimed, 'failed', OUTCOME_ERRORS[outcome] ?? null);
     // The job's work is over: the container may go to sleep now rather than in 3 minutes. The
@@ -700,7 +712,16 @@ export async function handleCrewJob(job: Job): Promise<unknown> {
       );
       await tell(
         `I couldn't run "${jobTitle(claimed)}": the agent couldn't be reached. Please give the job again in a while.`,
-      ).catch((e: unknown) => logger().warn({ err: String(e) }, 'crew job failure not told'));
+      )
+        .then((told) =>
+          noticeCrewJob(
+            claimed,
+            jobTitle(claimed),
+            "The agent couldn't be reached. Give the job again in a while.",
+            told.conversationId,
+          ),
+        )
+        .catch((e: unknown) => logger().warn({ err: String(e) }, 'crew job failure not told'));
     }
     throw err;
   }

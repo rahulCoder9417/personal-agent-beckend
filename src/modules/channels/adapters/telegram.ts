@@ -145,6 +145,8 @@ export const telegramAdapter: ChannelAdapter = {
       const result = await api('sendMessage', {
         chat_id: chatId,
         text: part,
+        // Quiet hours: it arrives as usual, without a sound.
+        ...(content.silent ? { disable_notification: true } : {}),
         ...(isLast && content.buttons?.length
           ? {
               reply_markup: {
@@ -160,6 +162,18 @@ export const telegramAdapter: ChannelAdapter = {
     return { externalId: lastId };
   },
 };
+
+/**
+ * Replaces the text of a message the bot sent, and with it takes its buttons away (an edit without
+ * `reply_markup` leaves none). Throws Telegram's refusal (400 when nothing changes).
+ */
+export async function editTelegramText(
+  chatId: string,
+  messageId: string,
+  text: string,
+): Promise<void> {
+  await api('editMessageText', { chat_id: chatId, message_id: Number(messageId), text });
+}
 
 /** Stops the button spinner after a tap. Best effort. */
 export async function answerCallback(callbackId: string, text?: string): Promise<void> {

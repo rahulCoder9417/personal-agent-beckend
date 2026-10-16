@@ -10,6 +10,7 @@ import {
   recordRun,
   setMinIntervalMs,
 } from '../src/modules/automations/automations.ts';
+import { channelLinks } from '../src/modules/auth/schema.ts';
 import { automations } from '../src/modules/automations/schema.ts';
 import { connections } from '../src/modules/integrations/tables.ts';
 import { db } from '../src/shared/db/client.ts';
@@ -66,13 +67,18 @@ describe('automations on a canvas: what the API says about one', () => {
   it('GET one: every kind, with where the copy goes and the trigger settings', async () => {
     const u = await createUser({ plan: 'max' });
     await connectGithub(u.id);
+    // Made in the user's linked Telegram chat: its copies go there (while it is still theirs).
+    const chatId = String(Math.floor(Math.random() * 1e9));
+    await db()
+      .insert(channelLinks)
+      .values({ id: newId('chl'), userId: u.id, channel: 'telegram', externalId: chatId });
     const repeat = await createAutomation({
       userId: u.id,
       title: 'Monday PRs',
       instruction: 'List my open pull requests',
       cron: '0 9 * * 1',
       timezone: 'Asia/Kolkata',
-      sessionKey: 'telegram:777',
+      sessionKey: `telegram:${chatId}`,
     });
     const once = await createAutomation({
       userId: u.id,

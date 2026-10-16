@@ -1,4 +1,4 @@
-import type { User } from '../modules/auth/users.ts';
+import { notificationSettingsOf, type User } from '../modules/auth/users.ts';
 import type { BalanceSummary } from '../modules/billing/balance.ts';
 import type { Schemas } from './types.ts';
 
@@ -18,5 +18,6 @@ export function toMe(user: User, credits: BalanceSummary): Schemas['Me'] {
     createdAt: user.createdAt.toISOString(),
     onboardingCompletedAt: iso(user.onboardingCompletedAt),
     gettingStartedDismissedAt: iso(user.gettingStartedDismissedAt),
+    notifications: notificationSettingsOf(user),
   };
 }

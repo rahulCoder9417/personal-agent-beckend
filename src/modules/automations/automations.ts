@@ -4,11 +4,19 @@ import { and, count, desc, eq, isNull, ne, or } from 'drizzle-orm';
 import { db, type Tx } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import { logger } from '../../shared/logger.ts';
-import { getActiveUser, isValidTimezone, type PlanId } from '../auth/users.ts';
+import { isChannelEnabled } from '../../shared/config.ts';
+import { listLinks } from '../auth/links.ts';
+import {
+  getActiveUser,
+  getUserCached,
+  isValidTimezone,
+  notificationSettingsOf,
+  type PlanId,
+} from '../auth/users.ts';
 import { automationsChat } from '../channels/conversations.ts';
 import { WEB_APP_NAME } from '../channels/purchase-links.ts';
 import { publish } from '../channels/stream.ts';
-import { parseSessionKey } from '../channels/types.ts';
+import { parseSessionKey, sessionKeyFor } from '../channels/types.ts';
 import { queue } from '../events/queues.ts';
 import { appForToolkit, findApp } from '../integrations/catalog.ts';
 import { connectionForToolkit } from '../integrations/apps.ts';
@@ -50,7 +58,54 @@ export function copyToOf(sessionKey: string): 'telegram' | 'whatsapp' | 'imessag
   return channel && channel !== 'web' ? channel : null;
 }
 
-export function toApiAutomation(a: Automation) {
+export type CopyChannel = ReturnType<typeof copyToOf>;
+/** Where the copies of one user's automations go now (copyRules). */
+export type CopyRule = (a: Pick<Automation, 'sessionKey' | 'preset'>) => string | null;
+
+/**
+ * Where a copy of each run's answer goes now, besides the Automations chat, for one user's
+ * automations: one read of their switches and linked chats (backend-report.md, "Notices on
+ * Telegram"). The rule gives the chat's session key, or null for no copy:
+ * - a pull-request review: the linked Telegram chat, while "pull-request reviews finish" is on
+ *   (it is at first). Review is turned on in the web app, wherever its verdicts were first meant
+ *   to go;
+ * - made in a chat app: that chat, while it is still the user's, not blocked and switched on;
+ * - made in the web app: the linked Telegram chat, only while "automation runs finish" is on
+ *   (it is off at first).
+ */
+export async function copyRules(userId: string): Promise<CopyRule> {
+  const [user, links] = await Promise.all([getUserCached(userId), listLinks(userId)]);
+  const settings = user ? notificationSettingsOf(user) : null;
+  const live = (channel: string, externalId?: string) =>
+    links.find(
+      (l) =>
+        l.channel === channel &&
+        !l.blocked &&
+        (externalId === undefined || l.externalId === externalId) &&
+        isChannelEnabled(l.channel),
+    );
+  const telegram = live('telegram');
+  const telegramKey = telegram ? sessionKeyFor('telegram', telegram.externalId) : null;
+  return (a) => {
+    if (a.preset === 'pr_review') return settings?.prReviews ? telegramKey : null;
+    const made = parseSessionKey(a.sessionKey);
+    if (!made) return null;
+    if (made.channel === 'web') return settings?.automationRuns ? telegramKey : null;
+    return live(made.channel, made.externalChatId ?? '') ? a.sessionKey : null;
+  };
+}
+
+/** The chat app a copy goes to, by the rule (for the API's `copyTo`). */
+export const copyChannel = (rule: CopyRule, a: Pick<Automation, 'sessionKey' | 'preset'>) => {
+  const key = rule(a);
+  return key ? copyToOf(key) : null;
+};
+
+/**
+ * The automation for the API. `copyTo`: where a copy of each answer goes now (copyRules); left
+ * out, the chat app it was made in.
+ */
+export function toApiAutomation(a: Automation, copyTo: CopyChannel = copyToOf(a.sessionKey)) {
   return {
     id: a.id,
     kind: a.kind,
@@ -62,7 +117,7 @@ export function toApiAutomation(a: Automation) {
     trigger: a.trigger
       ? { app: a.trigger.app, event: a.trigger.event, config: a.trigger.config ?? {} }
       : null,
-    copyTo: copyToOf(a.sessionKey),
+    copyTo,
     apps: a.apps ?? [],
     preset: a.preset ?? null,
     enabled: a.enabled,
@@ -109,7 +164,8 @@ const schedulerId = (id: string) => `auto-${id}`;
 const onceJobId = (a: Automation) => `auto-${a.id}-${a.runAt!.getTime()}`;
 
 async function emit(a: Automation): Promise<void> {
-  await publish(a.userId, 'automation.updated', toApiAutomation(a));
+  const rule = await copyRules(a.userId);
+  await publish(a.userId, 'automation.updated', toApiAutomation(a, copyChannel(rule, a)));
 }
 
 /**

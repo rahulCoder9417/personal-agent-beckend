@@ -76,7 +76,8 @@ defineTool({
   description:
     'Propose an automation for your user to save. It runs an instruction once (run_at), on a schedule (cron, 5 fields, in their timezone; at most every 15 minutes) ' +
     'or on an app event (trigger: { app, event, config } where event is a Composio trigger slug like GMAIL_NEW_GMAIL_MESSAGE and config its settings). ' +
-    'Give exactly one of run_at, cron, trigger, and the apps it will use (app slugs, e.g. ["github"]). ' +
+    'Give exactly one of run_at, cron, trigger, and the apps it will use (app slugs, e.g. ["github"]): its runs may use only these and the trigger\'s app. ' +
+    'ask_first "changes" when the user wants to be asked before anything that changes something (default "risky": before sending, deleting or paying). ' +
     'The platform checks it as a save would and shows the user a draft with a Save button; nothing runs until they save it, and you cannot save it. ' +
     'To change a draft you proposed, give replaces_draft_id; to change a saved automation, give change_of with its id. ' +
     'For a plain one-time reminder use schedule_reminder instead.',
@@ -94,6 +95,7 @@ defineTool({
       })
       .optional(),
     apps: z.array(z.string().min(1).max(60)).max(10).optional(),
+    ask_first: z.enum(['risky', 'changes']).optional(),
     change_of: z.string().optional(),
     replaces_draft_id: z.string().optional(),
     session_key: z.string().optional(),
@@ -110,6 +112,7 @@ defineTool({
         ...(args.timezone ? { timezone: args.timezone } : {}),
         ...(args.trigger ? { trigger: args.trigger } : {}),
         ...(args.apps ? { apps: args.apps } : {}),
+        ...(args.ask_first ? { askFirst: args.ask_first } : {}),
         ...(args.change_of ? { changeOf: args.change_of } : {}),
         ...(args.replaces_draft_id ? { replaces: args.replaces_draft_id } : {}),
       });
@@ -134,7 +137,9 @@ defineTool({
 defineTool({
   name: 'get_automation_draft',
   description:
-    "One of your user's automation drafts, by id: its parts and its state (open, saved, discarded, replaced or expired).",
+    "One of your user's automation drafts, by id: its parts and its state (open, saved, discarded, replaced or expired). " +
+    'When the user asks you to change a draft (the web app sends "Change this draft (drf_…): …" with their own version from the canvas, madeBy user), ' +
+    'read it here, then propose the change with propose_automation and replaces_draft_id set to its id; a draft of a change keeps its change_of.',
   input: { draft_id: z.string() },
   async run({ userId }, args) {
     const d = await getDraft(userId, args.draft_id);

@@ -2,6 +2,7 @@ import type { Job } from 'bullmq';
 import { eq } from 'drizzle-orm';
 import { config, isChannelEnabled } from '../../shared/config.ts';
 import { db } from '../../shared/db/client.ts';
+import { redis } from '../../shared/redis.ts';
 import { ownsChat } from '../auth/links.ts';
 import { isValidTimezone } from '../auth/users.ts';
 import { automationsChat } from '../channels/conversations.ts';
@@ -116,8 +117,14 @@ export const AUTOMATIONS_CHAT_PATH = '/?chat=automations';
  * naming the automation, the answer, and a last line saying where to follow it up (only while web
  * chat is on). Sent as it is written; the chat app's own plain-text step still runs on it.
  */
-export function copyText(a: Pick<Automation, 'kind' | 'title'>, text: string): string {
-  const head = `${a.kind === 'event' ? '⚡' : '⏰'} ${a.title}`;
+export function copyText(
+  a: Pick<Automation, 'kind' | 'title'>,
+  text: string,
+  opts: { test?: boolean } = {},
+): string {
+  const head = opts.test
+    ? `🧪 Test run: ${a.title}`
+    : `${a.kind === 'event' ? '⚡' : '⏰'} ${a.title}`;
   const tail = isChannelEnabled('web')
     ? `\n\nTo follow up, open the Automations chat in ${WEB_APP_NAME}: ${config().WEB_APP_URL}${AUTOMATIONS_CHAT_PATH}`
     : '';
@@ -131,7 +138,11 @@ export function copyText(a: Pick<Automation, 'kind' | 'title'>, text: string): s
  * in that chat. Once per message, so a job that runs again sends no second copy. Nothing is sent
  * to a chat that is no longer the user's, that blocked the bot, or whose channel is switched off.
  */
-async function copyToChat(a: Automation, message: MessageRow | undefined): Promise<void> {
+async function copyToChat(
+  a: Automation,
+  message: MessageRow | undefined,
+  opts: { test?: boolean } = {},
+): Promise<void> {
   const target = parseSessionKey(a.sessionKey);
   if (!message || !target || target.channel === 'web' || !isChannelEnabled(target.channel)) return;
   const link = await ownsChat(a.userId, target.channel, target.externalChatId ?? '');
@@ -139,7 +150,7 @@ async function copyToChat(a: Automation, message: MessageRow | undefined): Promi
   await queueOutbound({
     userId: a.userId,
     sessionKey: a.sessionKey,
-    text: copyText(a, message.text),
+    text: copyText(a, message.text, opts),
     copyOf: message.id,
   });
 }
@@ -159,6 +170,7 @@ async function runAutomationTurn(
 ): Promise<TurnOutcome> {
   const chat = await automationsChat(a.userId);
   const outcome = await runTurn({
+    automationId: a.id,
     userId: a.userId,
     deliveryId,
     kind,
@@ -198,19 +210,85 @@ async function runAutomationTurn(
  * What an automation-turn job is about. Its data, or, for a job re-added from its saved event
  * after Redis lost its jobs (that job has only the event id), the event's payload.
  */
-async function timerRunOf(job: Job): Promise<{ automationId?: string; dueAt?: string }> {
-  const data = job.data as { automationId?: string; dueAt?: string; eventId: string };
+async function timerRunOf(
+  job: Job,
+): Promise<{ automationId?: string; dueAt?: string; test?: boolean }> {
+  const data = job.data as {
+    automationId?: string;
+    dueAt?: string;
+    test?: boolean;
+    eventId: string;
+  };
   if (data.automationId) return data;
   const payload = (await getEvent(data.eventId))?.payload as
-    { automationId?: string; dueAt?: string } | undefined;
+    { automationId?: string; dueAt?: string; test?: boolean } | undefined;
   return payload ?? {};
+}
+
+/** The line in the Automations chat before a test run, which marks it as one. */
+export function testRunNotice(a: Pick<Automation, 'title'>): string {
+  return `🧪 Test run of "${a.title}", started by you. It runs once now, as a real run would, and costs what a run costs. The schedule doesn't change.`;
+}
+
+/**
+ * The text of a test run: the instruction, after a note that says it is a test the user started,
+ * and for an app event that no event happened.
+ */
+export function testRunText(a: Pick<Automation, 'kind' | 'title' | 'instruction'>): string {
+  const event =
+    a.kind === 'event'
+      ? ' No app event happened, so there is no event data: follow the instruction as well as you can without it, for example with the latest matching item, and say what you used.'
+      : '';
+  return `[Test run of automation "${a.title}", started by the user from the web app.${event} Start your answer with "Test run:".] ${a.instruction}`;
+}
+
+/**
+ * A test run ("Run once now"): one turn in the Automations chat, on or paused, marked by a line
+ * before it and in its copy to a chat app. It moves no schedule, finishes no one-time reminder,
+ * counts no failure, and pauses nothing (at zero credits the turn just says so). The line is sent
+ * once per run, also when the job runs again.
+ */
+async function runTestTurn(a: Automation, eventId: string): Promise<void> {
+  const chat = await automationsChat(a.userId);
+  // Once per run: a job that runs again finds the mark and sends no second line.
+  const first = await redis()
+    .set(`test-run-notice:${eventId}`, '1', 'EX', 24 * 3600, 'NX')
+    .catch(() => 'OK');
+  if (first === 'OK')
+    await queueOutbound({
+      userId: a.userId,
+      sessionKey: chat.sessionKey,
+      conversationId: chat.id,
+      inAutomationsChat: true,
+      text: testRunNotice(a),
+    });
+  const outcome = await runTurn({
+    automationId: a.id,
+    userId: a.userId,
+    deliveryId: eventId,
+    kind: 'automation',
+    sessionKey: chat.sessionKey,
+    channel: chat.channel,
+    text: testRunText(a),
+    conversationId: chat.id,
+    inAutomationsChat: true,
+    metadata: { automationId: a.id, title: a.title, test_run: true },
+  });
+  if (outcome === 'suspended') return;
+  await copyToChat(a, await turnReply(a.userId, eventId), { test: true });
 }
 
 /** inbound/automation-turn: same path as a normal message, with the saved instruction. */
 export async function handleAutomationTurn(job: Job): Promise<unknown> {
   const { eventId } = job.data as { eventId: string };
-  const { automationId, dueAt } = await timerRunOf(job);
+  const { automationId, dueAt, test } = await timerRunOf(job);
   const a = automationId ? await load(automationId) : undefined;
+  // A test run is the user's own "Run once now": on or paused, but not a finished reminder.
+  if (test) {
+    if (!a || a.completedAt) return IGNORED;
+    await runTestTurn(a, eventId);
+    return null;
+  }
   if (!a || !a.enabled) return IGNORED;
   const note = dueAt ? lateNote(new Date(dueAt), new Date(), a.timezone ?? 'UTC') : null;
   await runAutomationTurn(

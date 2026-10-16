@@ -53,6 +53,12 @@ export interface TurnInput {
    * meanwhile the run starts a new one. Never the conversation the user has open.
    */
   inAutomationsChat?: boolean;
+  /**
+   * An automation's run (a timer, an app event or a test run): the automation. Noted beside the
+   * turn in Redis, so the agent's tools can hold the run to the automation's own limits (its
+   * apps, "ask me first").
+   */
+  automationId?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -209,6 +215,8 @@ export interface CurrentTurn {
   inAutomationsChat: boolean;
   /** What the turn is: the user's message, an automation's run, an app event, … */
   kind?: TurnKind;
+  /** An automation's run: the automation. */
+  automationId?: string;
 }
 
 /** Never fails the turn: without the record a reply goes to the chat's active conversation. */
@@ -274,6 +282,26 @@ export async function automationRunInProgress(userId: string): Promise<boolean |
     return typeof kind === 'string' && AUTOMATION_RUNS.has(kind);
   } catch (err) {
     logger().warn({ userId, err: String(err) }, 'kind of the turn not readable');
+    return 'unknown';
+  }
+}
+
+/**
+ * The automation whose run is the user's turn in progress, in any chat (a timer, an app event or
+ * a test run). Null: no turn in progress, or a turn that is not an automation's run. `unknown`:
+ * the record could not be read.
+ */
+export async function turnAutomation(userId: string): Promise<string | null | 'unknown'> {
+  try {
+    const raw = await redis().get(turnConversationKey(userId));
+    if (!raw) return null;
+    const record = JSON.parse(raw) as { kind?: unknown; automationId?: unknown };
+    if (typeof record.kind !== 'string' || !AUTOMATION_RUNS.has(record.kind)) return null;
+    return typeof record.automationId === 'string' && record.automationId
+      ? record.automationId
+      : null;
+  } catch (err) {
+    logger().warn({ userId, err: String(err) }, 'automation of the turn not readable');
     return 'unknown';
   }
 }
@@ -567,6 +595,7 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
     turnId: input.deliveryId,
     inAutomationsChat: input.inAutomationsChat === true,
     kind: input.kind,
+    ...(input.automationId ? { automationId: input.automationId } : {}),
   });
   const outcome = await deliverTurn(
     input,

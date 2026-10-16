@@ -1,4 +1,6 @@
+import { appEvents } from '../../modules/integrations/app-events.ts';
 import { appCatalogFor, disconnect, startConnect } from '../../modules/integrations/apps.ts';
+import { appForToolkit, findApp } from '../../modules/integrations/catalog.ts';
 import { composioCallbackUrl } from '../../modules/integrations/composio.ts';
 import {
   createMcpServer,
@@ -7,7 +9,8 @@ import {
   toApiMcpServer,
   updateMcpServer,
 } from '../../modules/integrations/mcp-servers.ts';
-import { notFound } from '../../shared/errors.ts';
+import { logger } from '../../shared/logger.ts';
+import { notFound, unavailable } from '../../shared/errors.ts';
 import { route } from '../router.ts';
 
 export const appRoutes = [
@@ -29,6 +32,18 @@ export const appRoutes = [
     c.header('cache-control', 'no-store');
     c.header('referrer-policy', 'no-referrer');
     return c.redirect(composioCallbackUrl(new URL(c.req.url).search), 302);
+  }),
+
+  // The events an app can start an automation on, for the canvas's picker (kept 10 minutes).
+  route('listAppEvents', async (c, { params }) => {
+    const app = findApp(params.appSlug) ?? appForToolkit(params.appSlug);
+    if (!app) throw notFound('Unknown app');
+    try {
+      return c.json({ items: await appEvents(app.toolkit) }, 200);
+    } catch (err) {
+      logger().warn({ app: app.slug, err: String(err) }, 'app events not listed');
+      throw unavailable(`Couldn't get ${app.name}'s events just now. Try again in a moment.`);
+    }
   }),
 
   route('disconnectApp', async (c, { params }) => {

@@ -19,6 +19,8 @@ import {
   CREW_RERUN_ACTION,
   GIT_PUSH_ACTION,
 } from '../src/modules/orchestrator/approval-kinds.ts';
+import { approvalAskText } from '../src/modules/orchestrator/approval-text.ts';
+import { gateSummary, pushSummary } from '../src/modules/orchestrator/gate.ts';
 import { approvals, sandboxTokens } from '../src/modules/orchestrator/schema.ts';
 import { sha256Hex } from '../src/shared/crypto.ts';
 import { db } from '../src/shared/db/client.ts';
@@ -534,5 +536,36 @@ describe('crew jobs: the brief is the yes for its own branch, nothing more', () 
     expect(delivered.text).toContain('your user has approved each of them since');
     // The yes is used: answering again does not start a third job.
     expect((await approvalsOf(user.id, CREW_RERUN_ACTION))[0]!.usedAt).not.toBeNull();
+  });
+});
+
+describe('what the user reads (Telegram, iMessage)', () => {
+  it('says plainly what the command or the push is', () => {
+    expect(
+      approvalAskText(
+        gateSummary({
+          tool: 'Write',
+          target: '/data/home/.npmrc',
+          why: 'it overwrites a file outside the workspace',
+        }),
+        'telegram',
+      ),
+    ).toBe(
+      "I'd like to write the file /data/home/.npmrc (it overwrites a file outside the workspace). Approve or Deny below.",
+    );
+    expect(
+      approvalAskText(
+        pushSummary({ owner: 'acme', repo: 'web', branch: 'develop', force: true }),
+        'telegram',
+      ),
+    ).toBe(
+      'I\'d like to force push to the branch "develop" of acme/web (it rewrites the branch\'s history). Approve or Deny below.',
+    );
+    expect(
+      approvalAskText(
+        pushSummary({ owner: 'acme', repo: 'web', branch: 'develop', force: false }),
+        'imessage',
+      ),
+    ).toBe('I\'d like to push to the branch "develop" of acme/web, which already existed.');
   });
 });

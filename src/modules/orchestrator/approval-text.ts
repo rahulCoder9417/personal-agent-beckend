@@ -29,6 +29,7 @@ const VERBS = new Set([
   'delete',
   'edit',
   'email',
+  'force',
   'forward',
   'invite',
   'label',

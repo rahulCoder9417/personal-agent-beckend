@@ -50,7 +50,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 16 October 2026: "check my email" without the waste: short app answers, fewer database trips, steps in plain words
 
-- **Where it is:** on `main` (backend and vm-manager) and live in the web app since 16 October. The backend and Bridge parts reach the server with the next deploy.
+- **Where it is:** on `main` and on the test server (backend and vm-manager), and live in the web app, since 16 October.
 - **Why:** on 15 October "check my email" took 62 seconds. The model made 13 rounds instead of about 3, for 46.6 of those seconds (Claude Code, Sonnet 4.6, effort low, your own plan). What caused it:
   - `list_app_actions` sent all 63 Gmail actions with every input of each: about 115 thousand characters, some 33 thousand tokens. The agent paged through that with Claude Code's own tools.
   - Composio's email fetch sends every email's whole body and raw message unless told not to.
@@ -181,7 +181,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 16 October 2026: "Tex is working…" no longer stays under a finished answer
 
-- **Where it is:** on `main` (backend) and live in the web app since 16 October. The backend log lines reach the server with the next deploy.
+- **Where it is:** on `main` and on the test server (backend), and live in the web app, since 16 October.
 - **Why:** at 10:32 AM you sent "hlo" in web chat. Tex answered "Hey! How can I help you today?", but "Tex is working…" stayed under the answer and your message kept saying "Tex is on it", though the turn was over. What happened, from the server's logs, the message as it is saved and the turn's timing record (India time):
   1. **10:32:15.** The message was saved and the turn started. The container was asleep and woke in 2.6 seconds.
   2. **10:32:19.** The agent took the message. The worker marked it "processing" and the agent "busy", and sent both to the web app. That is what "Tex is on it" and "Tex is working…" show.
@@ -205,7 +205,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 16 October 2026: the crew is asked for in chat; the web app's Crew page and crew jobs screen are gone
 
-- **Where it is:** on `main` in the vm-manager (the Bridge passage) and live in the web app since 16 October. The Bridge part reaches containers with the next deploy.
+- **Where it is:** on `main` and on the test server (the Bridge passage, in the vm-manager), and live in the web app, since 16 October.
 - **Why:** you wanted the crew simpler. The web app had a Crew page (a card per member) with a form for crew jobs ("Give Patch a review", "Give Byte a job") and a list of them. Byte and Patch are now used only from the chat: asking Tex to make a code change means Byte, and a pull-request review means Patch.
 - **What the user notices:**
   - **No Crew page, no jobs form, no jobs list.** "Crew" is gone from the sidebar, from More and from the phone's tabs. The old address `/crew` leads to the crew's part of Help (`/help#crew`).
@@ -232,7 +232,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 16 October 2026: a blue dot on unread conversations
 
-- **Where it is:** on `main` (backend, with migration 0025) and live in the web app since 16 October. The backend part is not on the test server yet.
+- **Where it is:** on `main` and on the test server (backend, with migration 0025), and live in the web app, since 16 October.
 - **Why:** you asked for the web app's chat list to show which conversations have something new in them: a reply from Tex, or anything else the user hasn't seen yet. Until now only the Automations chat had a mark, and each browser kept it for itself, so the phone and the laptop disagreed.
 - **What the user notices:**
   - **A blue dot** before the name of a conversation with a message from Tex they haven't seen, and the name a little bolder. It shows in the list beside the chat and in the phone's drawer. With the list put away, the button that shows it has a dot too.

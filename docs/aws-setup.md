@@ -174,6 +174,8 @@ Everything is under `/opt/textcrew`, owned by the `ubuntu` user.
 
 **Added for the move to Neon** (section 8): `BACKEND_DATABASE_URL`, `VM_MANAGER_DATABASE_URL` and `LITELLM_DATABASE_URL`, the three Neon addresses. Their values are in `.env.deploy` on the laptop. With them set, the api, worker, vm-manager and LiteLLM use Neon, and `beckend/.env`'s own `DATABASE_URL` is no longer read. The `POSTGRES_*` lines stay: they are what the move script uses to read the old copy.
 
+**For the move to Singapore** (section 8, prepared 16 October, not run): `NEW_BACKEND_DATABASE_URL`, `NEW_VM_MANAGER_DATABASE_URL` and `NEW_LITELLM_DATABASE_URL` hold the Singapore addresses until the move. The move puts them in use and keeps the Ohio ones as `OLD_*` until they are cleaned up. The services never read the `NEW_*` or `OLD_*` lines.
+
 **What `beckend/.env` sets:** every variable from `.env.example`, checked on 2026-10-01 (names only):
 
 - **Set:** the database and Redis URLs, `PUBLIC_API_URL` and `WEB_APP_URL` (both `https://3-111-132-222.sslip.io`), the encryption key, `CLERK_SECRET_KEY`, the vm-manager URL and shared secret, the LiteLLM URL, master key and model names, the Telegram bot token, bot name and webhook secret, `COMPOSIO_API_KEY` and `COMPOSIO_AUTH_CONFIGS`, `METRICS_TOKEN`, `NODE_ENV=production`, `TRUST_PROXY=true`, `AI_ACCESS_MODE=platform`.
@@ -262,6 +264,61 @@ All three services connect to Neon's **direct** address (the host name without `
 5. Send the bot a message, and open the web app.
 
 **To go back** (if the move fails part way, or something is wrong after it): remove the three lines from `compose.env`, then `./dc --profile localdb --profile app up -d`. The old copy is exactly as it was when the services stopped. Anything written on Neon after the move would be lost by going back.
+
+### Moving the databases to Neon in Singapore
+
+Prepared on 16 October 2026, **not run yet**. Since 14 October the databases are on Neon in Ohio (`us-east-2`), and every trip to the database from the Mumbai server takes about 209 to 260 ms. A reply makes about a dozen trips one after another, so roughly 2.5 seconds of every message is spent waiting on the distance. Neon's Singapore region (`aws-ap-southeast-1`) is about 35 to 60 ms away. Neon has no Mumbai region, so Singapore is the closest one.
+
+A Neon project can't change its region, so this is a new project and a second copy of the data.
+
+| | Today | After the move |
+|---|---|---|
+| Neon project | Ohio (`us-east-2`) | A new one in Singapore (`ap-southeast-1`) |
+| Databases | `agent`, `vm_manager`, `litellm` | The same three names |
+| One trip to the database | 209 to 260 ms | About 35 to 60 ms |
+| The landing page's waitlist (`neondb`) | Ohio | Stays in Ohio; the server never reads it |
+
+**What runs the move:** `beckend/infra/deploy/move-neon-region.sh`. It works like `move-to-neon.sh`. It first prints its plan and checks everything, and changes nothing until every check has passed:
+
+- the three new addresses are in `compose.env` as `NEW_BACKEND_DATABASE_URL`, `NEW_VM_MANAGER_DATABASE_URL` and `NEW_LITELLM_DATABASE_URL`;
+- none of them points at the Ohio host;
+- each is a direct address (no `-pooler`) and names the same database as today;
+- both projects answer and run the same Postgres version (18);
+- every extension in use exists in Singapore;
+- each new database is empty.
+
+Then it stops the api, worker, vm-manager and LiteLLM. It copies each database, compares the number of rows in every table on both sides and, only when they match, switches the three addresses in `compose.env`. The Ohio addresses stay in the file as `OLD_*`, so going back is one command. Last, it runs `deploy.sh`, which starts everything on Singapore and checks health.
+
+If anything fails before the switch, `compose.env` is left as it was and the services start again on Ohio, which was only read. A copy of `compose.env` from before the switch is kept as `compose.env.bak-<time>`. The copies of the data and the row counts are kept in `backups/neon-region-move-<time>/`.
+
+**Your steps, in the Neon console:**
+
+1. New project. Region **AWS Asia Pacific (Singapore)**, Postgres **18** (the same as Ohio). Any name, for example `textcrew-sg`. If Neon says your plan has no room for a second project, stop and tell Claude.
+2. In the new project, under Databases, create three databases named exactly `agent`, `vm_manager` and `litellm`, owned by the default owner (`neondb_owner`). Leave them empty.
+3. For each of the three, open **Connect**, pick the database, turn **Connection pooling off** (the host must not contain `-pooler`) and copy the address.
+4. Put them on the server in `/opt/textcrew/compose.env`, after keeping a copy of it, as three new lines: `NEW_BACKEND_DATABASE_URL=` (the `agent` address), `NEW_VM_MANAGER_DATABASE_URL=` (`vm_manager`) and `NEW_LITELLM_DATABASE_URL=` (`litellm`). In the backend's line, change `sslmode=require` to `sslmode=verify-full`, as in today's `BACKEND_DATABASE_URL`. Also add the three lines to `.env.deploy` on the laptop. You can give the addresses to Claude to put in instead; they are never printed.
+
+Adding the `NEW_*` lines changes nothing by itself: the services only read the three lines without `NEW_`.
+
+**Then Claude's steps, on the server, from `/opt/textcrew`:**
+
+1. `./deploy.sh`, so the server has the code with the script (after it is merged to `main`).
+2. `beckend/infra/deploy/move-neon-region.sh --dry-run`. The plan must show `Neon us-east-2 -> Neon ap-southeast-1` for all three databases, `Postgres: old 18, new 18`, `new: exists, 0 tables`, and no "note" lines. Nothing is changed.
+3. Run the move in the background, like a deploy, so a lost connection can't cut it off. The output goes to `move.log` and the exit code to `move.exit`:
+   `rm -f move.exit && (nohup sh -c "beckend/infra/deploy/move-neon-region.sh > move.log 2>&1; echo \$? > move.exit" > /dev/null 2>&1 < /dev/null &)`
+4. `cat move.exit; tail -n 30 move.log`. It ends with "move done" and the deploy's health check.
+5. Check: `https://api.textcrew.in/healthz` answers, the bot answers a message, the web app opens, and the request log shows shorter times than before.
+
+**Expected downtime:** about 5 minutes, at most about 10, during which the bot doesn't answer and the web app shows errors. The databases are small (about 1,200 rows in all on 14 October), so most of the time goes on the round trips of the copy and on the services starting again. A Telegram message sent during the stop is delivered again by Telegram once the api is back.
+
+**To go back:** `beckend/infra/deploy/move-neon-region.sh --rollback` (it also takes `--dry-run`). It stops the services, puts the `OLD_*` (Ohio) addresses back in use, keeps the Singapore ones as `NEW_*`, and deploys. Ohio is exactly as it was when the services stopped for the move. Anything written in Singapore after the move is not copied back. To try the move again later, delete and re-create the three Singapore databases first, because the script refuses to copy into a database that has tables.
+
+**When to clean up:** after a few good days (about a week, with replies working and at least one nightly backup taken from Singapore):
+
+- in the Neon console, delete the **three databases** `agent`, `vm_manager` and `litellm` in the Ohio project;
+- remove the three `OLD_*` lines from `compose.env`.
+
+Don't delete the Ohio project itself: the landing page's waitlist (`neondb`) is still there.
 
 ---
 
@@ -400,6 +457,7 @@ aws ec2 authorize-security-group-ingress --no-cli-pager --group-id sg-0a41006d88
 - **The git gateway against real GitHub:** a real clone, a branch push, and the refusal of a push to the default branch. It also depends on Composio returning the GitHub token to the api, which has not been confirmed.
 - **The nightly backup** after the `pg_dump` fix, and a restore from it. Since 14 October the image has `pg_dump` 18, to match Neon. Neon also keeps its own history of the databases, so the nightly copy is a second, independent one.
 - **The move to Neon** (section 8) is written and was tried from the laptop into scratch Neon databases, but has not been run on the server.
+- **The move to Neon in Singapore** (section 8) is prepared, not run. The script was tested only with stand-in Postgres tools. It waits for the new Neon project, which you create.
 - **RAM with several users awake.** One user's container with the browser used 625 to 661 MiB of its 2 GiB limit after a turn (2026-10-05); the peak with a heavy page open was not measured.
 - **Composio's webhook reaching the server.** The secret is set (2026-10-05); no delivery from Composio has been seen yet, so pull-request review's trigger is unproven.
 - **Clerk's webhook reaching the server, on the production setup.** On the development setup it worked: the first sign-up in the web app arrived through it (2026-10-08). The production setup has a new webhook and a new secret (2026-10-15). No real sign-up had been done on it when this was written, so its first delivery has not been seen.

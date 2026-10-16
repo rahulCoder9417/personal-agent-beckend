@@ -880,17 +880,27 @@ export async function offerCrewRerun(
  * inbound/process-approval, for a "run the job again" approval (undefined for any other: the
  * usual handler answers those). After the yes the job runs again as a new job with the same brief,
  * and each item the earlier run was refused gets an approval of its own, usable once during the
- * new run. After a no nothing happens. Safe to run again: the yes is used once.
+ * new run. After a no the job's chat is told it will not run again. Safe to run again: the yes is used once.
  */
 export async function handleCrewRerunAnswer(job: Job): Promise<unknown> {
   const { approvalId, userId } = job.data as { approvalId?: string; userId?: string };
   if (!approvalId || !userId) return undefined;
   const a = await getApproval(userId, approvalId);
   if (!a || a.action !== CREW_RERUN_ACTION) return undefined;
-  if (a.status !== 'approved') return IGNORED;
+  if (a.status !== 'approved' && a.status !== 'rejected') return IGNORED;
   const earlierId = typeof a.arguments?.crew_job_id === 'string' ? a.arguments.crew_job_id : '';
   const earlier = earlierId ? await getCrewJob(userId, earlierId) : undefined;
   if (!earlier) return IGNORED;
+  if (a.status === 'rejected') {
+    // No agent turn for a no: a short line in the job's chat says so.
+    await queueOutbound({
+      userId,
+      sessionKey: earlier.sessionKey,
+      conversationId: earlier.conversationId,
+      text: `OK. I won't run "${jobTitle(earlier)}" again.`,
+    });
+    return null;
+  }
   const brief: CheckedBrief = {
     member: earlier.member,
     owner: earlier.owner,

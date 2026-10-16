@@ -9,7 +9,8 @@ import type { Worker } from 'bullmq';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DeliverKind } from '../proto-gen/vm/v1/vm_pb.ts';
-import { crewBranchName } from '../src/modules/automations/crew-jobs.ts';
+import { crewBranchName, offerCrewRerun } from '../src/modules/automations/crew-jobs.ts';
+import { messages } from '../src/modules/channels/schema.ts';
 import { crewJobs } from '../src/modules/automations/schema.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
 import { setGitUpstream } from '../src/modules/integrations/git-gateway.ts';
@@ -536,6 +537,46 @@ describe('crew jobs: the brief is the yes for its own branch, nothing more', () 
     expect(delivered.text).toContain('your user has approved each of them since');
     // The yes is used: answering again does not start a third job.
     expect((await approvalsOf(user.id, CREW_RERUN_ACTION))[0]!.usedAt).not.toBeNull();
+  });
+});
+
+describe('running a crew job again: the no', () => {
+  it('starts nothing and says so in the job’s chat', async () => {
+    const user = await chatUser({ plan: 'pro' });
+    const id = newId('crj');
+    await db()
+      .insert(crewJobs)
+      .values({
+        id,
+        userId: user.id,
+        member: 'byte',
+        status: 'done',
+        source: 'chat',
+        owner: 'acme',
+        repo: 'web',
+        instructions: 'Fix the login redirect loop.',
+        sessionKey: 'web',
+        blocked: [{ kind: 'command', tool: 'Bash', target: CURL, why: 'it reaches the internet' }],
+      });
+    await offerCrewRerun(user.id, id, null);
+    await offerCrewRerun(user.id, id, null); // asked once only
+    const asked = await approvalsOf(user.id, CREW_RERUN_ACTION);
+    expect(asked).toHaveLength(1);
+    await call(`/v1/approvals/${asked[0]!.id}/decision`, {
+      method: 'POST',
+      token: user.token,
+      body: { decision: 'reject' },
+    });
+    await waitFor(async () =>
+      (
+        await db()
+          .select()
+          .from(messages)
+          .where(and(eq(messages.userId, user.id), eq(messages.direction, 'out')))
+      ).find((m) => m.text === 'OK. I won\'t run "Fix the login redirect loop in acme/web" again.'),
+    );
+    expect(await db().select().from(crewJobs).where(eq(crewJobs.rerunOf, id))).toHaveLength(0);
+    expect(vmFake.deliveries.filter((d) => d.userId === user.id)).toHaveLength(0);
   });
 });
 

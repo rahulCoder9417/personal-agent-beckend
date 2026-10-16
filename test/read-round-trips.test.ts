@@ -14,7 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { audit } from '../src/modules/admin/audit.ts';
 import { createAutomation } from '../src/modules/automations/automations.ts';
 import { subscribe } from '../src/modules/channels/stream.ts';
-import { closeQueues } from '../src/modules/events/queues.ts';
+import { closeQueues, queue, QUEUES } from '../src/modules/events/queues.ts';
 import { requestApproval } from '../src/modules/orchestrator/approvals.ts';
 import { saveMemory } from '../src/modules/orchestrator/memory.ts';
 import { setChatCompleter, setJevClient } from '../src/modules/orchestrator/routing.ts';
@@ -48,8 +48,25 @@ let workers: Worker[];
 let user: Awaited<ReturnType<typeof chatUser>>;
 let conversationId: string;
 
+/**
+ * No job running or waiting to run (a timer's next run excepted). Every query of the process is
+ * counted, so a job of the setup still running (the first turn's billing, a reply going out) would
+ * be counted as the page's on a busy machine.
+ */
+async function quiet() {
+  await waitFor(async () => {
+    for (const name of QUEUES) {
+      const n = await queue(name).getJobCounts('active', 'waiting', 'prioritized', 'delayed');
+      const delayed = name === 'scheduled' ? 0 : (n.delayed ?? 0);
+      if ((n.active ?? 0) + (n.waiting ?? 0) + (n.prioritized ?? 0) + delayed > 0) return false;
+    }
+    return true;
+  }, 30_000);
+}
+
 /** The pool as the api and the worker keep it: DB_POOL_MIN connections open and idle. */
 async function warm() {
+  await quiet();
   await pingDb();
 }
 

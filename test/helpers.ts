@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { Job, Queue } from 'bullmq';
 import { laterSettled } from '../src/shared/later.ts';
 import { importPKCS8, SignJWT } from 'jose';
 import { Webhook } from 'svix';
@@ -124,9 +125,13 @@ export function signClerk(payload: unknown, msgId = `msg_${randomUUID()}`) {
   };
 }
 
+/**
+ * Polls until `fn` gives a value. 20 seconds at most by default: when other test runs load the
+ * machine, a turn with its jobs and retries took longer than the 10 seconds this used to allow.
+ */
 export async function waitFor<T>(
   fn: () => Promise<T | undefined | null | false>,
-  timeoutMs = 10_000,
+  timeoutMs = 20_000,
 ): Promise<T> {
   const start = Date.now();
   for (;;) {
@@ -135,6 +140,24 @@ export async function waitFor<T>(
     if (Date.now() - start > timeoutMs) throw new Error('waitFor timed out');
     await new Promise((r) => setTimeout(r, 50));
   }
+}
+
+/**
+ * A job once it has finished (`completed` or `failed`), read again after its state said so. A job
+ * read while it still ran keeps the fields of that moment: under load, reading the job first and
+ * its state second gave a `completed` job with no return value and an old `attemptsMade`.
+ */
+export async function finishedJob(
+  q: Queue,
+  jobId: string,
+  timeoutMs = 20_000,
+): Promise<{ job: Job; state: 'completed' | 'failed' }> {
+  return waitFor(async () => {
+    const state = await q.getJobState(jobId);
+    if (state !== 'completed' && state !== 'failed') return null;
+    const job = await q.getJob(jobId);
+    return job ? { job, state } : null;
+  }, timeoutMs);
 }
 
 /** The id of web chat's active conversation (started if there is none): for rows a test inserts itself. */

@@ -39,7 +39,9 @@ describe('the warm pool', () => {
   it('opens DB_POOL_MIN connections at start and leaves them idle', async () => {
     await keepDbWarm();
     expect(dbPoolStats()).toEqual({ total: 3, idle: 3, waiting: 0 });
-    expect(await poolPids()).toHaveLength(3);
+    // A connection closed just before (the migrations', the pool closed in beforeAll) stays in
+    // pg_stat_activity until its backend has exited, which takes a moment on a busy machine.
+    await waitFor(async () => (await poolPids()).length === 3);
   });
 
   it('a query uses a warm connection instead of opening one', async () => {
@@ -59,7 +61,9 @@ describe('the warm pool', () => {
     await waitFor(async () => dbPoolStats().total === 2);
     await pingDb();
     expect(dbPoolStats()).toEqual({ total: 3, idle: 3, waiting: 0 });
-    expect(await poolPids()).not.toContain(victim);
+    // The ended backend leaves pg_stat_activity only once it has exited.
+    await waitFor(async () => !(await poolPids()).includes(victim!));
+    expect(await poolPids()).toHaveLength(3);
   });
 
   it('connections busy with real work are not pinged on top', async () => {

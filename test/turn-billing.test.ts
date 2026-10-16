@@ -32,7 +32,7 @@ import { startWorkers } from '../src/worker/runner.ts';
 import { FakeLiteLLM, FakeVm } from './billing-fakes.ts';
 import { fakeJob, ledgerMatchesGrants, ledgerOf, turnsBilled } from './billing-helpers.ts';
 import { installFakeVm } from './fakes.ts';
-import { call, chatUser, waitFor } from './helpers.ts';
+import { call, chatUser, finishedJob, waitFor } from './helpers.ts';
 
 const RETRY = { retryDelaysMs: [50, 50, 50, 50] };
 /** The api's and the turn's queues. The system queue (billing) is started by each test. */
@@ -212,9 +212,12 @@ describe('the billing job', () => {
     const id = await send(u, 'work');
     await turnOver(u, id);
     await turnsBilled(u.id);
-    const job = await queue('system').getJob(billTurnJobId(fake.deliveries[0]!.deliveryId));
-    expect(await job!.getState()).toBe('completed');
-    expect(job!.attemptsMade).toBe(2);
+    const { job, state } = await finishedJob(
+      queue('system'),
+      billTurnJobId(fake.deliveries[0]!.deliveryId),
+    );
+    expect(state).toBe('completed');
+    expect(job.attemptsMade).toBe(2);
     expect((await usageCharges(u.id)).map((l) => l.delta)).toEqual([-9]);
     expect(await getBalance(u.id)).toBe(91);
     expect(await ledgerMatchesGrants(u.id)).toBe(true);
@@ -301,13 +304,12 @@ describe('what a turn costs, by who pays for the AI', () => {
     };
     fake.state.turnErrorAfterAgent = { message: 'bridge crashed', platformFault: true };
     await turnOver(u, await send(u, 'again'));
-    const refund = await waitFor(async () => {
-      const job = await queue('system').getJob(
-        `refund-fault-${fake.deliveries[1]!.deliveryId.replaceAll(':', '-')}`,
-      );
-      return (await job?.getState()) === 'completed' ? job : null;
-    });
-    expect(refund!.returnvalue).toEqual({ restored: 1 });
+    const { job: refund, state } = await finishedJob(
+      queue('system'),
+      `refund-fault-${fake.deliveries[1]!.deliveryId.replaceAll(':', '-')}`,
+    );
+    expect(state).toBe('completed');
+    expect(refund.returnvalue).toEqual({ restored: 1 });
     await turnsBilled(u.id);
     expect(await getBalance(u.id)).toBe(98);
 

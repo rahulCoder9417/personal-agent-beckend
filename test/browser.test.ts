@@ -130,7 +130,8 @@ describe('who has the browser: the Max plan, while the deployed image has it', (
     );
     expect([free, pro, max].map((u) => fake.browser.get(u!.id))).toEqual([false, false, true]);
     // Nothing more was sent: the state came with CreateSandbox.
-    expect(fake.browserCalls).toEqual([]);
+    // (Only these users' calls count: another test's job can finish late on a busy machine.)
+    expect([free, pro, max].flatMap((u) => callsFor(u!.id))).toEqual([]);
 
     // The image without the browser: a Max user's container is created with it off.
     imageHasBrowser(false);
@@ -143,7 +144,8 @@ describe('the plan changes: the sync-browser job tells the vm-manager', () => {
   it('upgrade to Max → on; downgrade to Pro → off; a renewal changes nothing', async () => {
     const u = await withContainer();
     const fired: string[] = [];
-    const off = onPlanChanged((id) => void fired.push(id));
+    // Only this user's plan changes: another test's can arrive late on a busy machine.
+    const off = onPlanChanged((id) => void (id === u.id && fired.push(id)));
     try {
       const sub: SubOpts = {
         userId: u.id,

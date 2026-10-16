@@ -50,7 +50,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 16 October 2026: automations with steps, the real run on the test server (4d) and its fixes
 
-- **Where it is:** the real run was done on the test server on 16 October, on your current account, on Claude Code. The fixes are on the branch `fix/steps-4d` in the backend, not merged and not on the server yet.
+- **Where it is:** the real run was done on the test server on 16 October, on your current account, on Claude Code. The fixes are on `main` and on the test server since 16 October.
 - **Why:** step 4d of phase 4: Priya's example ("Urgent mail from my boss, in steps") run for real, with Gmail and Tex, to see what the tests with stand-ins could not.
 - **What was run:** the automation was made paused on your account, with its search fixed to emails from your own Gmail to itself with "textcrew-4d" in the subject, and the send's recipient fixed to your own address, so nothing could reach anyone else. Then:
   - No email yet, Run once now: stopped after step 1 ("Nothing to do: step 2 runs only if step 1 found something"), nothing charged. As designed.

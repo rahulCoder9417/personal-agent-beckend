@@ -2,7 +2,7 @@ import { Code, ConnectError } from '@connectrpc/connect';
 import type { Job } from 'bullmq';
 import { deleteUserAudit } from '../admin/audit.ts';
 import { deleteUserLinks } from '../auth/links.ts';
-import { getActiveUser } from '../auth/users.ts';
+import { getActiveUser, scrubDeletedUser } from '../auth/users.ts';
 import { deleteUserChannelData } from '../channels/messages.ts';
 import { deleteAgentSettings } from './agent-settings.ts';
 import { deleteUserApprovals } from './approvals.ts';
@@ -34,7 +34,8 @@ export async function handleOnboardUser(job: Job): Promise<unknown> {
 }
 
 /**
- * system/delete-user: delete the container and the user's data, each module its own tables. Every
+ * system/delete-user: delete the container (with every backup archive of the user's files, which
+ * the vm-manager's DeleteSandbox removes too) and the user's data, each module its own tables. Every
  * step is safe to re-run, so a try that failed half-way is simply run again. The steps that ask
  * outside services and can fail (the offboard hook: Polar, LiteLLM, Composio) come after the
  * user's own data, so a failure there holds back as little as possible. The activity log goes
@@ -62,5 +63,7 @@ export async function handleDeleteUser(job: Job): Promise<unknown> {
   await hooks.offboard(userId);
   // The activity log, with each action's inputs. An admin's record of the deletion stays.
   await deleteUserAudit(userId);
+  // Last, the account row itself keeps its id and `deletedAt` but no email, name or time zone.
+  await scrubDeletedUser(userId);
   return null;
 }

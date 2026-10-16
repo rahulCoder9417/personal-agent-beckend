@@ -127,6 +127,9 @@ export async function upsertUserFromClerk(
     .returning();
   if (inserted) return { user: inserted, created: true };
   const current = await getUserByClerkId(data.clerkId);
+  // A deleted account is never written again: a late "user updated" from Clerk would put back the
+  // email and name its deletion removed (scrubDeletedUser).
+  if (current?.deletedAt) return { user: current, created: false };
   if (
     current &&
     current.email === data.email &&
@@ -138,10 +141,40 @@ export async function upsertUserFromClerk(
   const [updated] = await db()
     .update(users)
     .set({ email: data.email, emailVerified: data.emailVerified, role: data.role })
-    .where(eq(users.clerkId, data.clerkId))
+    .where(and(eq(users.clerkId, data.clerkId), isNull(users.deletedAt)))
     .returning();
-  await forgetUser(updated!.id);
-  return { user: updated!, created: false };
+  // Deleted between the read and the write: left as the deletion made it.
+  if (!updated) return { user: (await getUserByClerkId(data.clerkId))!, created: false };
+  await forgetUser(updated.id);
+  return { user: updated, created: false };
+}
+
+/** The values a deleted account's row keeps instead of the person's own (scrubDeletedUser). */
+export const DELETED_USER_NAME = 'Deleted user';
+export const deletedUserEmail = (userId: string) => `deleted-${userId}@deleted.invalid`;
+
+/**
+ * The last step of an account's deletion: the row stays, so its id, Clerk id and `deletedAt` keep
+ * the credit records, a late webhook and the deletion job's own re-runs working, but nothing in it
+ * names the person any more. The email becomes an address that can never be delivered (`.invalid`
+ * is reserved for that), the name "Deleted user", the time zone UTC. Marks the row deleted if it
+ * was not yet. Safe to run again.
+ */
+export async function scrubDeletedUser(userId: string): Promise<boolean> {
+  const [row] = await db()
+    .update(users)
+    .set({
+      email: deletedUserEmail(userId),
+      emailVerified: false,
+      name: DELETED_USER_NAME,
+      timezone: 'UTC',
+      timezoneSet: false,
+      deletedAt: sql`coalesce(${users.deletedAt}, now())`,
+    })
+    .where(eq(users.id, userId))
+    .returning({ id: users.id });
+  await forgetUser(userId);
+  return Boolean(row);
 }
 
 export async function markUserDeleted(clerkId: string): Promise<User | undefined> {

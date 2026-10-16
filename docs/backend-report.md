@@ -1212,6 +1212,36 @@ The agent must name an earlier request of the same user for the same action; any
 - **The app refuses the approved action.** Nothing happens and nothing is charged. The agent may try once more, or ask again with the corrected inputs; the earlier request is then replaced (above).
 - **The account is deleted.** Every approval of the user goes, in any state, with the inputs saved with it. A job that still holds one of their ids finds nothing and does nothing.
 
+### Approvals for the agent's own actions
+
+Since 16 October the same approvals also cover what the agent does itself, not only actions in the user's apps. Two parts of the platform ask: Claude Code's gate, for its commands and file changes, and the git gateway, for pushes (section 17). Each approval says what kind it is, so the card can show it plainly: an app's action, a crew job, a command, a push, or running a crew job again.
+
+**The rules.** Textcrew's own "auto mode" for Claude Code:
+
+| | What it covers |
+|---|---|
+| Runs without asking | Reading and searching. Edits and commands inside the workspace (a crew job's folder is inside it) or the temporary folders. Tests and builds. Local git. Pushing a new branch the agent made, and more commits on it |
+| Asks first | A push to a branch that already existed, and any force push (the git gateway). A network command (`curl`, `wget`, `ssh`, a script's inline code that opens a connection, git with an address that is not GitHub) while Scout's browser is on: only then can the container reach any website. Changing git's remotes (`git remote add`, `set-url`, settings for remotes, addresses or credentials). Deleting or overwriting files outside the workspace |
+| Never | The platform's own files and the sign-in files (the container's token, Claude Code's sign-in, Hermes's settings). The default branch. Deleting a branch on GitHub |
+
+**How a call is decided on Claude Code.**
+
+1. Commands and file changes (Claude Code's Bash, Edit, Write and NotebookEdit) are no longer on the session's list of tools that run without asking. Each call goes first to the gate, a small program the Bridge gives Claude Code as a hook, which runs before the call.
+2. The gate reads the call against the rules. "Runs without asking" lets it through. "Never" refuses it with the reason.
+3. "Asks first" sends the exact call to the api (`/mcp/gate`, with the container's token: the api takes the user from the token, never from what the container says). If the user already approved exactly this call and it was not used, it runs, once. Otherwise the api saves an approval with the exact command or file, sends the usual question to the chat of the turn in progress ("I'd like to run this command: curl -s https://example.com (it reaches the internet). Approve or Deny below."), and the gate refuses the call with "your user was asked; end your turn now".
+4. After the yes a new turn starts, as for any approval: "The user APPROVED: … Go ahead: make exactly the same command again." The gate asks the api again, finds the approved, unused approval for exactly that command, and lets it through once. A command that differs in any character is a new request.
+5. The yes counts for 24 hours from the answer. A request that is still waiting is not asked twice: the same card stays. At most 10 such requests can wait at once.
+
+**Failing closed.** Because commands and file changes are on no list of what runs without asking, a gate that crashes, does not start or runs past its 30 seconds means the call is refused, not run. So does an api that cannot be reached. Reading and searching stay on that list (they need no OK); the platform's own files are also in Claude Code's own deny rules, which hold whatever the gate does. The gate reads commands carefully, but a shell can do anything, and a script written to a file and run later is not looked into. The walls stay the container (gVisor, no privileges, the egress proxy) and the git gateway, which checks every push itself.
+
+**On Hermes.** Hermes has no gate. It keeps refusing its own "dangerous command" prompts by itself, as before. Its pushes go through the same git gateway and meet the same rules.
+
+**In a crew job.** Nothing is asked during the job's run. The brief is the user's yes for the job's own branch and its pull request only (section 20). Anything else the gate or the git gateway refuses is kept on the job, and the agent names it in the report under "Needs your OK". After the run the user gets one more question: "I'd like to run Byte's job "…" again, with these allowed: …". After Approve the job runs again as a new job, with the same brief, and each listed item gets an approval of its own, usable once and only during that new run.
+
+**What the user sees.** In web chat the card shows the exact command or file in full, why it needs an OK and the folder; a push shows the repository and the branch, and warns when it is a force push; a "run again" lists what will be allowed. Telegram gets the same sentence with the Approve and Deny buttons; iMessage gets "Reply YES to approve or NO to deny".
+
+**Example.** Rahul's Claude Code has the browser on and wants `curl -s https://status.acme.com/api`. The gate asks; Rahul gets the card and taps Approve; the next turn runs the same `curl` once. A second `curl` later is asked again.
+
 ## 16. The user's own MCP servers
 
 A user on the Max plan can add tool servers of their own. The agent then has those tools next to the platform's tools.
@@ -1268,22 +1298,31 @@ The git gateway lets the agent use normal git on the user's GitHub repositories.
 | Request | Result |
 |---|---|
 | Clone or fetch | Allowed |
-| Push to a branch | Allowed |
+| Push a new branch | Allowed. The gateway remembers that the agent made it |
+| Push more commits to a branch the agent made | Allowed |
+| Push to a branch that already existed | Needs the user's yes, once (section 15, "Approvals for the agent's own actions") |
+| Force push (one that rewrites a branch's history) | Needs the user's yes, for a force push |
+| During a crew job: push the job's own branch | Allowed: the brief is the yes |
 | Push to the default branch | Refused |
 | Delete a branch | Refused |
 | Push or delete a tag | Refused |
 
 - The default branch is the main line of the code, often named `main`. The api asks GitHub which branch it is. If GitHub cannot be asked, the push is refused.
+- **Telling a force push from new commits.** GitHub takes a force push from anyone who may push, so the gateway tells the two apart itself, from what the push sends. A push that only adds commits starts from the branch's current commit. The gateway reads the new commits in the push and follows them back through their parents. If it meets the branch's current commit, the push only adds commits. If it reaches commits GitHub already has, it asks GitHub whether the branch's commit comes before them. Whatever it cannot read counts as a force push, so the user is asked. A push too big to read (over 64 MB) is refused with "push fewer or smaller commits at a time".
+- **The user's yes for a push** names the repository, the branch and whether it is a force push. A yes for a force push also covers new commits; a yes for new commits never covers a force push. It works once, within 24 hours of the answer. When GitHub then does not take the push, the yes can be used again.
+- **The question** goes to the chat of the turn in progress, and git prints the refusal as "remote: This push needs your user's OK, so nothing was pushed. They were asked in the chat: …". The agent ends its turn and pushes again after the yes. This is the same for Claude Code and Hermes: the gateway does not ask which engine pushes.
 - A change reaches the default branch only through a pull request: a proposed change that waits for review. Merging one needs the user's approval.
 - Every clone, fetch and push is written to the activity log. The limit is 300 requests a minute per user.
 
-**Example.** Rahul texts "fix the typo in the README of acme/website". Byte clones the repository, makes the branch `fix-typo`, pushes it and opens a pull request. A push to `main` would come back with "Pushing to the default branch (main) is not allowed."
+**Example.** Rahul texts "fix the typo in the README of acme/website". Byte clones the repository, makes the branch `fix-typo`, pushes it and opens a pull request. A push to `main` would come back with "Pushing to the default branch (main) is not allowed." A push to `develop`, which Rahul made himself, waits for his yes: "I'd like to push to the branch "develop" of acme/website, which already existed. Approve or Deny below."
 
 ### What can go wrong
 
 - **GitHub is not connected.** Git prints "GitHub is not connected. Ask the user to connect GitHub first."
 - **Composio does not hand over the GitHub access.** Git prints a refusal. It says to use the GitHub app actions instead.
 - **The account cannot see the repository, or GitHub is down.** Git prints the reason. Nothing was changed.
+- **A push to a branch that already existed, outside a turn** (nothing to ask the user in). Refused, with "there is no chat to ask them in now".
+- **The account is deleted.** The list of branches the agent made goes with it.
 
 ## 18. Reminders and automations
 
@@ -1621,6 +1660,8 @@ The list of repositories comes from Composio's GitHub action for the signed-in a
 Approving, requesting changes, merging, closing and pushing to the default branch are never covered. Byte's report goes into the description of the pull request it opens, which needs no yes today. Opening an issue needs none either.
 
 **From chat.** Tex has the tool `start_crew_job`, with the same brief. The job runs as its own turn right after the current one, and Tex tells the user it is queued. Asked again for the same brief while that job still waits or works (within 10 minutes), it starts no second one. A job from chat that would post Patch's review on a pull request needs the user's yes first, through an ordinary approval for that exact brief: "I'd like your OK for this: Patch reviews acme/web#42 and posts the review. Approve or Deny below." The platform cannot tell whether the user really asked for it, or whether a page or an email told Tex to.
+
+**What else the brief covers: nothing.** Since 16 October the brief is also the user's yes for Byte to push the job's own branch (`crew/` and the end of the job's id), force pushes included, and to open the pull request. Nothing else that needs an OK is asked during a job's run (section 15, "Approvals for the agent's own actions"): a push to another branch that already existed, a network command while the browser is on, a change outside the workspace. Each is refused, kept on the job (at most 10), and named in the report under "Needs your OK". When the run is over and something was kept, the user is asked in the job's chat: "I'd like to run Byte's job "Fix the login redirect in acme/web" again, with these 2 allowed: …", with Approve and Deny. After Approve the job runs again as a new job with the same brief (`rerunOf` names the first one), and each item gets an approval of its own, usable once and only during that new run. Its instruction lists what the user approved. After Deny the chat gets "OK. I won't run … again." A review the first run already posted on the pull request is not posted again. The api shows what was kept as `blocked` on the job.
 
 **Clean-up in the container** is done by the Bridge itself, not only by the instructions (section 34).
 
@@ -2895,6 +2936,8 @@ When the delivery asks for it (web chat, section 12), the Bridge also reports th
 
 Risky actions never wait inside a turn. The agent asks the platform for approval, gets "pending", and ends its turn. The user's yes or no arrives later as a new message.
 
+**Claude Code's permissions.** Claude Code runs in its "don't ask" mode, so nothing ever waits for a prompt. Reading, searching and the platform's tools run without asking. Its commands and file changes are on no such list: each call goes first through Textcrew's gate, a hook the Bridge gives it, which lets the call run, refuses it, or has the user asked (section 15, "Approvals for the agent's own actions"). A gate that fails refuses the call. The platform's own files and the sign-in files are also in Claude Code's own deny rules. Hermes has no gate; it answers its own "dangerous command" prompts with no, always.
+
 **Where the turn's time went.** The Bridge times each turn from the moment it takes the delivery, and reports the times with the turn's last event: when the engine started, when it was ready (for Claude Code: the program is up and has asked its tool servers for their tools), the model's first response and the start of its thinking (web chat turns only, where the Bridge sees the model's own stream), the lead's first words and first tool call, the time spent in the lead's own tools and in specialists, when the engine finished, and when the answer was sent. Claude Code also gives its own numbers: its total time, the time in calls to the model, the number of model rounds, and the token counts with the prompt cache. Only names and numbers: no text the user or the agent wrote. The worker stores them with its own (section 9, "Where a turn's time goes").
 
 **Fewer waits around a turn.** The Bridge sends each answer through the platform's tool server, which answers every request on its own. So it introduces itself to that server once per container start, then sends each answer in one request. Before, every answer took three round trips through the egress proxy. Claude Code's two settings files, its tool servers and the hook that keeps the lead off the web, are written only when what they hold changes, not before every turn. On Hermes, after the first check that no specialist is still at work, the second check comes after half a second instead of 2 seconds, so the answer's last round starts sooner.
@@ -3159,7 +3202,7 @@ These are the rules that must never be broken. Each one closes a way in that wou
 | The user id comes from the container's token | An agent cannot act as another user by naming another id |
 | No platform keys in a container | A leaked container cannot act in users' apps or read the database |
 | Secrets are encrypted, tokens and codes are stored as hashes | A stolen copy of the database gives no usable secret |
-| Approvals before risky actions | Sending to others, deleting and paying need the user's yes. One approval fits one exact action, once |
+| Approvals before risky actions | Sending to others, deleting and paying need the user's yes. So do the agent's own risky commands and pushes to a branch that already existed (section 15). One approval fits one exact action, once |
 | Every user query is filtered by user id | One user can never read another user's rows |
 | Every action is in the activity log | The user can see what the agent did, and when |
 | Every admin action on an account needs a reason and is logged | The admin's id and the reason are kept. An admin cannot demote, suspend or delete their own account, and must take another admin's role away before suspending or deleting them |
@@ -3221,7 +3264,7 @@ There are three databases: the backend's, the vm-manager's and LiteLLM's. Each p
 | channels | `attachments` | Files uploaded in the web app or received in a chat |
 | orchestrator | `sandbox_tokens` | The hash of each container's token and the user it belongs to |
 | orchestrator | `agent_settings` | The chosen engine, the AI choice, when Claude was connected, and Claude Code's model and thinking effort |
-| orchestrator | `approvals` | Risky actions waiting for a yes or no, with their exact details |
+| orchestrator | `approvals` | Risky actions waiting for a yes or no, with their exact details: an app's action, a crew job, one of Claude Code's commands, a git push, running a crew job again |
 | orchestrator | `memories` | Short facts about the user that every engine gets |
 | orchestrator | `chat_engines` | Which engine last finished a turn in each conversation |
 | orchestrator | `turn_timings` | Where each turn's time went, stage by stage, for 30 days. Never any text (section 9) |
@@ -3229,11 +3272,12 @@ There are three databases: the backend's, the vm-manager's and LiteLLM's. Each p
 | integrations | `composio_auth_configs` | The Composio setups the server made itself, one per app. Not per user |
 | integrations | `user_mcp_servers` | The user's own MCP servers, with the secret encrypted |
 | integrations | `composio_triggers` | Made for app triggers. No code reads or writes it today |
+| integrations | `git_created_branches` | The branches the agent made through the git gateway: more commits on one need no yes |
 | integrations | `byok_keys` | The user's own AI keys, encrypted, plus the last 4 characters |
 | automations | `automations` | Reminders, repeating tasks and app-event tasks, each with the chat it was made in and the apps the agent named in its draft. Its runs answer in the Automations chat. A column that held a conversation per automation until 13 October is no longer used |
 | automations | `automation_drafts` | Automations the agent proposed and the user has not saved, with their state (open, saved, discarded, replaced, expired), the chat they were proposed in, the automation a change replaces, and the automation a saved one made. Removed after 30 days (section 18, "Drafts") |
 | automations | `pr_reviews` | One row per reviewed pull-request commit, so none is reviewed twice |
-| automations | `crew_jobs` | One row per crew job: the brief, where the report goes, its state, and the report itself |
+| automations | `crew_jobs` | One row per crew job: the brief, where the report goes, its state, the report itself, what its run was refused (`blocked`), and for a job run again, the job it repeats and what the user approved for it |
 | billing | `subscriptions` | Each paid plan: user, Polar id, status, period |
 | billing | `payments` | Polar orders seen, to trace refunds back to a user |
 | billing | `credit_grants` | Each batch of credits: source, amount, what is left, expiry |

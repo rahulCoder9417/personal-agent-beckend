@@ -192,6 +192,12 @@ Example: the user texts "email Priya the notes".
 
 An approval works once, and only for the exact action and details the user saw. If the app still refuses it, the agent asks again with corrected details; the earlier request is then marked "replaced", never "denied", because the user did not say no.
 
+**The agent's own actions** (since 16 October) are asked about the same way, with the same card, the same 24 hours and the same "the answer comes as a new turn":
+
+- **Claude Code's commands and file changes.** Textcrew's own "auto mode" decides each one. Reading, searching, work inside the workspace, tests, builds and local git run without asking. A network command while Scout's browser is on (`curl`, `wget` and the like), changing git's remotes, and deleting or overwriting files outside the workspace ask first. The platform's own files and the sign-in files are never allowed. A small program in the container, the gate, makes this check before every command; a gate that fails refuses the command, it never runs it. The card shows the exact command, and after the yes that exact command runs once.
+- **Git pushes, on both engines.** A new branch the agent makes, and more commits on it, go through. A push to a branch that already existed, and any force push, need the user's yes; the git gateway asks, so this holds for Hermes too. The default branch and deleting a branch stay refused.
+- **Hermes** keeps refusing its own "dangerous command" prompts by itself.
+
 ### 5.4 A reminder or an automation
 
 There are three kinds:
@@ -265,6 +271,8 @@ Each commit is reviewed once. Patch never merges and never approves. Turning rev
 3. Tex hands it to Patch or Byte. They clone into a folder of the job's own, and may start what the job needs there (an install, the app, the tests). A large review may be split into up to three Patch reviews at the same time.
 4. The report comes back in a fixed shape: the verdict, the findings or changes with file and line, the tests run with their results, and what was not checked. It goes to the chat it was asked in, and the platform keeps it on the job. If the brief asked for it, it is also posted on the pull request as one review comment (Patch), put in the pull request Byte opens, or opened as an issue.
 5. After the turn, the container itself stops every program of the job and deletes its folder. Then the container goes to sleep at once, unless something else is running there.
+
+The brief is the user's yes for the job's own branch and its pull request, and for nothing else. Nothing is asked during the job: anything else that needs an OK (a push to another branch that already existed, a network command, a change outside the workspace) is refused and listed in the report. After the job the user is asked whether to run it again with exactly those allowed, with an Approve button; after the yes the job runs again, and each listed item goes through once.
 
 From chat, posting the review on the pull request needs an ordinary approval first. (A brief sent by an app through the API carries its own tick for that, which is the user's yes for that one review, on that pull request, for that job only. No app sends one now.)
 
@@ -366,7 +374,7 @@ These rules hold everywhere in the system.
 6. **A container has no internet.** Its only way out is the egress proxy, with a list per user.
 7. **The agent cannot pretend to be another user.** We know the user from the container's own token, never from what the agent says.
 8. **No platform keys go into a container.** Not for apps, not for models, not for the database.
-9. **Risky actions need the user's yes.** Sending to others, deleting, paying.
+9. **Risky actions need the user's yes.** Sending to others, deleting, paying. Also the agent's own risky actions: on Claude Code, network commands while the browser is on, changing git's remotes and changes outside the workspace; on both engines, a push to a branch that already existed or a force push.
 10. **Secrets are encrypted in the database.** Tokens and codes are stored only as fingerprints that cannot be turned back.
 11. **Everything the agent does is written to the activity log.**
 12. **Only the user makes an automation that repeats or watches an app.** Tex proposes it as a draft; the user saves it. During an automation's run Tex cannot set a reminder either.
@@ -478,6 +486,8 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - The Automations chat: every run, verdict and automation notice answering there, pinned in the web app's chat list with a mark for a new run, and a copy of each answer on Telegram for an automation made there. Built on 13 October, after your decision for a separate automation chat. Checked with the automated tests, and the web app's part in its demo mode in a browser. No real run has gone through it yet. The conversations that automations made for themselves earlier that day stay as ordinary chats.
 - Automations on a canvas, phase 1 (16 October, on the branch `feat/automations-canvas` in the backend and the web app, not on `main` yet): each automation's own page draws it as five boxes (section 5.4), read-only, with a list on phones, and each card on the Automations page has the same steps as a small strip. The API now says where the copy of each answer goes and the trigger's settings, and reads one automation. Checked with the automated tests and the web app's demo mode. No database change.
 - Automations from the chat as drafts, phase 2 (16 October, on the same branch, and in the vm-manager for the Bridge's instructions): Tex proposes anything more than a plain reminder with `propose_automation`; the platform checks it and saves a draft that never runs; web chat shows it as a card with a small diagram and Save, Telegram as an outline with the link and a Save button; the link opens it on the canvas with Save, Save paused and Discard. A draft lasts 7 days, at most 20 are open, and asking again replaces the old one. `create_automation` is no longer Tex's, and `schedule_reminder` is refused during an automation's run. Checked with the automated tests, the web app's demo mode, and end to end on the laptop with the real backend and the web app (stand-ins only for Tex, Composio and Telegram); not yet tried on the server with a real Tex and Telegram. It needs the database update (migration 0026) and the new agent image when it goes to the server.
+
+- Approvals for the agent's own actions (16 October, on the branch `feat/cc-approvals` in the backend, the vm-manager and the web app, not on `main` yet): Textcrew's rule list for Claude Code, its gate in the container (it fails closed: Claude Code's commands and file changes are no longer allowed without it), the git gateway asking before a push to a branch that already existed or a force push (it reads the push to tell the two apart), the crew job's brief as the yes for its own branch only, with "run the job again" after the job, and the card showing the command or the branch. Checked with the automated tests and with the real Claude Code program on the laptop against a stand-in api (a command allowed, one asked about, one refused; a file written inside the workspace, one outside asked about). Not yet run on the server. It needs the database update (migration 0027) and the new agent image when it goes there.
 
 ### Not finished
 

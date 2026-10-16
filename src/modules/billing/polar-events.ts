@@ -9,7 +9,7 @@ import { newId } from '../../shared/ids.ts';
 import { logger } from '../../shared/logger.ts';
 import { IGNORED } from '../../worker/runner.ts';
 import { audit } from '../admin/audit.ts';
-import { flagUser, getUser, setPlan } from '../auth/users.ts';
+import { flagUser, getActiveUser, getUser, setPlan } from '../auth/users.ts';
 import { findWaitlistOffer, markWaitlistOfferUsed } from '../auth/waitlist.ts';
 import { getEvent } from '../events/intake.ts';
 import { markAutoTopUpCredited } from './auto-topup.ts';
@@ -44,6 +44,10 @@ export const POLAR_EVENT_ACTIONS = {
   'subscription.uncanceled': 'Back to active',
   'subscription.past_due': 'Mark past due (plan kept until revoked)',
   'subscription.revoked': 'Access ends now → Free; credits keep their own 90-day expiry',
+  'subscription.paused':
+    'Paused (no payments): the plan ends now → Free. A paid resume starts a new period',
+  'subscription.resumed':
+    'Synced if the subscription still runs; after a pause the paid order.paid brings the plan back',
   'refund.created':
     'Succeeded refund → negative grant for the refunded share; dispute refund → take back all + flag',
   'refund.updated': 'Same as refund.created (a pending refund that has now succeeded)',
@@ -68,13 +72,24 @@ const obj = (d: Data, k: string): Data | undefined =>
 const meta = (d: Data): Record<string, string> =>
   (obj(d, 'metadata') ?? {}) as Record<string, string>;
 
-/** The user: Polar's customer.external_id (set from our user id at checkout), then our metadata. */
+/**
+ * The user: Polar's customer.external_id (set from our user id at checkout), then our metadata.
+ * A live account wins over a deleted one: someone who deleted their account and signed up again
+ * with the same email can meet their old Polar customer, whose external id is the deleted account.
+ * The checkout's own metadata then names the new account.
+ */
 async function resolveUserId(
   d: Data,
   ids: { subscriptionId?: string | null; orderId?: string } = {},
 ): Promise<string | undefined> {
-  for (const candidate of [str(obj(d, 'customer') ?? {}, 'external_id'), meta(d).user_id]) {
-    if (candidate && (await getUser(candidate))) return candidate;
+  const candidates = [str(obj(d, 'customer') ?? {}, 'external_id'), meta(d).user_id].filter(
+    (c): c is string => Boolean(c),
+  );
+  for (const candidate of candidates) {
+    if (await getActiveUser(candidate)) return candidate;
+  }
+  for (const candidate of candidates) {
+    if (await getUser(candidate)) return candidate;
   }
   if (ids.subscriptionId) {
     const sub = await getSubscriptionByPolarId(ids.subscriptionId);
@@ -93,7 +108,14 @@ function planOf(d: Data): PlanId | undefined {
 /** Polar's subscription state in our words. */
 function statusOf(s: Data): SubscriptionStatus {
   const status = str(s, 'status');
-  if (status === 'canceled' || status === 'unpaid' || status === 'incomplete_expired') {
+  // Paused: Polar stops charging and the customer loses access until a resume, which starts a new
+  // period with a fresh payment. For us that is the end of this subscription's paid time.
+  if (
+    status === 'canceled' ||
+    status === 'unpaid' ||
+    status === 'incomplete_expired' ||
+    status === 'paused'
+  ) {
     return 'cancelled';
   }
   if (str(s, 'ended_at')) return 'cancelled';
@@ -126,9 +148,15 @@ async function startPeriod(
   const plan = planOf(s);
   if (!subId || !userId || !plan) return unresolved(event, { subId, userId, plan });
   const existing = await getSubscriptionByPolarId(subId);
-  if (existing?.endedAt) return unresolved(event, { subId, ended: true });
   const eventAt = date(event as Data, 'timestamp') ?? new Date();
   const periodStart = date(s, 'current_period_start') ?? eventAt;
+  // An ended subscription comes back only for a paid period that starts after it ended: a paused
+  // one that was resumed. A late event for the old period (or a revoked plan) stays ignored.
+  const reopen =
+    Boolean(existing?.endedAt) &&
+    str(s, 'status') === 'active' &&
+    periodStart.getTime() > existing!.endedAt!.getTime();
+  if (existing?.endedAt && !reopen) return unresolved(event, { subId, ended: true });
   const periodEnd = date(s, 'current_period_end') ?? new Date(periodStart.getTime() + 30 * DAY);
   const now = new Date();
 
@@ -141,6 +169,7 @@ async function startPeriod(
       status: statusOf(s),
       periodStart,
       periodEnd,
+      ...(reopen ? { endedAt: null } : {}),
     });
     planChanged = await setPlan(userId, plan, tx);
     // Every credit lasts 90 days from the grant, so unused monthly credits carry over (no
@@ -415,6 +444,8 @@ const HANDLERS: Record<keyof typeof POLAR_EVENT_ACTIONS, Handler> = {
   'subscription.uncanceled': syncSubscription,
   'subscription.past_due': syncSubscription,
   'subscription.revoked': syncSubscription,
+  'subscription.paused': syncSubscription,
+  'subscription.resumed': syncSubscription,
   'refund.created': refund,
   'refund.updated': refund,
 };

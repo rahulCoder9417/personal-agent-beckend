@@ -26,6 +26,20 @@ export class FakePolar implements PolarClient {
       checkoutUrl: `https://sandbox.polar.sh/checkout/polar_c_${checkoutId.replace(/-/g, '')}`,
     };
   }
+  /** Users (external ids) Polar has a customer for; the portal link is refused for others. */
+  customers = new Set<string>();
+  portals: Array<{ externalCustomerId: string; returnUrl: string }> = [];
+  /** When set, the next portal call fails as if Polar did not answer. */
+  failPortal = false;
+  async customerPortalUrl(externalCustomerId: string, returnUrl: string) {
+    if (this.failPortal) {
+      this.failPortal = false;
+      throw new Error('Polar POST /v1/customer-sessions/ failed: 503');
+    }
+    this.portals.push({ externalCustomerId, returnUrl });
+    if (!this.customers.has(externalCustomerId)) return null;
+    return `https://sandbox.polar.sh/text-crew/portal?customer_session_token=polar_cst_${randomUUID()}`;
+  }
   async cancelAtPeriodEnd(subscriptionId: string) {
     this.cancelled.push(subscriptionId);
   }

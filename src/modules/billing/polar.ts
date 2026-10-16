@@ -4,7 +4,7 @@
 // webhook-id / -timestamp / -signature, signed over the raw body with POLAR_WEBHOOK_SECRET).
 import { Webhook } from 'standardwebhooks';
 import { config } from '../../shared/config.ts';
-import { badRequest, conflict, planLimit } from '../../shared/errors.ts';
+import { badRequest, conflict, planLimit, unavailable } from '../../shared/errors.ts';
 import { webhookUnauthorized } from '../auth/webhooks.ts';
 import type { User } from '../auth/users.ts';
 import { findWaitlistOffer } from '../auth/waitlist.ts';
@@ -34,10 +34,17 @@ export interface PolarClient {
     customerEmail?: string;
     customerName?: string;
     successUrl: string;
+    /** Polar's checkout shows a back link to this page. */
+    returnUrl?: string;
     metadata: Record<string, string>;
     /** A Polar discount applied to this checkout (the waitlist offer). */
     discountId?: string;
   }): Promise<{ checkoutUrl: string; checkoutId: string }>;
+  /**
+   * POST /v1/customer-sessions/ { external_customer_id, return_url }: a signed-in link to Polar's
+   * customer portal. Null when Polar has no customer for this user yet (nothing bought).
+   */
+  customerPortalUrl(externalCustomerId: string, returnUrl: string): Promise<string | null>;
   /** PATCH /v1/subscriptions/{id} { cancel_at_period_end: true } */
   cancelAtPeriodEnd(subscriptionId: string): Promise<void>;
   /** PATCH /v1/subscriptions/{id} { cancel_at_period_end: false }: un-cancel before it ends. */
@@ -105,25 +112,30 @@ function reasonOf(text: string): string {
   return '';
 }
 
+/** One call to Polar's Core API on the server POLAR_SERVER names, pinned to POLAR_API_VERSION. */
+export async function polarRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const c = config();
+  if (!c.POLAR_ACCESS_TOKEN) throw new Error('POLAR_ACCESS_TOKEN is not set');
+  const res = await fetch(new URL(path, POLAR_API_URLS[c.POLAR_SERVER]), {
+    method,
+    headers: {
+      authorization: `Bearer ${c.POLAR_ACCESS_TOKEN}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+      'polar-version': POLAR_API_VERSION,
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    // Finalizing an order charges the card while we wait: give it longer.
+    signal: AbortSignal.timeout(path.endsWith('/finalize') ? 60_000 : 15_000),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new PolarHttpError(res.status, reasonOf(text), `${method} ${path}`);
+  return (text ? JSON.parse(text) : {}) as T;
+}
+
 class HttpPolar implements PolarClient {
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const c = config();
-    if (!c.POLAR_ACCESS_TOKEN) throw new Error('POLAR_ACCESS_TOKEN is not set');
-    const res = await fetch(new URL(path, POLAR_API_URLS[c.POLAR_SERVER]), {
-      method,
-      headers: {
-        authorization: `Bearer ${c.POLAR_ACCESS_TOKEN}`,
-        'content-type': 'application/json',
-        accept: 'application/json',
-        'polar-version': POLAR_API_VERSION,
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      // Finalizing an order charges the card while we wait: give it longer.
-      signal: AbortSignal.timeout(path.endsWith('/finalize') ? 60_000 : 15_000),
-    });
-    const text = await res.text();
-    if (!res.ok) throw new PolarHttpError(res.status, reasonOf(text), `${method} ${path}`);
-    return (text ? JSON.parse(text) : {}) as T;
+  private request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    return polarRequest<T>(method, path, body);
   }
 
   async createCheckout(input: Parameters<PolarClient['createCheckout']>[0]) {
@@ -133,12 +145,31 @@ class HttpPolar implements PolarClient {
       ...(input.customerEmail ? { customer_email: input.customerEmail } : {}),
       ...(input.customerName ? { customer_name: input.customerName } : {}),
       success_url: input.successUrl,
+      ...(input.returnUrl ? { return_url: input.returnUrl } : {}),
       metadata: input.metadata,
+      // No free trials: a trial set on a product in Polar's dashboard must not start a paid plan
+      // (and its monthly credits) without a payment. Our plans have none (HLD section 7).
+      allow_trial: false,
       // Only the discount we attach (the waitlist offer); no codes typed in at checkout.
       allow_discount_codes: false,
       ...(input.discountId ? { discount_id: input.discountId } : {}),
     });
     return { checkoutUrl: out.url, checkoutId: out.id };
+  }
+
+  async customerPortalUrl(externalCustomerId: string, returnUrl: string) {
+    try {
+      const out = await this.request<{ customer_portal_url: string }>(
+        'POST',
+        '/v1/customer-sessions/',
+        { external_customer_id: externalCustomerId, return_url: returnUrl },
+      );
+      return out.customer_portal_url;
+    } catch (err) {
+      // No customer with this external id: Polar answers 404 (or 422 on some versions).
+      if (err instanceof PolarHttpError && (err.status === 404 || err.status === 422)) return null;
+      throw err;
+    }
   }
 
   async cancelAtPeriodEnd(subscriptionId: string) {
@@ -265,7 +296,9 @@ export async function startCheckout(
   user: User,
   req: CheckoutRequest,
 ): Promise<{ checkoutUrl: string; discountApplied: boolean }> {
-  const successUrl = `${config().WEB_APP_URL}/billing?checkout=done`;
+  if (!polarConfigured()) throw unavailable('Payments are not set up yet');
+  // Polar fills in {CHECKOUT_ID}; the web app's billing page waits for the webhook either way.
+  const successUrl = `${config().WEB_APP_URL}/billing?checkout=done&checkout_id={CHECKOUT_ID}`;
   let productId: string;
   let metadata: Record<string, string>;
   let discountId: string | undefined;
@@ -309,10 +342,35 @@ export async function startCheckout(
     ...(user.email ? { customerEmail: user.email } : {}),
     ...(user.name ? { customerName: user.name } : {}),
     successUrl,
+    returnUrl: `${config().WEB_APP_URL}/pricing`,
     metadata,
     ...(discountId ? { discountId } : {}),
   });
   return { checkoutUrl, discountApplied: Boolean(discountId) };
+}
+
+/** True when this server can talk to Polar (a token is set). Product ids are checked per checkout. */
+export function polarConfigured(): boolean {
+  return Boolean(config().POLAR_ACCESS_TOKEN);
+}
+
+/**
+ * "Manage billing": a signed-in link to Polar's customer portal (card, invoices, receipts), with a
+ * back link to the web app's billing page. Polar finds the customer by our user id, the external
+ * id every checkout sets. Changes made there reach us only through Polar's webhooks.
+ */
+export async function openBillingPortal(user: User): Promise<{ portalUrl: string }> {
+  if (!polarConfigured()) throw unavailable('Payments are not set up yet');
+  let url: string | null;
+  try {
+    url = await polar().customerPortalUrl(user.id, `${config().WEB_APP_URL}/billing`);
+  } catch (err) {
+    if (err instanceof PolarHttpError && err.refusal)
+      throw unavailable('Polar refused the request');
+    throw unavailable('Polar could not be reached. Try again in a minute');
+  }
+  if (!url) throw conflict('Nothing bought yet, so there is no billing account to manage');
+  return { portalUrl: url };
 }
 
 /** Cancel at the end of the current period (the plan stays until then). */

@@ -49,6 +49,21 @@ export const users = pgTable('users', {
   onboardingCompletedAt: ts(),
   /** Null: the "Getting started" checklist may still show. Set when the user closes it. */
   gettingStartedDismissedAt: ts(),
+  /**
+   * What the user is told on Telegram, besides the chat the work was asked in (backend-report.md,
+   * "Notices on Telegram"): a crew job asked in the web app finished, a pull-request review's
+   * verdict, an answer of an automation made in the web app.
+   */
+  notifyCrewJobs: boolean().notNull().default(true),
+  notifyPrReviews: boolean().notNull().default(true),
+  notifyAutomationRuns: boolean().notNull().default(false),
+  /**
+   * Quiet hours, `HH:MM` in the user's time zone: Telegram messages are sent silently in between.
+   * A start after the end runs over midnight.
+   */
+  quietHoursOn: boolean().notNull().default(true),
+  quietHoursStart: text().notNull().default('22:00'),
+  quietHoursEnd: text().notNull().default('08:00'),
   createdAt: ts().notNull().defaultNow(),
   deletedAt: ts(),
 });

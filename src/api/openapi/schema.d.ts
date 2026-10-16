@@ -913,7 +913,8 @@ export interface paths {
          *     what pays for the AI right now.
          *
          *     `claudeModel` and `claudeEffort` are the Claude model and the thinking effort Claude Code
-         *     uses (null: Claude Code's own default). They apply to turns that run on Claude Code, and
+         *     uses (null: Default, which is Sonnet 5.5 at low effort for Tex's chat; Byte and Patch then
+         *     keep Opus 5.5 at medium effort, and a chosen effort applies on Sonnet 5.5). They apply to turns that run on Claude Code, and
          *     can be set whatever the engine is now. `claudeChoices` lists what may be chosen: every
          *     Claude model Claude Code can use, each with the effort levels it takes.
          */
@@ -930,7 +931,7 @@ export interface paths {
          *     `{ runtime: claude_code, aiPreference: auto }`; Textcrew AI → `{ aiPreference: platform }`.
          *
          *     `claudeModel` and `claudeEffort` may be sent too, alone or with the others. Null goes back
-         *     to Claude Code's own default. They can be set whatever the engine is now; they take effect
+         *     to Default (Sonnet 5.5, quick). They can be set whatever the engine is now; they take effect
          *     on turns that run on Claude Code. A model id that isn't in `claudeChoices.models` is
          *     400 `invalid_request`. Example: `{ claudeModel: claude-opus-5-5, claudeEffort: xhigh }`.
          */
@@ -3554,10 +3555,10 @@ export interface components {
                 /** Format: date-time */
                 connectedAt: string | null;
             };
-            /** @description Null: Default (Claude Code's own choice). */
+            /** @description Null: Default (Sonnet 5.5). */
             claudeModel: string | null;
             /**
-             * @description Null: Default (Claude Code's own choice).
+             * @description Null: Default (low on the default model, else Claude Code's own).
              * @enum {string|null}
              */
             claudeEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -3944,14 +3945,16 @@ export interface components {
             };
             ownKeyProviders: components["schemas"]["ByokProvider"][];
             /**
-             * @description The Claude model Claude Code uses, one of `claudeChoices.models`. Null: Claude Code's
-             *     own default. Applies when Claude Code is the engine.
+             * @description The Claude model Claude Code uses, one of `claudeChoices.models`. Null: Default, Sonnet
+             *     5.5 (`claude-sonnet-5-5`) for Tex, with Byte and Patch on Opus 5.5 at medium effort.
+             *     Applies when Claude Code is the engine.
              * @example claude-opus-5-5
              */
             claudeModel: string | null;
             /**
-             * @description How hard Claude Code thinks. Null: Claude Code's own default. Applies when Claude Code
-             *     is the engine.
+             * @description How hard Claude Code thinks. Null: Default, which is `low` when the model is on Default
+             *     too, and Claude Code's own default for a chosen model. Applies when Claude Code is the
+             *     engine.
              * @enum {string|null}
              */
             claudeEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;

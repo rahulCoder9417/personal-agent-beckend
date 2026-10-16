@@ -2,6 +2,7 @@ import { serve } from '@hono/node-server';
 import { closeQueues } from '../modules/events/queues.ts';
 import { config } from '../shared/config.ts';
 import { closeDb, keepDbWarm } from '../shared/db/client.ts';
+import { laterSettled } from '../shared/later.ts';
 import { logger } from '../shared/logger.ts';
 import { closeRedis } from '../shared/redis.ts';
 import { createApp } from './app.ts';
@@ -16,6 +17,8 @@ void keepDbWarm();
 
 async function shutdown() {
   server.close();
+  // Writes the answers did not wait for (a tool call's activity-log entry, an event's mark).
+  await laterSettled();
   await closeQueues();
   await closeRedis();
   await closeDb();

@@ -49,11 +49,35 @@ export async function activeConnectionCounts(userIds: string[]): Promise<Map<str
 export async function activeConnections(
   userId: string,
 ): Promise<Array<Connection & { catalog: CatalogApp }>> {
-  const rows = await listConnections(userId);
+  return activeConnectionsOf(await listConnections(userId));
+}
+
+/** The active connections among `rows` (one user's), each with its catalog app. */
+export function activeConnectionsOf(
+  rows: Connection[],
+): Array<Connection & { catalog: CatalogApp }> {
   return rows
     .filter((c) => c.status === 'active')
     .map((c) => ({ ...c, catalog: findApp(c.app)! }))
     .filter((c) => c.catalog);
+}
+
+/**
+ * `connectionForToolkit` on rows already read (one user's connections): the newest active one of
+ * the toolkit's app, by the same order, so the same connection is used either way.
+ */
+export function newestActiveConnection(
+  rows: Connection[],
+  toolkit: string,
+): Connection | undefined {
+  const app = appForToolkit(toolkit);
+  if (!app) return undefined;
+  return rows
+    .filter((r) => r.app === app.slug && r.status === 'active')
+    .sort(
+      (a, b) =>
+        b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+    )[0];
 }
 
 export async function getConnection(

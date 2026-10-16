@@ -25,6 +25,8 @@ export interface OutboundInput {
   text: string;
   buttons?: Button[];
   approvalId?: string;
+  /** The message carries a draft the agent proposed (the automations module's). */
+  automationDraftId?: string;
   template?: OutboundContent['template'];
   /**
    * The conversation to save it in: the turn's own, when the message is written during a turn.
@@ -81,6 +83,7 @@ export async function queueOutbound(input: OutboundInput): Promise<MessageRow> {
       text: input.text,
       status: 'queued',
       approvalId: input.approvalId ?? null,
+      automationDraftId: input.automationDraftId ?? null,
       sessionKey: input.sessionKey,
       eventId: input.turnId ?? null,
       copyOf: input.copyOf ?? null,

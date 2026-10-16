@@ -26,9 +26,14 @@ export const automations = pgTable(
     triggerRef: text(),
     /**
      * `pr_review`: pull-request review for one GitHub repo (HLD 0.8). Only the user can set it,
-     * through the REST api; the agent's create_automation tool never does.
+     * through the REST api; no agent tool does.
      */
     preset: text({ enum: ['pr_review'] }),
+    /**
+     * The apps the agent said the automation will use (app slugs), from the draft it was saved
+     * from. Empty: none named (older automations). Only shown for now; a limit from phase 3.
+     */
+    apps: jsonb().$type<string[]>().notNull().default([]),
     /** Where results are sent. */
     sessionKey: text().notNull(),
     /**
@@ -52,6 +57,53 @@ export const automations = pgTable(
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index().on(t.userId), index().on(t.triggerRef)],
+);
+
+/** The parts of an automation, as a draft keeps them until it is saved. */
+export type DraftTrigger = { app: string; event: string; config?: Record<string, unknown> };
+
+/**
+ * A draft: an automation the agent proposed (propose_automation) that the user has not saved
+ * (docs/backend-report.md, "Drafts"). It never runs: no timer, no watch at Composio. Only the
+ * user's Save makes the automation (drafts.ts, saveDraft). Open for 7 days, at most 20 open per
+ * user; removed after 30 days.
+ */
+export const automationDrafts = pgTable(
+  'automation_drafts',
+  {
+    id: text().primaryKey(),
+    userId: text().notNull(),
+    status: text({ enum: ['open', 'saved', 'discarded', 'replaced', 'expired'] })
+      .notNull()
+      .default('open'),
+    /** `agent`: proposed by the agent. `user`: made on the canvas (phase 3). */
+    madeBy: text({ enum: ['agent', 'user'] })
+      .notNull()
+      .default('agent'),
+    /** The automation it would change: saving makes the new one, then removes that one. */
+    changeOf: text(),
+    kind: text({ enum: ['once', 'repeat', 'event'] }).notNull(),
+    title: text().notNull(),
+    instruction: text().notNull(),
+    runAt: timestamp({ withTimezone: true }),
+    cron: text(),
+    /** The time zone it runs in: the one the agent named, else the user's own then. */
+    timezone: text().notNull(),
+    trigger: jsonb().$type<DraftTrigger>(),
+    /** The apps the agent said it will use, as app slugs. */
+    apps: jsonb().$type<string[]>().notNull().default([]),
+    /** The chat it was proposed in: its card was posted there, and a copy of each answer goes there. */
+    sessionKey: text().notNull(),
+    /** `replaced`: the newer draft. */
+    replacedBy: text(),
+    /** `saved`: the automation it made. */
+    automationId: text(),
+    expiresAt: timestamp({ withTimezone: true }).notNull(),
+    /** When it was saved, discarded, replaced or expired. */
+    decidedAt: timestamp({ withTimezone: true }),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index().on(t.userId, t.status), index().on(t.status, t.expiresAt)],
 );
 
 /**

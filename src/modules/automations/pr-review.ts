@@ -4,7 +4,7 @@
 //
 // Turning it on is also the user's standing approval for posting a new review or comment on a
 // pull request in that repo (`prCommentAllowed`). Only this file sets the preset, and only from the
-// REST api with the user's own session: the agent's create_automation tool can't.
+// REST api with the user's own session: no agent tool can (its drafts make plain automations).
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { isChannelEnabled } from '../../shared/config.ts';
 import { db } from '../../shared/db/client.ts';

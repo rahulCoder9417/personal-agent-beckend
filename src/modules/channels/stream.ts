@@ -13,6 +13,7 @@ export type StreamEventType =
   | 'agent.progress'
   | 'credits.updated'
   | 'automation.updated'
+  | 'automation_draft.updated'
   | 'conversation.updated'
   | 'conversation.deleted';
 

@@ -121,6 +121,11 @@ export const messages = pgTable(
      */
     eventId: text(),
     approvalId: text(),
+    /**
+     * The agent proposed an automation in this message: the draft's id (the automations module's
+     * `automation_drafts`; no foreign key). The web app draws the draft's card under it.
+     */
+    automationDraftId: text(),
     /** Web idempotency key. */
     clientMessageId: text(),
     /** Provider message id (for status updates). */

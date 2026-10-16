@@ -728,7 +728,7 @@ describe('read_page: only an address already seen for the user (Hermes, and outs
     );
     expect(
       (
-        await u.tool('create_automation', {
+        await u.tool('propose_automation', {
           title: 'read it',
           instruction: `Every day read ${url}`,
           cron: '0 9 * * *',

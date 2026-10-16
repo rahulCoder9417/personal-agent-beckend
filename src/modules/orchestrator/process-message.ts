@@ -40,6 +40,7 @@ import {
   settleWebConversation,
   startNewChat,
 } from './chats.ts';
+import { helpText, isHelpCommand, linkedText } from './help-command.ts';
 import { runTurn, userHasCredits } from './turn.ts';
 
 /** Hooks other modules plug into the inbound path (approvals, coupons in chat). */
@@ -141,6 +142,11 @@ async function linkedMessage(
   if (msg.channel === 'telegram' && isNewChatCommand(msg.text)) {
     await startNewChat(userId, sessionKey, { channel: msg.channel, key: eventId });
     await queueRawOutbound(msg.channel, msg.externalChatId, NEW_CHAT_TEXT, eventId);
+    return null;
+  }
+  // `/help` in Telegram: our short answer with the commands and the Help page. The same rules.
+  if (msg.channel === 'telegram' && isHelpCommand(msg.text)) {
+    await queueRawOutbound(msg.channel, msg.externalChatId, helpText(), eventId);
     return null;
   }
   if (await inboundHooks.handleButton(userId, msg, eventId)) return null;
@@ -290,7 +296,7 @@ async function handleUnlinked(msg: InboundMessage, eventId: string): Promise<voi
   await queueOutbound({
     userId: result.link.userId,
     sessionKey: sessionKeyFor(msg.channel, msg.externalChatId),
-    text: '✅ Linked! You can chat with your agent right here. What can I do for you?',
+    text: linkedText(msg.channel),
   });
 }
 

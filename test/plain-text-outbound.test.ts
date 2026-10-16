@@ -10,6 +10,7 @@ import { messages } from '../src/modules/channels/schema.ts';
 import { subscribe, type StreamEvent } from '../src/modules/channels/stream.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
 import { NEW_CHAT_TEXT } from '../src/modules/orchestrator/chats.ts';
+import { linkedText } from '../src/modules/orchestrator/help-command.ts';
 import { linkInstructionsText } from '../src/modules/orchestrator/process-message.ts';
 import { ensureSandbox } from '../src/modules/orchestrator/sandbox.ts';
 import { outOfCreditsText } from '../src/modules/orchestrator/turn.ts';
@@ -300,9 +301,7 @@ describe('our own messages', () => {
     // Linking, then /new.
     const u = await chatUser();
     const chatId = await linkTelegram(u.token);
-    expect(sentTo(chatId)[0]!.text).toBe(
-      '✅ Linked! You can chat with your agent right here. What can I do for you?',
-    );
+    expect(sentTo(chatId)[0]!.text).toBe(linkedText('telegram'));
     await tgPost(telegramUpdate(chatId, '/new'));
     await waitFor(async () => sentTo(chatId).find((m) => m.text === NEW_CHAT_TEXT));
 

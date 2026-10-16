@@ -1,4 +1,5 @@
 import { serve } from '@hono/node-server';
+import { syncTelegramCommandsAtStart } from '../modules/channels/telegram-commands.ts';
 import { closeQueues } from '../modules/events/queues.ts';
 import { config } from '../shared/config.ts';
 import { closeDb, keepDbWarm } from '../shared/db/client.ts';
@@ -14,6 +15,8 @@ const server = serve({ fetch: createApp().fetch, port: cfg.PORT }, (info) =>
 );
 // Database connections opened now and kept open, so a page doesn't wait for new ones.
 void keepDbWarm();
+// The Telegram bot's "/" menu (/new, /help), set only when Telegram's copy differs.
+void syncTelegramCommandsAtStart();
 
 async function shutdown() {
   server.close();

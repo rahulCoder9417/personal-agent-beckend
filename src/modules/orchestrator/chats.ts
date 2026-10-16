@@ -12,6 +12,7 @@ import {
   activeConversation,
   chatCounter,
   deleteConversation,
+  findActiveConversation,
   getConversation,
   isAutomationsChat,
   renameConversation,
@@ -120,10 +121,41 @@ export async function webConversationToWriteIn(
   userId: string,
   conversationId?: string,
 ): Promise<ConversationRow> {
-  if (!conversationId) return activeConversation(userId, 'web');
-  const c = await webConversation(userId, conversationId);
+  return settleWebConversation(
+    userId,
+    conversationId,
+    await readWebConversation(userId, conversationId),
+  );
+}
+
+/**
+ * The reading half of webConversationToWriteIn, which changes nothing, so it can run beside other
+ * reads: the web conversation named (404 or 409 as there), or web chat's active one (undefined:
+ * web chat has none yet).
+ */
+export async function readWebConversation(
+  userId: string,
+  conversationId?: string,
+): Promise<ConversationRow | undefined> {
+  return conversationId
+    ? webConversation(userId, conversationId)
+    : findActiveConversation(userId, 'web');
+}
+
+/**
+ * The writing half, given what readWebConversation found: the named conversation made the active
+ * one if it isn't (never the Automations chat), or web chat's first conversation started. Writes
+ * nothing when nothing needs to change, which is almost always.
+ */
+export async function settleWebConversation(
+  userId: string,
+  conversationId: string | undefined,
+  read: ConversationRow | undefined,
+): Promise<ConversationRow> {
+  if (!conversationId) return read ?? activeConversation(userId, 'web');
+  if (!read) throw notFound(NOT_FOUND);
   // What openWebConversation does, without reading the conversation a second time.
-  if (isAutomationsChat(c) || c.active) return c;
+  if (isAutomationsChat(read) || read.active) return read;
   const opened = await activateConversation(userId, conversationId);
   if (!opened) throw notFound(NOT_FOUND);
   return opened;

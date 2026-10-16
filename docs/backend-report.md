@@ -251,7 +251,9 @@ Example: an admin suspends Ravi while he has the web app open. His next request 
 
 **Who a container token belongs to** is kept in Redis for 10 minutes (section 13).
 
-**Reads that don't depend on each other run at the same time.** Examples: opening a conversation reads its messages, checks that it is the user's and reads when web chat started, all at once. The balance shown in the web app is one read of the grants (section 23). Sending a message checks the credits, the files and whether it was already sent, all at once.
+**Reads that don't depend on each other run at the same time.** Examples: opening a conversation reads its messages, checks that it is the user's and reads when web chat started, all at once. The balance shown in the web app is one read of the grants (section 23). Sending a message checks the credits, the files, whether it was already sent and the conversation it goes in, all at once (section 9).
+
+**Writes nothing waits for go on after the answer.** A few writes change nothing the answer depends on: a tool call's entry in the activity log, and the "queued" mark of a web message's event. They start at once, and the answer goes back without waiting for them. A write that fails is written to the server log as an error, with the user and the tool, never the inputs. When the api or the worker stops, it first waits for the ones still running.
 
 What this means, measured with every query made to wait 260 ms and every new connection 2 seconds (the test `read-round-trips.test.ts` does this on request):
 
@@ -274,6 +276,14 @@ The last row comes from moving the billing of each turn out of the turn, into a 
 | The first "typing…" in the chat | none | 1.05 s |
 | The reply reaches Telegram | 5.04 s | 3.68 s |
 | The job ends | 6.09 s | 4.74 s |
+
+**A web message and an app action wait for fewer trips (16 October).** Sending from web chat waits for 3 trips instead of 7 (section 9). The agent's app tools read the user and the connections once, at the same time, instead of 3 or 4 times one after another, and don't wait for their activity-log entry (section 14). Measured the same way (`read-round-trips.test.ts` and `app-action-speed.test.ts`):
+
+| | Before | After |
+|---|---|---|
+| Sending from web chat, until the api answers | 1.84 s (7 trips) | 0.79 s (3 trips) |
+| Sending from web chat, until the reply shows (not counting the AI's own time) | 3.15 s | 2.64 s |
+| One app tool call (`list_app_actions`, `run_app_action`) | 1.05 s (4 trips) | 0.27 s (1 trip) |
 
 ### The error shape
 
@@ -717,6 +727,14 @@ It prints each turn, newest first: what it was (route, engine, wake, outcome), e
 
 A web message skips the webhook. The web app calls `POST /v1/messages`. The api checks that web chat is on, the 30 a minute limit and the credits. At zero it answers 402. Then it saves the message once and adds the job. The rest is the same. The reply arrives through the live updates.
 
+Since 16 October the api waits for 3 trips to the database, not 7:
+
+1. **Every read at once:** the credits, the files, whether this message was sent before (by its `clientMessageId`), and the conversation it goes in. The checks still come in their old order: no credits gives 402 before an unknown conversation gives 404.
+2. **The message.** Its event's id is made beforehand, so the message is saved with it and no third write links them. A conversation that must become the active one first adds one trip; that happens only when the user switches to another conversation.
+3. **The event and its job**, and beside them the conversation's last message time and title (the order of the chat list). Nothing in the turn waits for the last one, so a failure there is logged and the message still goes.
+
+The event's "queued" mark is written after the answer. The event is saved only once its message is saved, so a turn never runs for a message that isn't there. Sent again, the same message is found in step 1: nothing new is saved, and if its event was lost (a crash between the two), it is made and queued then. Two sends of the same message at the same moment save one message and one event. The answer carries the `clientMessageId`, so the web app matches the bubble it showed at once with the saved message (section 12).
+
 The web app can name the conversation to write in. Without a name, the message goes into web chat's active conversation. A named conversation that is not active becomes the active one first. The Automations chat is the exception: the message goes into it, and the active conversation stays the one it was. The api answers 404 for a conversation that is not the user's, and 409 for a Telegram conversation. The turn then runs in the message's own conversation, also when the user opens another one before the worker gets to it. The same message sent twice is saved once and does not change which conversation is active.
 
 ### What can go wrong
@@ -892,6 +910,8 @@ A message event holds the whole message, with the id of its conversation. So the
 ### Progress lines are live only
 
 - A progress line says what the agent is doing right now. It is cut at 300 characters.
+- Since 16 October the Bridge writes the agent's tool calls in plain words: "Looked at your apps", "Checked your inbox", "Asked for your OK", "Ran a command". Before, it sent the tool's own name ("using run_app_action", "using Bash"). Crew lines stay as they were ("Scout: reading 4 pages"). The backend passes every line on as it comes.
+- The web app keeps the lines of a turn as its steps. When the answer arrives, it carries a one-line trail, such as "Checked your inbox · 2 steps", that opens to the list. This lasts for the session only.
 - It goes only to the web app's event stream. It is never sent to Telegram or any other chat app.
 - It is not saved as a message. A web app that is not connected at that moment does not see it later.
 - One exception: a line that names a crew member, such as Scout, is also written to the activity log. At most 30 are saved per turn.
@@ -938,7 +958,7 @@ The Platform MCP is the platform's tool server. MCP is a standard way for an AI 
 
 - The tool server is part of the api process. It answers at the path `/mcp`.
 - Only containers can reach it. From the public internet, `/mcp` answers "not found".
-- It offers the same 15 tools to every container. It keeps nothing between two calls.
+- It offers the same 16 tools to every container. It keeps nothing between two calls.
 
 ### How a container proves who it is
 
@@ -955,8 +975,9 @@ The Platform MCP is the platform's tool server. MCP is a standard way for an AI 
 |---|---|
 | `send_message` | Sends a text to one of the user's own chats |
 | `get_profile` | Returns the user's name, time zone, plan, connected apps, and the apps that are not ready yet with what to tell the user |
-| `list_app_actions` | Lists the user's apps with their status, and the actions the agent may run in the connected ones |
-| `run_app_action` | Runs one app action, for example "send an email" |
+| `list_app_actions` | Lists the user's apps with their status, and the actions the agent may run in the connected ones: each action's name and one line on what it does |
+| `describe_app_action` | Gives one action's inputs: their names, their kinds and which are required (new on 16 October) |
+| `run_app_action` | Runs one app action, for example "send an email". The answer is kept short (section 14) |
 | `request_approval` | Asks the user to approve a risky action, with its exact inputs, checked against the action first. Answers "pending" at once |
 | `schedule_reminder` | Saves a reminder for one moment in time |
 | `create_automation` | Saves an automation: once, repeating, or on an app event. Its answer says where the runs will answer, so the agent can tell the user |
@@ -969,12 +990,13 @@ The Platform MCP is the platform's tool server. MCP is a standard way for an AI 
 | `forget` | Removes or corrects a saved fact |
 | `start_crew_job` | Gives Patch a review or Byte a coding job, with a brief (section 20) |
 
-**Example.** Rahul texts "email Priya the notes". The agent finds Gmail's send action with `list_app_actions`. It asks for a yes with `request_approval`. After the yes it calls `run_app_action`. The reply "Sent" leaves the container through `send_message`.
+**Example.** Rahul texts "email Priya the notes". The agent knows Gmail's send action and its inputs from its instructions (section 34); for an action it doesn't know, it finds it with `list_app_actions` and reads its inputs with `describe_app_action`. It asks for a yes with `request_approval`. After the yes it calls `run_app_action`. The reply "Sent" leaves the container through `send_message`.
 
 ### The activity log and the rate limits
 
 - The activity log is the record of what the agent did. The user sees it in the web app. It is the table `audit_log`.
 - Every tool call that succeeds adds one entry: the tool's name, a one-line summary, the inputs and the credits charged.
+- The entry is written just after the tool's answer goes back, so the agent doesn't wait for it (about 0.26 s a call). A write that fails is written to the server log as an error, with the user and the tool, and the call itself still succeeds.
 - An input whose name looks like a secret (key, token, password) is blanked. `read_page` keeps the address without the part after the question mark. The memory tools never keep a memory's text.
 - A failed call adds no entry. Three refusals are still logged: a refused search, a refused page and a refused memory.
 - The log is kept for as long as the account exists. Deleting the account removes it, inputs and all. The one row that stays is an admin's record that they deleted the account (section 31).
@@ -1071,12 +1093,16 @@ It is safe to run twice. A second run finds nothing to do. A run that stopped af
    - **not on plan**: connected, but the app is not on the user's plan any more.
    An active connection of an app wins over any other of the same app. Of two active connections of one app, the agent uses the newest; new automations and the git gateway use the same one. The notes carry the address of the Integrations page's Apps tab (`/integrations/apps`), so the agent sends the user there and nowhere else. Until 15 October 2026 they said "the Apps page" and `/apps`.
 3. `actions` lists the actions of the connected apps, at most 100. The api asks Composio once per app. It used to ask once for all of them, with one limit of 200 tools in all. GitHub alone has more than 200, so it left no room for the next app. That is the most likely reason why, on 13 October, the agent saw only GitHub after the founder connected Google Calendar (not confirmed on the server). Now the 100 places are shared fairly: an app with few actions gets them all, and the rest goes to the big ones. An app that is cut short gets a note: "Showing 97 of its 200 actions", and to ask again with that app and a search word. An app's actions are the same for every user, so the api keeps each app's listing for 10 minutes and serves every call from it, for every user. Before, every call asked Composio again for every connected app, and the lead calls `list_app_actions` on many turns. A listing that failed is not kept.
-4. Each action carries two marks: whether it needs approval, and whether it costs a credit.
-5. The agent calls `run_app_action` with the action's name and its inputs. For an app that is not ready, the answer is the same note as above, for example "Google Calendar is still connecting".
-6. The api checks the app, the credits and the approval (next section).
-7. The api calls Composio with the user id from the container token. The result goes back to the agent.
+4. Each action is one line: its name, the first sentence of what it does (at most 120 characters), and two marks: whether it needs approval, and whether it costs a credit. The list has no inputs. Until 16 October each action came with its whole description of inputs: Gmail's 63 actions made about 115 thousand characters, some 33 thousand tokens, and on 15 October the agent spent most of a minute paging through that with its own tools. Now Gmail's list is about 8,600 characters.
+5. For the inputs of the one action it will use, the agent calls `describe_app_action` with the action's name. The answer is Composio's own description of the action and its inputs: each input's name, kind and meaning, and which are required. It comes from the same listing kept for 10 minutes, or is asked of Composio by name for an action the listing doesn't hold. It reads nothing of the user's, so it works before the app is connected too. The common Gmail actions are named in the agent's instructions with their key inputs, so for "check my email" it can skip both steps (section 34).
+6. The agent calls `run_app_action` with the action's name and its inputs. For an app that is not ready, the answer is the same note as above, for example "Google Calendar is still connecting".
+7. The api checks the app, the credits and the approval (next section). It reads the user (from the copy in Redis) and the user's connections once, at the same time, and every check uses that one read. Composio is asked about a pending connection only when the action's app isn't usable yet, and the connections are read again only then.
+8. The api calls Composio with the user id from the container token. It keeps one Composio client for the whole process, and runs the action with the description it already has from the listing (or asked once per action, kept 10 minutes). Before 16 October each call made a new client, which also asked npm whether a newer version existed, and Composio's own run asked for the action's description again first, about 0.3 seconds each time.
+9. The result goes back to the agent, kept short:
+   - **Gmail's fetch (`GMAIL_FETCH_EMAILS`)** asks Composio for no bodies unless the agent asks for them (Composio's own default sends every body and the raw message). Each email comes back as its sender, recipient, subject, date, a snippet of up to 200 characters, labels and id. At most 10 are sent, unless the agent asked for more with `max_results`. A note says how to read one email in full: `GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID` with its id. An approved action's inputs are never changed.
+   - **Any answer longer than 30,000 characters** (about 8,500 tokens) is cut: long texts first, then long lists. A note says how big it was and how to ask for less: narrower filters, a smaller `max_results`, or one item by its id.
 
-**Example.** Rahul texts "what is on my calendar tomorrow". The agent runs a Google Calendar list action. It only reads, so it needs no approval and costs nothing.
+**Example.** Rahul texts "check my email". The agent runs `GMAIL_FETCH_EMAILS` with `query` "is:unread" and `max_results` 10. It gets ten lines of who, what and when, about 4,000 characters. Before, the same fetch sent about 89,000 characters of bodies, and the list of actions before it about 116,000.
 
 ### The cost, and where the keys stay
 
@@ -1089,7 +1115,9 @@ It is safe to run twice. A second run finds nothing to do. A run that stopped af
 ### What can go wrong
 
 - **The app is not connected or not on the plan.** The tool says so. Nothing runs.
-- **Composio or the app is down.** The agent is told to try later. Nothing is charged.
+- **Composio or the app is down.** The agent is told to try later. Nothing is charged. `describe_app_action` says "Gmail's actions could not be described right now. Try again in a moment."
+- **The agent asks for an action that does not exist.** `describe_app_action` says so and points to `list_app_actions`.
+- **Composio's fetch answer changes shape.** The summary reads the field names Composio and Gmail use (`sender` or the From header, `messageTimestamp` or `internalDate`, and so on). An answer of another shape is sent as it came, within the 30,000-character limit.
 - **Composio is down while a user connects, or will not make a setup** (for example, the Composio key may not make setups). The api answers 503: "Gmail can't be connected right now". Nothing is saved, and the next try asks again.
 - **Composio cannot remove a connected account.** On Disconnect, by the user or an admin, the failure is only written to the server log, and our row is deleted anyway. The account then stays at Composio, with the app's sign-in, and nothing tries again. On account deletion it is different: the row stays and the deletion job fails, so it tries again (section 33).
 - **Two users connect a new app at the same moment.** Each may make a setup at Composio. The first one saved is used by everyone. The other stays unused at Composio, with no connections on it.
@@ -1138,7 +1166,7 @@ The user should only ever approve something that can run exactly as they saw it.
 
 An empty value is left to the app. The refusal goes back to the agent with the action's real inputs, so it can ask again at once, correctly. The user sees nothing until then.
 
-Where the list comes from: the app's list of actions, which the api keeps for 10 minutes. That list holds at most 200 actions, and GitHub has more, so an action that isn't on it is asked of Composio by its name, and kept for 10 minutes too. An action Composio doesn't have is refused. When Composio can't be asked, the request is refused with "try again in a moment", rather than letting an unchecked one through. An action whose list of inputs Composio left empty is not checked.
+Where the list comes from: the app's list of actions, which the api keeps for 10 minutes; the agent reads the same description with `describe_app_action` (section 14). That list holds at most 200 actions, and GitHub has more, so an action that isn't on it is asked of Composio by its name, and kept for 10 minutes too. An action Composio doesn't have is refused. When Composio can't be asked, the request is refused with "try again in a moment", rather than letting an unchecked one through. An action whose list of inputs Composio left empty is not checked.
 
 The approval always holds the inputs that will run. If the agent asked about an app's action without any inputs, the approval holds none, and the action runs with none.
 
@@ -2679,7 +2707,7 @@ The backend sends `Deliver` with the message text, the chat it came from and a d
 | Event | Meaning | What the backend does |
 |---|---|---|
 | accepted | The Bridge took the message | Marks the message "processing". The web app shows "busy" |
-| working | A progress line, such as "Scout: reading 4 pages" | Shows it in the web chat. Crew lines also go to the activity log |
+| working | A progress line, such as "Checked your inbox" or "Scout: reading 4 pages" | Shows it in the web chat. Crew lines also go to the activity log |
 | turn done | The turn finished | Marks the message "delivered" and charges the usage |
 | error | The turn failed. It says whether the fault is ours | Tells the user. If the fault is ours, gives the credits back |
 
@@ -2802,6 +2830,13 @@ Both engines get the same instructions for the lead each turn, and they open wit
 - The user connects apps on Textcrew's Apps page, `https://app.textcrew.in/apps`.
 - To see what is connected, use `get_profile` and `list_app_actions`. If an app the user calls connected is missing, it may still be finishing, or it needs connecting again on the Apps page.
 - Never send the user to the settings of Claude or any other product. Never present itself as Claude or Claude Code, and name the engine behind it only when the user asks.
+
+Two rules follow, since 16 October, after "check my email" took 62 seconds and 13 rounds of the model on 15 October:
+
+- **Apps.** The common Gmail actions can be run directly: `GMAIL_FETCH_EMAILS` (a Gmail search such as "is:unread newer_than:2d", and `max_results`), `GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID` (one email in full) and `GMAIL_SEND_EMAIL` (`recipient_email`, `subject`, `body`; approval first). For any other action: `list_app_actions`, then `describe_app_action` for its inputs. A result that is too big is asked for again with less, never paged through with commands or files.
+- **Answer once,** after the last tool call. The agent had written its answer, run a command, and written it again: one more round, and a step that flashed in the web chat.
+
+Each tool call goes out as a progress line in plain words, the same on both engines: "Looked at your apps", "Checked your inbox", "Sent an email", "Asked for your OK", "Ran a command". A call that is only the engine's own housekeeping (Claude Code's ToolSearch) has no line. An unknown tool is "Used a tool", never its raw name.
 
 Claude Code runs when the user has connected a Claude plan and chosen it. Hermes runs in the other cases: on the user's own API key, or on credits if the server offers Textcrew AI. A user who chose Textcrew AI gets Hermes on credits, as long as the server offers it. If a Claude plan is the user's only AI, Claude Code runs even when Hermes was chosen. With no AI at all, nothing runs, and the user is told to connect one.
 

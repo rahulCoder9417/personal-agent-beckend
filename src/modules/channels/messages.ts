@@ -25,6 +25,8 @@ export function toApiMessage(m: MessageRow) {
     attachments: (m.mediaRef ?? []).map((a) => ({ id: a.id, name: a.name, mimeType: a.mimeType })),
     status: m.status,
     approvalId: m.approvalId,
+    // Only the web app's own messages have one: it matches its optimistic bubble to the saved one.
+    ...(m.clientMessageId ? { clientMessageId: m.clientMessageId } : {}),
     createdAt: m.createdAt.toISOString(),
   };
 }
@@ -111,12 +113,35 @@ export async function saveWebMessage(input: {
   conversationId?: string;
 }): Promise<{ message: MessageRow; created: boolean }> {
   const conversationId = input.conversationId ?? (await activeConversation(input.userId, 'web')).id;
+  const row = await insertWebMessage({ ...input, conversationId });
+  if (row) {
+    await announceWebMessage(row);
+    return { message: row, created: true };
+  }
+  const existing = await getWebMessage(input.userId, input.clientMessageId);
+  return { message: existing!, created: false };
+}
+
+/**
+ * A web message's row, unless the user has one with this clientMessageId already (then
+ * undefined). `id` and `eventId`: made by the caller, so the message and its event can be saved
+ * without waiting for each other. Nothing is published: see announceWebMessage.
+ */
+export async function insertWebMessage(input: {
+  userId: string;
+  text: string;
+  clientMessageId: string;
+  conversationId: string;
+  media?: MediaRef[];
+  id?: string;
+  eventId?: string;
+}): Promise<MessageRow | undefined> {
   const [row] = await db()
     .insert(messages)
     .values({
-      id: newId('msg'),
+      id: input.id ?? newId('msg'),
       userId: input.userId,
-      conversationId,
+      conversationId: input.conversationId,
       channel: 'web',
       direction: 'in',
       text: input.text,
@@ -124,16 +149,17 @@ export async function saveWebMessage(input: {
       status: 'queued',
       clientMessageId: input.clientMessageId,
       sessionKey: 'web',
+      ...(input.eventId ? { eventId: input.eventId } : {}),
     })
     .onConflictDoNothing({ target: [messages.userId, messages.clientMessageId] })
     .returning();
-  if (row) {
-    await publish(input.userId, 'message.created', toApiMessage(row));
-    await noteMessage(row);
-    return { message: row, created: true };
-  }
-  const existing = await getWebMessage(input.userId, input.clientMessageId);
-  return { message: existing!, created: false };
+  return row;
+}
+
+/** A new web message on the live stream, and its conversation's last message time and title. */
+export async function announceWebMessage(row: MessageRow): Promise<void> {
+  await publish(row.userId, 'message.created', toApiMessage(row));
+  await noteMessage(row);
 }
 
 export async function setMessageEvent(id: string, eventId: string): Promise<void> {

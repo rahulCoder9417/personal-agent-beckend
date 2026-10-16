@@ -1,6 +1,8 @@
 import type { Job } from 'bullmq';
 import { config, isChannelEnabled } from '../../shared/config.ts';
 import { redis } from '../../shared/redis.ts';
+import { newId } from '../../shared/ids.ts';
+import { logger } from '../../shared/logger.ts';
 import { badRequest, channelDisabled, outOfCredits } from '../../shared/errors.ts';
 import { enforce, hit } from '../../shared/rate-limit.ts';
 import { audit } from '../admin/audit.ts';
@@ -18,12 +20,15 @@ import { acknowledgeButton, parseInbound } from '../channels/inbound.ts';
 import {
   getMessageById,
   getWebMessage,
+  insertWebMessage,
   saveInbound,
-  saveWebMessage,
   setMessageEvent,
   setMessageStatus,
+  toApiMessage,
   type MessageRow,
 } from '../channels/messages.ts';
+import { noteMessage } from '../channels/conversations.ts';
+import { publish } from '../channels/stream.ts';
 import { queueOutbound, queueRawOutbound } from '../channels/outbound.ts';
 import { sessionKeyFor, type InboundMessage } from '../channels/types.ts';
 import { whileTyping } from '../channels/typing.ts';
@@ -31,8 +36,9 @@ import { IGNORED } from '../../worker/ignored.ts';
 import {
   isNewChatCommand,
   NEW_CHAT_TEXT,
+  readWebConversation,
+  settleWebConversation,
   startNewChat,
-  webConversationToWriteIn,
 } from './chats.ts';
 import { runTurn, userHasCredits } from './turn.ts';
 
@@ -308,36 +314,79 @@ export async function sendWebMessage(
   if (!isChannelEnabled('web')) throw channelDisabled('web');
   await enforce({ key: `msg:user:${userId}`, max: 30, windowSeconds: 60 });
   const ids = input.attachmentIds ?? [];
-  // Three reads that don't depend on each other, at once: each is a round trip to the database.
-  const [credits, files, sent] = await Promise.all([
+  // Every read at once, one round trip to the database (each about 0.26 s on Neon): the credits,
+  // the files, whether this message was sent before, and the conversation it goes in. That last
+  // one's answer is kept aside: its 404 or 409 comes after the checks above it, and a message sent
+  // again does not depend on it.
+  const [credits, files, sent, target] = await Promise.all([
     userHasCredits(userId),
     getUserAttachments(userId, ids),
-    // The same message sent again changes nothing, not even which conversation is active.
     getWebMessage(userId, input.clientMessageId),
+    readWebConversation(userId, input.conversationId).then(
+      (row) => ({ row }),
+      (error: unknown) => ({ error }),
+    ),
   ]);
   if (!credits) throw outOfCredits();
   if (files.length !== ids.length) throw badRequest('Unknown attachment');
-  const conversationId =
-    sent?.conversationId ?? (await webConversationToWriteIn(userId, input.conversationId)).id;
-  const { message, created } = await saveWebMessage({
+  // The same message sent again changes nothing, not even which conversation is active.
+  if (sent) return { message: sent, eventId: await queueSavedWebMessage(userId, sent) };
+  if ('error' in target) throw target.error;
+  // Writes only when the conversation named is not the active one yet, or web chat has none.
+  const conversation = await settleWebConversation(userId, input.conversationId, target.row);
+  // The message first, then its event: an event (so a turn) only ever exists for a message saved.
+  // The event's id is made here, so the message is saved with it (no third write to link them).
+  const eventId = newId('evt');
+  const message = await insertWebMessage({
     userId,
     text: input.text,
     clientMessageId: input.clientMessageId,
+    conversationId: conversation.id,
     media: files.map((f) => ({ id: f.id, name: f.name, mimeType: f.mimeType, path: f.path })),
-    conversationId,
+    eventId,
   });
-  const { eventId } = await ingestEvent({
+  if (!message) {
+    // The same message, sent twice at once, was saved by the other request a moment ago.
+    const other = (await getWebMessage(userId, input.clientMessageId))!;
+    return { message: other, eventId: await queueSavedWebMessage(userId, other) };
+  }
+  await publish(userId, 'message.created', toApiMessage(message));
+  // The event and its job, and beside them the conversation's last message time and title (the
+  // order of the chat list), which nothing in the turn waits for: a failure there is logged and
+  // never fails a message that is on its way.
+  const [queued] = await Promise.all([
+    ingestEvent({ ...webMessageEvent(userId, message), id: eventId, markLater: true }),
+    noteMessage(message).catch((err: unknown) =>
+      logger().error({ userId, messageId: message.id, err: String(err) }, 'conversation not noted'),
+    ),
+  ]);
+  // An event of an earlier try of this send was there already: the message points to that one.
+  if (queued.eventId !== eventId) await setMessageEvent(message.id, queued.eventId);
+  return { message: { ...message, eventId: queued.eventId }, eventId: queued.eventId };
+}
+
+/** The event (and inbound job) of a web message. */
+function webMessageEvent(userId: string, message: MessageRow) {
+  return {
     source: 'web',
-    externalId: `${userId}:${input.clientMessageId}`,
+    externalId: `${userId}:${message.clientMessageId}`,
     type: 'message',
     userId,
     payload: { messageId: message.id },
-    queue: 'inbound',
+    queue: 'inbound' as const,
     jobName: 'web-message',
     jobData: { messageId: message.id },
-  });
-  if (created) await setMessageEvent(message.id, eventId);
-  return { message, eventId };
+  };
+}
+
+/**
+ * A web message saved before (sent again): its event, made if it is missing and queued again if it
+ * never was (the job's id keeps it from running twice), and the message pointed to it.
+ */
+async function queueSavedWebMessage(userId: string, message: MessageRow): Promise<string> {
+  const { eventId } = await ingestEvent(webMessageEvent(userId, message));
+  if (message.eventId !== eventId) await setMessageEvent(message.id, eventId);
+  return eventId;
 }
 
 /** inbound/web-message: a message sent from the web app. */

@@ -157,7 +157,7 @@ export async function examine(
   if (ways > 1) say('trigger', 'Pick only one way for it to run.');
   const tz = parts.timezone?.trim() || user.timezone;
   const tzOk = isValidTimezone(tz);
-  if (kind !== 'event' && !tzOk) say('trigger', `"${tz}" is not a time zone we know.`);
+  if (!tzOk) say('trigger', `"${tz}" is not a time zone we know.`);
   let nextRuns: Date[] = [];
   let watchAccount: string | null = null;
   if (kind === 'once') {

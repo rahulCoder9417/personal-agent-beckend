@@ -927,15 +927,28 @@ The web app shows new messages and the agent's state without a reload. It keeps 
 
 1. The web app opens `GET /v1/stream`. It puts the session token in the address, because a browser cannot add headers to this kind of connection.
 2. The api checks the session like any request. Then it sends a `ready` event.
-3. When something happens, the worker or the api publishes an event to Redis under the user's id.
-4. Each api process listens in Redis. It forwards the event to that user's open connections.
+3. When something happens, the worker or the api publishes an event to Redis under the user's id. Every event but a draft of the answer also goes into a short record of the user's recent events, and gets an id there.
+4. Each api process listens in Redis. It forwards the event to that user's open connections, with its id.
 5. After 25 quiet seconds the api sends a `ping`, so the connection stays open.
+
+### Catching up after a reconnect (16 October)
+
+A connection drops often: the host cuts it every 5 minutes, and a phone drops it when it sleeps. So a new connection can say which event it got last, and the api sends it what came after that first.
+
+- **The ids.** Each event gets an id from the record, like `1760600000000-0`. Ids only grow. A draft of the answer gets none: the next draft holds the whole text anyway. A `ping` gets none either.
+- **The record.** It holds each user's events of the last 15 minutes, at most the last 500 (a Redis stream per user). An event goes into the record and out to the connections in one step, so both have the same order, also when several processes publish for one user.
+- **The browser says it by itself.** When the browser reconnects on its own, it sends the id of the last event it got (the `Last-Event-ID` header), and the web app's host passes it on. When the web app opens a new connection itself (a connection that went quiet, or one refused), it puts the id in the address (`?lastEventId=`).
+- **What the api does.** It starts listening first, then reads the record. If the record still holds that id, it sends every event after it, in order, then the live ones. An event both read from the record and heard live is sent once. The `ready` event at the start says `{"resumed": true}`.
+- **When it can't.** No id given, the id too old (more than 500 events or 15 quiet minutes ago), or the record can't be read: nothing is sent again, and `ready` says `{"resumed": false}`. The web app then asks again for what it shows, as it always did before.
+- **A draft never comes after the end of its turn.** A draft carries the id of the newest event recorded before it. A connection that has already sent a later event drops that draft. That matters when old events are being sent while new drafts arrive.
+
+Example: Rahul's phone sleeps for two minutes while Tex answers. When the page comes back, the browser reconnects with the last id it got. The api sends the answer (`message.created`), the message's `delivered` and the agent's `awake`, and the page shows the answer without asking for the chat again.
 
 ### When the stream stops getting through
 
 The connection runs from the browser to the web app's host (Vercel), which passes it on to the api. Two things about that path were seen on the server on 16 October:
 
-- **The host cuts every connection after 5 minutes.** The browser opens a new one at once, and the web app asks again for what it shows, because the stream replays nothing it missed.
+- **The host cuts every connection after 5 minutes.** The browser opens a new one at once. Since 16 October the api sends it what it missed (above); before, the web app had to ask again for everything it shows.
 - **The browser's side can break while the host's side stays open.** At 11:12:26 AM the browser opened a new connection while the old one was still being read from the api, its pings going out every 25 seconds, until the host's 5 minutes were up two minutes later. Everything the api wrote to the old one in those two minutes reached nobody, and the api could not tell.
 
 So the web app checks for itself. A connection with nothing at all for 70 seconds (no event and no ping) is taken to be dead and replaced. And 10 seconds after the agent's answer, a thread that still shows the agent at work asks the api again whether the turn ended (on 16 October at 10:32 AM a turn's last two events never reached the page, and "Tex is working…" stayed under the answer).
@@ -1033,7 +1046,7 @@ The Platform MCP is the platform's tool server. MCP is a standard way for an AI 
 | `describe_app_action` | Gives one action's inputs: their names, their kinds and which are required (new on 16 October) |
 | `run_app_action` | Runs one app action, for example "send an email". The answer is kept short (section 14) |
 | `request_approval` | Asks the user to approve a risky action, with its exact inputs, checked against the action first. Answers "pending" at once |
-| `schedule_reminder` | Saves a plain reminder for one moment in time. Refused while an automation runs (section 18) |
+| `schedule_reminder` | Saves a plain reminder for one moment in time. Refused in an automation's run, a crew job, the Automations chat and the turn after an approval (section 18) |
 | `propose_automation` | Proposes an automation (once, repeating, or on an app event) with the apps it will use. The platform checks it and posts a draft the user saves; nothing runs before (section 18, "Drafts") |
 | `get_automation_draft` | Reads one of the user's drafts and its state |
 | `list_automations` | Lists the user's reminders and automations |
@@ -1540,9 +1553,20 @@ When the worker hands an automation's run to the container (a timer, an app even
 
 Example: "Boss emails" names Gmail. An email from outside asks Tex to post in Slack. Tex calls `run_app_action` for Slack; it is refused, and nothing happens in Slack.
 
-### During an automation's run: no reminder
+### No reminder when the agent has read what the user did not write
 
-A run reads things the user did not write: an email, a web page, a pull request. Before drafts, such text could talk the agent into calling `create_automation`, and the user would never see what was saved. That tool is gone. The other tool that saves at once, `schedule_reminder`, is refused while one of the user's automations runs (a timer's run or an app event, pull-request review included): "A reminder can't be set while an automation runs: what the run read could have asked for it."
+A run reads things the user did not write: an email, a web page, a pull request. Before drafts, such text could talk the agent into calling `create_automation`, and the user would never see what was saved. That tool is gone. The other tool that saves at once, `schedule_reminder`, is refused in every turn that has such text in mind (since 16 October, not only during a run):
+
+| The turn | Why | What the agent is told |
+|---|---|---|
+| An automation's run (a timer, an app event, pull-request review included) | What the run read | "A reminder can't be set while an automation runs: what the run read could have asked for it." |
+| A crew job | The code and pull requests it reads | "A reminder can't be set during a crew job: …" |
+| Any turn in the Automations chat (the user's follow-up there, an approval's answer there) | The runs before it are in its context | "A reminder can't be set in the Automations chat: …" |
+| The agent's turn after an approval, in any chat | What it read before asking is still in mind | "A reminder can't be set while you carry on after an approval: …" |
+
+Each answer ends with: propose it with `propose_automation`; the user saves it themselves. Only the user's own message in their own chat (web or Telegram) sets a reminder at once.
+
+Example: in the Automations chat Rahul writes "and remind me at 5 to reply". Tex proposes a draft "Reminder: reply" with a Save button instead of setting it; Rahul taps Save.
 
 - How the api knows: when the worker hands a turn to the container, it notes in Redis what kind of turn it is, beside the turn's conversation, and removes the note when the turn ends. The container's tool calls are matched to that note by the user, never by anything the agent says. If the note can't be read, the reminder is refused too.
 - `propose_automation` still works during a run. The user sees the draft and decides. The agent's instructions also tell it never to propose or set one because of something it read during a run.
@@ -2506,6 +2530,7 @@ Each default is the provider's current mid-priced model that can use tools. They
 - **Deleting the account** deletes LiteLLM's copy and the saved keys.
 - **One server rule.** LiteLLM encrypts the stored keys with its master key. If `LITELLM_MASTER_KEY` changes later, those keys can no longer be read, and these users' turns fail.
 - **Quicker chat on the user's key, too.** The model that holds the key gets the same additions as Textcrew AI's claude model, where the model takes them (`model-tuning.ts`). An Anthropic key: the prompt cache always, and a low effort for the Claude models that take one (Opus 4.6 and later, Sonnet 4.6 and later, Haiku 5.5, Fable). An OpenAI key: a low reasoning effort for its reasoning models (gpt-5 and later, the o models); OpenAI caches by itself. An OpenRouter key: the prompt cache for Claude models only. A model saved before this was added is saved again at the next 5-minute sync.
+- **A second copy for Hermes's crew** (16 October). LiteLLM holds the key twice: once for Tex, at the low effort, and once for Byte, Patch and Scout, the same model and key at a medium effort (OpenRouter: no effort either way). The crew asks for its own name (below, "Textcrew AI"), which the user's LiteLLM key points at the second copy. Both are saved and deleted together. A key saved before this gets its second copy at the next 5-minute sync.
 - **Not run for real yet.** It was checked against a real LiteLLM of the same version, with a stand-in for the provider. No call has gone to a real provider, because there is no key with balance.
 
 ### The user's Claude plan
@@ -2574,6 +2599,7 @@ Example: Rahul picks Opus 5.5 and the effort xhigh. His next Telegram message ru
 - **The budget is set again** after every sync, and when credits are added or removed. It is also set again when an own key is saved or deleted, when the AI choice changes, and when a Claude plan is connected or goes.
 - **A provider key is needed.** Textcrew AI works only if LiteLLM holds a provider key that can pay. Without one these turns fail.
 - **Quicker chat.** LiteLLM adds two things to every call to the claude model: Anthropic's prompt cache, marked on the instructions and on the last message, and a low thinking effort. With the cache, the next model call of the same turn, and the next message within 5 minutes, reads the instructions, the tools and the conversation so far from the cache: faster, and a cached part costs a tenth. The gpt model gets a low reasoning effort too. The cheap model is left as it was. A request's own effort still wins. It was checked with LiteLLM 1.104.2, the server's version, in front of a stand-in for the provider: the marks and the effort reached it as meant. Not yet with a real model.
+- **The crew thinks harder than chat** (16 October). On Hermes, Tex asks LiteLLM for `agent-default` and the crew (Byte, Patch, Scout) for `agent-crew`; Hermes has one setting for all three helpers, so Scout gets it too. The user's key decides what each means: on Free both mean the cheap model; on Pro and Max `agent-default` means `claude` (low effort) and `agent-crew` means `claude-crew`, the same Claude with the same cache marks at a medium effort, with the same backup to the cheap model. On the user's own key, the second copy above. This is what Claude Code does with "Default": a quick Tex, and Byte and Patch thinking at medium. One difference: on Claude Code Byte and Patch run on Opus 5.5; on Textcrew AI they stay on the same Claude as Tex, at a higher effort. The names are settings: `LITELLM_CREW_MODEL` and `LITELLM_PREMIUM_CREW_MODEL` in the backend, `LITELLM_CREW_MODEL` in the vm-manager. Nothing new goes into a container: the crew uses the container's one LiteLLM key.
 
 ### Switching Textcrew AI off for the whole server
 
@@ -3176,7 +3202,7 @@ The crew is defined once, inside the Bridge, and given to both engines. Tex is t
 
 On Claude Code the tool lists are locks: a tool that is not on a member's list cannot be called. Tex's own calls to a web tool are refused by a small check that runs before each call. On Hermes the tool lists are only instructions, because Hermes cannot give each member its own tools.
 
-Which model each one runs on, on Claude Code: the user's pick, for all four. With the model left on "Default", Tex and Scout run on Sonnet 5.5 at low effort, and Byte and Patch on Opus 5.5 at medium effort (section 30). On Hermes all four run on the one model LiteLLM gives the container, at its low effort for chat (section 30), because Hermes gives every helper the lead's model.
+Which model each one runs on, on Claude Code: the user's pick, for all four. With the model left on "Default", Tex and Scout run on Sonnet 5.5 at low effort, and Byte and Patch on Opus 5.5 at medium effort (section 30). On Hermes, Tex runs on the model LiteLLM gives `agent-default`, at the low effort for chat, and Byte, Patch and Scout on the one it gives `agent-crew`: the same model at a medium effort (section 30, since 16 October). Hermes has one setting for all its helpers, so Scout is in the crew's group there.
 
 Example: the user asks to fix a typo in a repository and have it checked. Tex hands the fix to Byte, who opens a pull request. Tex then hands the pull request to Patch, who posts one review. Tex writes the answer.
 
@@ -3648,7 +3674,7 @@ These were found by reading the code while this report was written. Each is desc
 - **Scout's instructions in the agent image are out of date.** They still say the page reader refuses the built-in search's results. On Claude Code it no longer does (section 21).
 - **What a user is told when Textcrew AI credits run out in the middle of a turn is not settled.** The turn may be treated as our fault and given back (section 26).
 - **Disconnect does not try again when Composio cannot remove the account.** The failure is only logged and our row is deleted, so the app's sign-in can stay at Composio with nothing pointing to it. Account deletion does try again (sections 14 and 33).
-- **The refusal of reminders covers an automation's run only.** A later turn in the Automations chat (the user's follow-up there, or the agent's turn after an approval a run asked for) still has the run's text in its context and may set a reminder. A crew job, which reads other people's code, may too. The agent's instructions tell it not to act on what it read; the platform does not enforce it there (section 18).
+- **A reminder can still be set in a turn that read an email the user asked about.** Since 16 October `schedule_reminder` is refused in an automation's run, a crew job, the Automations chat and the turn after an approval (section 18). A turn that starts from the user's own message in their own chat is still allowed one, also when the user asked Tex to read their email or a web page in that same turn, and that text could ask for a reminder. The agent's instructions tell it not to act on what it read; the platform does not enforce it there.
 - **A draft's event name is checked only at Save when Composio's list can't be read** at the moment it is proposed. A wrong name is then refused at Save, with "try again in a moment", which does not say the name is wrong (section 18).
 - **The apps limit covers app actions only.** During an automation's run, the agent's other tools (reading web pages, memory, a crew job) are not limited by the automation's apps. A later turn in the Automations chat, after the run, is not limited either (section 18, "The run's limits").
 - **A test run of an app event has no real event.** The agent is told so and works with the latest matching item; what it picks may not be what a real event would have brought (section 18).
@@ -3674,7 +3700,7 @@ These were found by reading the code while this report was written. Each is desc
 
 ## 44. What has run for real
 
-The backend has 739 automated tests. They use a real database and real queues, and stand-ins for outside services. "Run for real" below means it ran on the AWS test server against the real outside service.
+The backend has 1,154 automated tests (16 October). They use a real database and real queues, and stand-ins for outside services. "Run for real" below means it ran on the AWS test server against the real outside service.
 
 | Area | Run for real |
 |---|---|

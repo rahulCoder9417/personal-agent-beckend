@@ -48,6 +48,44 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 16 October 2026: a blue dot on unread conversations
+
+- **Where it is:** on the branch `feat/unread-dot` in the backend and in the web app, since 16 October. Not on `main` and not on the test server yet.
+- **Why:** you asked for the web app's chat list to show which conversations have something new in them: a reply from Tex, or anything else the user hasn't seen yet. Until now only the Automations chat had a mark, and each browser kept it for itself, so the phone and the laptop disagreed.
+- **What the user notices:**
+  - **A blue dot** before the name of a conversation with a message from Tex they haven't seen, and the name a little bolder. It shows in the list beside the chat and in the phone's drawer. With the list put away, the button that shows it has a dot too.
+  - **Opening the conversation clears it**, on every device and tab, not only the one they used.
+  - **A reply that arrives while the conversation is open** doesn't leave a dot. If the tab is in the background, it stays unread until the tab is shown again.
+  - **Telegram counts the same way.** A reply on Telegram puts the dot on that Telegram conversation in the web app. Writing in that Telegram chat again counts as having seen what came before.
+  - **The Automations chat** now takes its mark from the server too, so it is the same on every device.
+  - **Nothing old lights up.** Everything said before the change counts as read.
+- **Backend:**
+  - **Two times per conversation:** when the agent last saved a message in it, and up to when the user has read it. A conversation is unread while the first is later. Every conversation in the api's answers now says `unread`.
+  - **What changes them:** a message from the agent (a reply, an approval request, a run's answer, a copy sent to Telegram) moves the first. A message the user writes, in any channel, moves the second to that message. Both happen in the same database write that already updates the conversation's last-message time.
+  - **A new address to mark one read:** `POST /v1/conversations/{conversationId}/read`. It works on any of the user's conversations, Telegram ones and the Automations chat too. Only an unread one is written; then the live stream says so (`conversation.updated`), so other tabs and devices drop the dot. Another user's conversation answers 404.
+  - **Why a separate address, and not reading the messages:** the web app fetches messages for other reasons too (older pages, catching up after the connection drops), and a reply that arrives while a conversation is open comes over the live stream without any fetch. So "I have seen it" is its own small call, which the web app makes when it shows a conversation and when something new arrives in it.
+- **Cost and speed:** no extra trip to the database per message, and marking costs one short write, only when something was unread. No container wakes and no credits are charged. Not measured.
+- **Contracts:** `openapi.yaml` changed: a conversation has `unread`, and there is the new mark-read address. The web app follows on its own `feat/unread-dot` branch, and it treats `unread` as optional, so it works with the backend before and after this goes out. `vm.proto` did not change.
+- **Database:** two new columns on `conversations` (migration 0025): the time of the agent's newest message and the "read up to" time. The migration gives each existing conversation the time of the agent's newest message in it for both, so none of them shows as unread. No new index. The server's deploy script runs the migration by itself.
+- **How it was checked:**
+  - New backend tests (9), in `test/unread.test.ts` and `test/unread-backfill.test.ts`:
+    - the rule itself, with its edge cases (never read, the same moment, read later);
+    - a reply makes a web conversation unread, the user's own message never does;
+    - marking read clears it, sends one live event, and a second mark sends nothing; the next reply brings the dot back;
+    - a conversation the user isn't in keeps its dot while they read another;
+    - Telegram: a reply there makes it unread, writing there marks it read, and the web app can mark it read;
+    - the Automations chat: a run's answer makes it unread, and it can be marked read;
+    - another user can't mark it (404) and nothing changes; an unknown conversation is 404, no sign-in is 401;
+    - the migration, run on a database of its own: old conversations with the agent's answers count as read, the ones without have neither time.
+  - The whole backend suite: 81 files, 950 tests passed. Lint, types and the contract check pass.
+  - The web app (its own README says how it works): 58 files, 826 tests passed, lint, types and the production build pass. Not looked at in a browser, and nothing has run on the test server.
+- **Still open:**
+  - Telegram never tells a bot that its message was read, so the last reply in a Telegram chat stays unread in the web app until the conversation is opened there, or the user writes in that chat again.
+  - WhatsApp does report "read", which could also mark a conversation read. Not done, since WhatsApp isn't switched on.
+  - To ship: merge the backend first and deploy (the migration runs by itself), then the web app. Either order works, because the web app treats `unread` as optional.
+- **Docs updated:** `hld-mvp.md` section 2 (see what is new) and section 12 (built, never run for real); `backend-report.md` section 8 (the conversation table, a new part "Unread conversations", the web app's calls), section 12 (the events), section 40 (the `conversations` table) and section 41 (the chat row).
+- **Commits:** backend `d4adfb9` (the feature) and the docs commit after it; web app `67c95fe` and `97fb3e9`.
+
 ### 15 October 2026: an approval holds exactly what runs, and a request asked again shows as "replaced"
 
 - **Where it is:** on `main` and on the test server (backend), and live in the web app, since 15 October.

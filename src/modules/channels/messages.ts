@@ -303,7 +303,10 @@ export async function turnReply(userId: string, turnId: string): Promise<Message
   return row;
 }
 
-/** The conversation the approval's question was asked in, while that message exists. */
+/**
+ * The conversation the approval's question was asked in, while that message exists. Its copy on
+ * Telegram (a question asked elsewhere) is not where it was asked.
+ */
 export async function conversationOfApproval(
   userId: string,
   approvalId: string,
@@ -311,10 +314,36 @@ export async function conversationOfApproval(
   const [row] = await db()
     .select({ conversationId: messages.conversationId })
     .from(messages)
-    .where(and(eq(messages.userId, userId), eq(messages.approvalId, approvalId)))
+    .where(
+      and(
+        eq(messages.userId, userId),
+        eq(messages.approvalId, approvalId),
+        isNull(messages.copyOf),
+      ),
+    )
     .orderBy(desc(messages.id))
     .limit(1);
   return row?.conversationId;
+}
+
+/** Every message of one approval sent to one chat app: the question, and a copy of it. */
+export async function approvalMessagesOn(
+  userId: string,
+  approvalId: string,
+  channel: Channel,
+): Promise<MessageRow[]> {
+  return db()
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.userId, userId),
+        eq(messages.approvalId, approvalId),
+        eq(messages.channel, channel),
+        eq(messages.direction, 'out'),
+      ),
+    )
+    .orderBy(messages.id);
 }
 
 /**

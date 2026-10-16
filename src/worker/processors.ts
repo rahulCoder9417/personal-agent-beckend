@@ -16,6 +16,7 @@ import {
 import { handleCrewJob } from '../modules/automations/crew-jobs.ts';
 import { expireDrafts } from '../modules/automations/drafts.ts';
 import { handleSendMessage, handleSendRaw } from '../modules/channels/outbound.ts';
+import { handleSettleApproval } from '../modules/channels/notify.ts';
 import { handleMessageStatus } from '../modules/channels/status.ts';
 import {
   handleCheckConnection,
@@ -48,6 +49,7 @@ export function processors(): Processors {
       'send-message': handleSendMessage,
       'send-raw': handleSendRaw,
       'message-status': handleMessageStatus,
+      'settle-approval': handleSettleApproval,
     },
     system: {
       'clerk-event': handleClerkEvent,

@@ -28,6 +28,8 @@ export interface OutboundContent {
   buttons?: Button[];
   /** WhatsApp only: template to use outside the 24-hour window. */
   template?: 'reminder' | 'approval' | 'task_done';
+  /** Telegram: sent without a sound (the user's quiet hours). */
+  silent?: boolean;
 }
 
 export interface SendResult {

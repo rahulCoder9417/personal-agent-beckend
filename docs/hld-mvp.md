@@ -243,24 +243,27 @@ The rules:
 - **Asked again.** When the user asks Tex to change a draft, Tex proposes again and the old draft becomes "replaced", as an approval asked again does; its card says so. When the user asks to change a saved automation, Tex proposes the change: its link (`/automations/aut_…?draft=drf_…`) marks the boxes that change, and Save makes the new automation and then removes the old one.
 - **During an automation's run, Tex cannot set a reminder.** An email or a page read during a run could otherwise ask for one, and a reminder is saved without the user seeing it first. A draft is still possible: the user sees it and decides.
 
-**On a canvas.** Each automation has a page of its own in the web app, `/automations/aut_…`, opened from its card. It shows the automation as five boxes joined by arrows, left to right:
+**On a canvas** (redesigned on 16 October, on the web app's branch `ui/automations-redesign`, not on `main` yet). Each automation has a page of its own in the web app, `/automations/aut_…`, opened from its row on the Automations page. Every automation has the same shape, top to bottom, with reading and writing optional:
 
-| Box | What it shows | Example |
+| Lane | What it holds | Example |
 |---|---|---|
-| Trigger | When it runs, and whether it is on or paused | "Every Monday at 9:00 AM, your time" |
-| Tex's instruction | The title and the instruction | "List my open pull requests in acme/web" |
-| Apps Tex may use | The trigger's app; for older automations, "Your connected apps, as needed" | GitHub |
-| Asks you first | The platform's fixed rule | "Sending, deleting or paying waits for your OK" |
-| Results | The Automations chat, and the chat app a copy goes to | "Automations chat", "Copy to Telegram" |
+| Start when | When it runs: once, on a schedule, or an app event | "Every weekday at 8:00 AM", "A new email arrives" |
+| Read from an app (optional) | App steps whose action only reads | Gmail "Fetch emails" |
+| Tex and the crew | Tex's steps, or the one instruction | "Pick the urgent ones and say why" |
+| Write or send (optional) | App steps whose action changes something | Gmail "Send email", which always asks first |
+| Results | The Automations chat, and the chat app a copy goes to | "Automations chat, and Telegram" |
 
-- A draft opens on the same canvas, marked "Not saved yet", with Save, Save paused and Discard. "Save paused" makes the automation switched off, to turn on later.
-- The apps named in a draft or on the canvas are kept with the automation and drawn in the Apps box. They are a limit (below).
-- The drawing library is React Flow (MIT licence, version 12.12.0, about 59 KB). It loads on that page only. Its small "React Flow" link in the corner stays, as you decided.
-- **Phones** (under 768 pixels wide) get the same five boxes as a list of cards. A "List view" switch shows the list on a wide screen too.
-- **The cards** on the Automations page each have the same five steps as a small strip of plain text, without the library.
-- For the picture the API now says two things it kept to itself: where the copy of each answer goes (`copyTo`: Telegram, or none), and the trigger's settings (for example the repository a pull-request review watches). `GET /v1/automations/{id}` reads one automation.
+- **The steps stay one list,** in the order they run, as the API keeps them. An app step is a read or a write by what its action does (the app's list says whether it changes something). An automation with no steps is "Just Tex": the trigger, then Tex's box with the instruction.
+- **An older automation whose steps don't fit** (Tex, then a read, then Tex again) is shown in the order it runs, in one lane, and saved exactly as it was. Nothing is moved unless the user asks ("Sort into lanes"), because moving a step changes what an "only if" looks at.
+- **Adding a step:** blocks on the left, from the user's connected apps' real events and actions, are dragged onto the canvas (only the places of their own lane light up) or clicked; a "+" on a line puts one there; "Skip reading" and "Skip writing" take a lane out. A click on a box opens its settings on the right. At most 6 steps.
+- A draft opens on the same canvas, marked "Not saved", with Save, Save paused and Discard. "Save paused" makes the automation switched off, to turn on later.
+- The apps named in a draft or on the canvas are kept with the automation. They are a limit (below).
+- The drawing library is React Flow (MIT licence, version 12.12.0). It loads on these pages only. Its small "React Flow" link in the corner stays, as you decided.
+- **Phones** (under 768 pixels wide) get the blocks, the canvas and the settings one under another; adding works by tapping.
+- **The Automations page** lists every automation as a row (its apps' logos, its name, its last and next run, its switch and a "…" menu), with filters (on a schedule, when something happens, needs you) and templates under the list. Pull-request review is a row like the others. What needs the user (an app to connect, a step waiting for an OK) is in amber; red is only for a run that failed. The whole web app is set in Plus Jakarta Sans.
+- For the picture the API says where the copy of each answer goes (`copyTo`: Telegram, or none), and the trigger's settings (for example the repository a pull-request review watches). `GET /v1/automations/{id}` reads one automation.
 
-**Building and changing one by hand** (phase 3, option A; built on 16 October). The same five boxes can be edited. A click on a box opens its settings in a side panel:
+**Building and changing one by hand** (phase 3, option A; built on 16 October). Every box on the canvas can be changed: a click on one opens its settings beside it. What the user sets (for one instruction, the instruction, the apps and "asks you first" are Tex's box):
 
 | Box | What the user sets |
 |---|---|
@@ -270,19 +273,17 @@ The rules:
 | Asks you first | Before sending, deleting or paying (always), or stricter: before anything that changes something |
 | Results | The Automations chat, and a copy to the user's linked Telegram chat or not |
 
-- **"New automation"** opens an empty canvas, or one filled from a template.
-- **Checked while typing.** The web app asks the server to check the parts without saving (`POST /v1/automations/check`). The answer has each problem with the box it belongs to, and the next three run times. A box with a problem turns red with the message. The checks are the same as a save's: the plan's limit, a real time zone, a moment not past, at most every 15 minutes, the apps connected and on the plan, an event the app really has with its required settings filled, a linked Telegram chat for the copy.
+- **"New automation"** asks Tex in words (the chat opens with them, and Tex answers with a draft), or picks how it works (read, decide, then act; read and tell me; write without reading; just Tex) or a template, and opens the canvas.
+- **Checked while typing.** The web app asks the server to check the parts without saving (`POST /v1/automations/check`). The answer has each problem with the box it belongs to, and the next three run times. A box with a problem is marked in amber with the message. The checks are the same as a save's: the plan's limit, a real time zone, a moment not past, at most every 15 minutes, the apps connected and on the plan, an event the app really has with its required settings filled, a linked Telegram chat for the copy.
 - **Save, Save paused.** A new automation is made by `POST /v1/automations`, with a one-time key (`clientRequestId`): a double click makes one. A change is saved by `PUT /v1/automations/{id}`, which keeps the automation's id and page; a draft Tex proposed for a change does the same now. A changed app event gets its new watch at Composio first, then the automation points at it, then the old watch is removed, so exactly one watch is left and none is missing on the way.
-- **Run once now.** On a saved automation, on or paused: a normal run, at a normal run's cost and with approvals as usual. A line in the Automations chat says it is a test run, and Tex is told too. It does not move the schedule, does not finish a one-time reminder and does not count as a failure. At most 10 an hour per user. To try one before it goes live: Save paused, then Run once now.
+- **Run once now** (the canvas's "Test run"). On a saved automation, on or paused: a normal run, at a normal run's cost and with approvals as usual. A line in the Automations chat says it is a test run, and Tex is told too. It does not move the schedule, does not finish a one-time reminder and does not count as a failure. At most 10 an hour per user. To try one before it goes live: Save paused, then Run once now.
 - **Ask Tex to change this.** The user's version on the canvas is kept as a draft of their own (`madeBy: user`), and the chat opens with "Change this draft …". Tex reads it with `get_automation_draft` and proposes the change, which replaces the user's draft.
 - **The apps are a limit.** While an automation runs, Tex may use only the apps in its Apps box, and the trigger's app. An action in another app is refused, and so is an approval asked for one. With none named (older automations), any connected app works, as before. The worker notes the automation beside the turn in Redis, as it notes the kind of turn; if the note can't be read, the action is refused.
 - **"Ask you first", stricter.** Set to "anything that changes something", every app action of that run that changes something needs the user's yes, not only the risky ones. Looser than the platform's rule is never possible.
 - **Plan limits stay.** The number of automations, the apps a plan may use and the Max-only features are checked as everywhere else.
-- **Phones** get a form with the same five parts in place of the canvas.
-
 ### 5.5 A pull request gets reviewed
 
-1. The user turns review on for one GitHub repo, in the web app.
+1. The user turns review on for one GitHub repo, in the web app: the "Review pull requests" template on the Automations page opens its canvas (fixed boxes: the pull request, its changes read, Patch's review, the comment, the verdict), where the repo is typed. Each reviewed repo is then a row of the Automations list.
 2. Someone opens a pull request there, or pushes new commits to one.
 3. Composio tells our server.
 4. The worker wakes the user's container and tells Tex to have Patch review that pull request.
@@ -458,7 +459,7 @@ One exception to rule 6, by decision: a Max user's container with Scout's browse
 | Web app hosting | Vercel |
 | Server for the beta | The AWS test server. The VPS comes after the beta is tested |
 | Containers | Every message, reminder and automation goes through the user's container |
-| Automations | Anything more than a plain one-time reminder goes through a draft the user saves, on web and Telegram. Each automation is drawn as a flow (React Flow); phones get a list. Building by hand: option A (today's shape on the canvas), then C (a few steps in one run). Decided on 16 October |
+| Automations | Anything more than a plain one-time reminder goes through a draft the user saves, on web and Telegram. Each automation is drawn as a flow (React Flow), in lanes since 16 October (read, Tex, write; reading and writing optional); phones get the same canvas with the blocks and the settings above and below. Building by hand: option A (today's shape on the canvas), then C (a few steps in one run). Decided on 16 October |
 
 ---
 
@@ -552,6 +553,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - Automations built and changed by hand, phase 3 (16 October, on `main`): the canvas edits the five boxes; the server checks the parts while the user types, with each problem on its box and the next three runs; Save once per key, Save paused, a change in place that keeps the automation's page (a changed app event gets its new watch before the old one goes), Run once now as a marked test run (10 an hour), Composio's list of events for the picker, "Ask Tex to change this" through the user's own draft, and each run held to its automation's apps and its "ask me first". Checked with the automated tests and end to end on the laptop with the real backend and the web app (stand-ins for Tex, Composio and Telegram); not yet tried on the server. It needs the database update (migration 0027) when it goes to the server; the agent image does not change.
 
 - Automations with steps, phase 4 (16 October, on the branch `feat/automations-steps` in the backend and the web app, not on `main` yet): up to 6 steps per automation (section 5.4); the checks name the step ("Step 4: …"); Tex proposes stepped drafts, the Telegram outline lists the steps; the runner keeps the step pointer and refuses calls that don't fit, pauses for a yes across two turns, stops on a false "only if" with one line, supersedes an older waiting run, and keeps results 2 days and the trail 30 days; the canvas lays the steps out with dagre and edits them (add, remove, move up and down, the step panel), with a form on phones. Also: saving Tex's draft of a change keeps the automation on or paused, and Tex is told about the "Automation runs finish" switch for copies to Telegram. Checked with the automated tests (Priya's example with stand-ins for Tex, Gmail and Telegram) and the web app's tests and build; not yet run on the server with a real Tex (step 4d). It needs the database update (migration 0032, after the Telegram approvals' 0031) and the new agent image (one more sentence in Tex's automation rules, in the vm-manager) when it goes to the server.
+- The Automations screens redesigned (16 October, on the web app's branch `ui/automations-redesign`, not on `main` yet; no backend change): the list as rows with pull-request review among them, a real drag-and-drop canvas in lanes (read, Tex, write; reading and writing optional), the new-automation page with Ask Tex and four shapes, amber for what needs the user, and Plus Jakarta Sans for the whole web app (section 5.4). Checked with the web app's tests and build, and by screenshots of the demo; not yet tried against the real backend.
 - Approvals for the agent's own actions (16 October, on `main`): Textcrew's rule list for Claude Code, its gate in the container (it fails closed: Claude Code's commands and file changes are no longer allowed without it), the git gateway asking before a push to a branch that already existed or a force push (it reads the push to tell the two apart), the crew job's brief as the yes for its own branch only, with "run the job again" after the job, and the card showing the command or the branch. Checked with the automated tests and with the real Claude Code program on the laptop against a stand-in api (a command allowed, one asked about, one refused; a file written inside the workspace, one outside asked about). Not yet run on the server. It needs the database update (migration 0027) and the new agent image when it goes there.
 - Three small fixes of 16 October, on the branch `fix/small-items-oct16` (backend), `fix/hermes-crew-model` (vm-manager) and `feat/stream-replay` (web app), not on `main` yet. **The live stream catches up after a reconnect:** every event has an id, and a connection that comes back gets what it missed of the last 15 minutes, so the web app no longer asks for its lists again after each of Vercel's 5-minute cuts. **Hermes's crew at a medium effort:** on Hermes, Byte, Patch and Scout think at medium while Tex stays at low, on Textcrew AI and on the user's own key. **No reminder from text the user did not write:** `schedule_reminder` is now refused in a crew job, in the Automations chat and in the turn after an approval, as it was in a run; Tex proposes a draft instead. Checked with the automated tests (the Hermes setting against Hermes's own source, not a running Hermes). Deploy the backend before the vm-manager: until the backend has given every key the crew's name (within 5 minutes of its start), Hermes's crew calls would be refused.
 

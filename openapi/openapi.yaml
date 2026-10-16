@@ -1313,6 +1313,28 @@ paths:
               schema: { $ref: "#/components/schemas/AgentStatus" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /v1/agent/prewarm:
+    post:
+      operationId: prewarmAgent
+      tags: [agent]
+      summary: Start waking the user's agent container before their message arrives
+      description: |
+        The web app calls this when the user opens the chat and when they start typing, so the
+        container is awake by the time the message is sent (a sleeping one takes 2.5 to 3.5
+        seconds to wake). It only starts the wake and answers at once; the wake itself runs in the
+        worker. Nothing is woken when the container is already awake (or waking or busy), when the
+        user has no credits, when no AI is connected (`aiAccess: none`), or when the account is
+        suspended. At most one call a minute per user does anything: a second call within the
+        minute answers `started: false` with `reason: recent`, never 429. The usual awake time is
+        charged, and the 3-minute idle stop counts from the wake.
+      responses:
+        "200":
+          description: Whether a wake was started, and if not, why not
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentPrewarm" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /v1/agent/settings:
     get:
       operationId: getAgentSettings
@@ -4600,6 +4622,21 @@ components:
       properties:
         state: { type: string, enum: [none, stopped, waking, awake, busy, broken] }
         lastActiveAt: { type: [string, "null"], format: date-time }
+
+    AgentPrewarm:
+      type: object
+      required: [started, reason]
+      properties:
+        started:
+          type: boolean
+          description: A wake was started (it finishes in the background).
+        reason:
+          type: string
+          enum: [started, recent, awake, no_credits, no_ai, suspended]
+          description: |
+            `started`: the wake was started. `recent`: this user already asked within the last
+            minute. `awake`: the container is already waking, awake or busy. `no_credits`: the
+            balance is zero. `no_ai`: no AI is connected. `suspended`: the account is suspended.
 
     Plan:
       type: object

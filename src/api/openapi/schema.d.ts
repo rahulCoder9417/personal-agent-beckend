@@ -867,6 +867,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/agent/prewarm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start waking the user's agent container before their message arrives
+         * @description The web app calls this when the user opens the chat and when they start typing, so the
+         *     container is awake by the time the message is sent (a sleeping one takes 2.5 to 3.5
+         *     seconds to wake). It only starts the wake and answers at once; the wake itself runs in the
+         *     worker. Nothing is woken when the container is already awake (or waking or busy), when the
+         *     user has no credits, when no AI is connected (`aiAccess: none`), or when the account is
+         *     suspended. At most one call a minute per user does anything: a second call within the
+         *     minute answers `started: false` with `reason: recent`, never 429. The usual awake time is
+         *     charged, and the 3-minute idle stop counts from the wake.
+         */
+        post: operations["prewarmAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/agent/settings": {
         parameters: {
             query?: never;
@@ -3091,6 +3118,17 @@ export interface components {
             state: "none" | "stopped" | "waking" | "awake" | "busy" | "broken";
             /** Format: date-time */
             lastActiveAt?: string | null;
+        };
+        AgentPrewarm: {
+            /** @description A wake was started (it finishes in the background). */
+            started: boolean;
+            /**
+             * @description `started`: the wake was started. `recent`: this user already asked within the last
+             *     minute. `awake`: the container is already waking, awake or busy. `no_credits`: the
+             *     balance is zero. `no_ai`: no AI is connected. `suspended`: the account is suspended.
+             * @enum {string}
+             */
+            reason: "started" | "recent" | "awake" | "no_credits" | "no_ai" | "suspended";
         };
         Plan: {
             id: components["schemas"]["PlanId"];
@@ -5506,6 +5544,27 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentStatus"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    prewarmAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Whether a wake was started, and if not, why not */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentPrewarm"];
                 };
             };
             401: components["responses"]["Unauthorized"];

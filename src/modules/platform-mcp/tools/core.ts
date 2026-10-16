@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { isChannelEnabled } from '../../../shared/config.ts';
 import { recordCrewJobReport } from '../../automations/crew-jobs.ts';
-import { getActiveUser } from '../../auth/users.ts';
+import { getActiveUserCached } from '../../auth/users.ts';
 import { ownsChat } from '../../auth/links.ts';
 import { getConversation } from '../../channels/conversations.ts';
 import { lastInboundSession } from '../../channels/messages.ts';
@@ -88,10 +88,13 @@ defineTool({
   description: "Your user's name, timezone, plan and connected apps.",
   input: {},
   async run({ userId }) {
-    const user = await getActiveUser(userId);
+    // The user from the short-lived copy, and the other parts (connected apps) at the same time.
+    const [user, ...parts] = await Promise.all([
+      getActiveUserCached(userId),
+      ...profileExtenders.map((fn) => fn(userId)),
+    ]);
     if (!user) throw new ToolError('User not found');
-    let extra: Record<string, unknown> = { connected_apps: [] };
-    for (const fn of profileExtenders) extra = { ...extra, ...(await fn(userId)) };
+    const extra = Object.assign({ connected_apps: [] }, ...parts) as Record<string, unknown>;
     return { name: user.name, timezone: user.timezone, plan: user.plan, ...extra };
   },
 });

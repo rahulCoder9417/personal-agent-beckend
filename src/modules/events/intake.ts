@@ -1,6 +1,7 @@
 import { and, eq, gt, inArray } from 'drizzle-orm';
 import { db } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
+import { runLater } from '../../shared/later.ts';
 import { addJob, type QueueName } from './queues.ts';
 import { events } from './schema.ts';
 
@@ -17,6 +18,14 @@ export interface IngestInput {
   jobName: string;
   /** Extra job data; `eventId` and `userId` are always added. */
   jobData?: Record<string, unknown>;
+  /** The new event's id, when the caller made it already (a web message is saved with it). */
+  id?: string;
+  /**
+   * Don't wait for the event's `queued` mark (one round trip). Safe: the job is already added, and
+   * an event left `received` is queued again by a resend or a worker start, which the job's id makes
+   * harmless. For a request whose answer someone is waiting for (the web app's send).
+   */
+  markLater?: boolean;
 }
 
 /**
@@ -29,7 +38,7 @@ export async function ingestEvent(
   const [row] = await db()
     .insert(events)
     .values({
-      id: newId('evt'),
+      id: input.id ?? newId('evt'),
       source: input.source,
       externalId: input.externalId,
       type: input.type,
@@ -43,7 +52,7 @@ export async function ingestEvent(
     .returning();
 
   if (row) {
-    await enqueueEvent(row, input.jobData);
+    await enqueueEvent(row, input.jobData, input.markLater);
     return { eventId: row.id, duplicate: false };
   }
 
@@ -62,7 +71,11 @@ export function setInboundPriority(fn: (userId: string) => Promise<number | unde
   priorityFor = fn;
 }
 
-async function enqueueEvent(row: EventRow, jobData?: Record<string, unknown>): Promise<void> {
+async function enqueueEvent(
+  row: EventRow,
+  jobData?: Record<string, unknown>,
+  markLater = false,
+): Promise<void> {
   if (!row.queue || !row.jobName) return;
   const priority =
     row.queue === 'inbound' && row.userId ? await priorityFor(row.userId) : undefined;
@@ -74,10 +87,13 @@ async function enqueueEvent(row: EventRow, jobData?: Record<string, unknown>): P
   );
   // Only while the row is still `received`. A quick job (a link-code reply) can end before this
   // line runs: its `done` / `ignored` must stay, or every worker start would queue it again.
-  await db()
-    .update(events)
-    .set({ status: 'queued' })
-    .where(and(eq(events.id, row.id), eq(events.status, 'received')));
+  const mark = () =>
+    db()
+      .update(events)
+      .set({ status: 'queued' })
+      .where(and(eq(events.id, row.id), eq(events.status, 'received')));
+  if (markLater) runLater("an event's queued mark", mark, { eventId: row.id });
+  else await mark();
 }
 
 /** Saves an event that needs no job (e.g. a duplicate-proof record). Returns false if seen before. */

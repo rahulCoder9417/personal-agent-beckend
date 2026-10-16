@@ -11,6 +11,7 @@ import type {
   ComposioTool,
 } from '../src/modules/integrations/composio.ts';
 import { setVmClient, type VmClient } from '../src/modules/orchestrator/vm.ts';
+import { laterSettled } from '../src/shared/later.ts';
 import { AgentRuntime, DeliverEventType, SandboxState } from '../proto-gen/vm/v1/vm_pb.ts';
 import { testApp } from './helpers.ts';
 
@@ -48,6 +49,8 @@ export async function mcpCall(
   token: string,
   tool: string,
   args: Record<string, unknown>,
+  /** `settle: false`: return with the answer, as the agent gets it (the activity log may follow). */
+  opts: { settle?: boolean } = {},
 ): Promise<McpResult> {
   const res = await testApp().request('/mcp', {
     method: 'POST',
@@ -67,6 +70,8 @@ export async function mcpCall(
     result?: { isError?: boolean; content?: Array<{ text: string }> };
     error?: { message: string };
   };
+  // The tool's activity-log entry is written after its answer: tests read it right after.
+  if (opts.settle !== false) await laterSettled();
   if (body.error) return { isError: true, text: body.error.message };
   return { isError: body.result?.isError ?? false, text: body.result?.content?.[0]?.text ?? '' };
 }

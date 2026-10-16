@@ -125,6 +125,7 @@ import {
   type TurnTimingRow,
 } from '../src/modules/orchestrator/timings.ts';
 import { sendWebMessage } from '../src/modules/orchestrator/process-message.ts';
+import { laterSettled } from '../src/shared/later.ts';
 import { getAgentStatus } from '../src/modules/orchestrator/sandbox.ts';
 import { planPriority, Priority } from '../src/modules/orchestrator/vm.ts';
 import { closeDb } from '../src/shared/db/client.ts';
@@ -910,6 +911,8 @@ async function main(): Promise<void> {
     if (err instanceof UsageError) console.error(`${err.message}\n\n${USAGE}`);
     else console.error(`failed: ${(err as Error).message}`);
   } finally {
+    // Writes nothing waited for (a sent message's event mark) end before the database closes.
+    await laterSettled();
     await closeQueues();
     await closeRedis();
     await closeDb();

@@ -4,18 +4,21 @@ import { z } from 'zod';
 import { db } from '../../../shared/db/client.ts';
 import { newId } from '../../../shared/ids.ts';
 import { logger } from '../../../shared/logger.ts';
-import { getActiveUser } from '../../auth/users.ts';
+import { getActiveUserCached, type User } from '../../auth/users.ts';
 import {
   appActionsFor,
   agentAppStates,
-  currentAgentAppStates,
+  currentConnections,
+  describeAppAction,
 } from '../../integrations/agent-apps.ts';
+import { shapeResult, withResultDefaults } from '../../integrations/app-results.ts';
 import {
-  activeConnections,
+  activeConnectionsOf,
   appActionChangesSomething,
-  connectionForToolkit,
   listConnections,
+  newestActiveConnection,
   refreshPendingConnections,
+  type Connection,
 } from '../../integrations/apps.ts';
 import { claimCrewJobComment, releaseCrewJobComment } from '../../automations/crew-jobs.ts';
 import { prCommentAllowed } from '../../automations/pr-review.ts';
@@ -58,30 +61,35 @@ function toolkitOf(action: string, known: string[]): string | undefined {
   return known.filter((t) => lower.startsWith(`${t}_`)).sort((a, b) => b.length - a.length)[0];
 }
 
-async function allowedToolkits(
-  userId: string,
-): Promise<Array<{ toolkit: string; connectedAccountId: string }>> {
-  const user = await getActiveUser(userId);
+/** The toolkits of the user's active connections whose app is on their plan. */
+function allowedToolkits(user: User | undefined, rows: Connection[]): string[] {
   if (!user) return [];
-  const conns = await activeConnections(userId);
-  return conns
+  return activeConnectionsOf(rows)
     .filter((c) => appAllowedOnPlan(c.catalog, user.plan))
-    .map((c) => ({ toolkit: c.catalog.toolkit, connectedAccountId: c.composioAccountId }));
+    .map((c) => c.catalog.toolkit);
+}
+
+/**
+ * The user (from the short-lived copy) and their connections, read at the same time: one round
+ * trip to the database instead of three or four one after another (each about 0.26 s on Neon).
+ */
+async function userAndConnections(userId: string) {
+  return Promise.all([getActiveUserCached(userId), listConnections(userId)]);
 }
 
 // The profile asks Composio about connections still pending first, so an app the user just
 // connected shows at once; one that is not ready is named with what to tell the user.
 extendProfile(async (userId) => {
-  const user = await getActiveUser(userId);
+  const [user, rows] = await userAndConnections(userId);
   if (!user) return { connected_apps: [], apps_not_ready: [] };
-  const states = await currentAgentAppStates(userId, user.plan);
+  const current = await currentConnections(userId, rows);
   return {
-    connected_apps: (await activeConnections(userId)).map((c) => ({
+    connected_apps: activeConnectionsOf(current).map((c) => ({
       app: c.catalog.slug,
       name: c.catalog.name,
       account: c.accountLabel,
     })),
-    apps_not_ready: states
+    apps_not_ready: agentAppStates(current, user.plan)
       .filter((s) => s.status !== 'connected' && s.status !== 'not_on_plan')
       .map((s) => ({ app: s.app.slug, name: s.app.name, status: s.status, note: s.note })),
   };
@@ -92,18 +100,36 @@ defineTool({
   description:
     "Your user's apps and the actions you can run in them. `apps` gives each app's status: connected, or not " +
     "ready (still connecting, needs connecting again, not on the user's plan) with a note saying what to tell " +
-    'the user. `actions` lists the actions of the connected apps, at most 100, shared fairly between the apps; ' +
-    'filter by app (e.g. "googlecalendar") or by a search word to see more of one app. ' +
+    'the user. `actions` lists the actions of the connected apps by name with one line each, at most 100, shared ' +
+    'fairly between the apps; filter by app (e.g. "googlecalendar") or by a search word to see more of one app. ' +
+    'It has no inputs: call describe_app_action for the inputs of the action you will use. ' +
     'Actions marked requires_approval need request_approval first, then run_app_action with the approval_id ' +
     '(exceptions: a new review or comment on a pull request, in a repo where your user turned on pull-request review, ' +
     "and the one review a crew job's brief asks you to post on its pull request). " +
     'costs_credits is what a successful run costs your user: 1 for an action that changes something, 0 for reading.',
   input: { app: z.string().optional(), search: z.string().optional() },
   async run({ userId }, args) {
-    const user = await getActiveUser(userId);
+    const [user, rows] = await userAndConnections(userId);
     if (!user) throw new ToolError('User not found');
-    return appActionsFor(userId, user.plan, { app: args.app, search: args.search });
+    return appActionsFor(userId, user.plan, { app: args.app, search: args.search }, rows);
   },
+});
+
+defineTool({
+  name: 'describe_app_action',
+  description:
+    "One app action's inputs (input_schema: each input's name, type and meaning, and which are required), with " +
+    'what it does, whether it needs request_approval and what it costs. Call it before run_app_action or ' +
+    "request_approval when you don't know the action's inputs; the names must be exactly these.",
+  input: { action: z.string().min(3) },
+  async run(_ctx, args) {
+    try {
+      return await describeAppAction(args.action);
+    } catch (err) {
+      throw new ToolError(err instanceof Error ? err.message : String(err));
+    }
+  },
+  summarize: (args) => `Looked up ${args.action}`,
 });
 
 defineTool({
@@ -112,7 +138,7 @@ defineTool({
     'Ask your user to approve a risky action (sending to others, deleting, paying…) before you run it. ' +
     'The user is shown your summary as "I\'d like to <summary>." with Approve and Deny buttons, so write the summary as what you will do, ' +
     'starting with the verb, with what they need to decide. Example: Send an email to priya@acme.com with subject "Notes". ' +
-    "Pass the exact action and its arguments, named as in the action's input_schema from list_app_actions. An app action's " +
+    "Pass the exact action and its arguments, named as in the action's input_schema from describe_app_action. An app action's " +
     'arguments are checked against it: a name the action does not have, a missing required input or a wrong kind of value is ' +
     'refused before the user sees anything, with the right names. After the yes, run_app_action with the approval_id runs exactly ' +
     'these arguments. If an approved request could not run and its arguments must change, ask again with replaces_approval_id ' +
@@ -198,10 +224,12 @@ function approvedRunFailed(approvalId: string, error: string | null): string {
 defineTool({
   name: 'run_app_action',
   description:
-    "Run an action in one of your user's connected apps (from list_app_actions). Risky actions need approval_id from an APPROVED request_approval " +
+    "Run an action in one of your user's connected apps (from list_app_actions; its inputs from describe_app_action). Risky actions need approval_id from an APPROVED request_approval " +
     'for the same action: it runs exactly the arguments the user approved, so leave arguments out (any you pass must be the approved ones). Posting a new review or comment on a pull request needs no approval in a repo where your user turned on ' +
     'pull-request review (a review must use event "COMMENT"); merging, approving and comments on other repos still do. ' +
-    'A successful action that changes something (send, create, update, delete) costs your user 1 credit; reading, listing and searching are free.',
+    'A successful action that changes something (send, create, update, delete) costs your user 1 credit; reading, listing and searching are free. ' +
+    'The answer is kept short: GMAIL_FETCH_EMAILS gives the sender, subject, date and a snippet of each email (pass include_payload true for ' +
+    'the bodies, or read one with GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID); any answer over about 8,000 tokens is cut, with a note on how to ask for less.',
   input: {
     action: z.string().min(3),
     arguments: z.record(z.string(), z.unknown()).optional(),
@@ -210,29 +238,23 @@ defineTool({
   async run({ userId }, args) {
     // What runs: the agent's arguments, or with an approval exactly the approved ones (below).
     let runArgs = args.arguments ?? {};
-    let toolkit = toolkitOf(
-      args.action,
-      (await allowedToolkits(userId)).map((a) => a.toolkit),
-    );
-    if (!toolkit) {
-      // It may have finished connecting a moment ago: ask Composio, then look again.
-      await refreshPendingConnections(userId);
-      toolkit = toolkitOf(
-        args.action,
-        (await allowedToolkits(userId)).map((a) => a.toolkit),
-      );
+    // One read of the user's connections serves every check below (it was three or four).
+    const [user, read] = await userAndConnections(userId);
+    let rows = read;
+    let toolkit = toolkitOf(args.action, allowedToolkits(user, rows));
+    if (!toolkit && (await refreshPendingConnections(userId, rows))) {
+      // It may have finished connecting a moment ago: Composio was asked, so look again.
+      rows = await listConnections(userId);
+      toolkit = toolkitOf(args.action, allowedToolkits(user, rows));
     }
     if (!toolkit) {
       // Say why, when the app is one the user has a connection for (still connecting, expired…).
       const app = appOfAction(args.action);
-      const user = await getActiveUser(userId);
       const state =
-        app && user
-          ? agentAppStates(await listConnections(userId), user.plan).find((s) => s.app === app)
-          : undefined;
+        app && user ? agentAppStates(rows, user.plan).find((s) => s.app === app) : undefined;
       throw new ToolError(state?.note ?? 'That app is not connected or not available on your plan');
     }
-    const conn = await connectionForToolkit(userId, toolkit);
+    const conn = newestActiveConnection(rows, toolkit);
     if (!conn) throw new ToolError('That app is not connected');
 
     // HLD 7.5: at zero credits an action that changes something doesn't run (reading still does).
@@ -280,6 +302,10 @@ defineTool({
       consumedId = approval.id;
     }
 
+    // Our defaults for actions whose own send far too much (Gmail's fetch: no bodies), never on
+    // approved arguments: those run exactly as the user saw them.
+    if (!consumedId) runArgs = withResultDefaults(args.action, runArgs);
+
     let data: unknown;
     try {
       // The Composio user id is ALWAYS the caller's (forced from the container token).
@@ -319,9 +345,12 @@ defineTool({
         logger().error({ userId, action: args.action, err: String(err) }, 'app action not charged');
       }
     }
+    // No more than the agent needs: Gmail's fetch summarised, anything too long cut (app-results.ts).
+    const shaped = shapeResult(args.action, runArgs, data);
     return {
       ok: true,
-      data,
+      data: shaped.data,
+      ...(shaped.note ? { note: shaped.note } : {}),
       credits_charged: creditsCharged,
       ...(prReviewRepo ? { pr_review: prReviewRepo } : {}),
       ...(crewJobId ? { crew_job: crewJobId } : {}),

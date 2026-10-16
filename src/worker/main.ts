@@ -4,6 +4,7 @@ import { requeuePendingEvents } from '../modules/events/intake.ts';
 import { closeQueues } from '../modules/events/queues.ts';
 import { closeDb, keepDbWarm } from '../shared/db/client.ts';
 import { logger } from '../shared/logger.ts';
+import { laterSettled } from '../shared/later.ts';
 import { closeRedis } from '../shared/redis.ts';
 import { wireModules } from '../wiring.ts';
 import { processors } from './processors.ts';
@@ -28,6 +29,8 @@ log.info({ requeued, automations, queues: workers.map((w) => w.name) }, 'worker 
 
 async function shutdown() {
   await Promise.all(workers.map((w) => w.close()));
+  // Writes nothing waited for (an event's mark, a tool call's activity-log entry).
+  await laterSettled();
   await closeQueues();
   await closeRedis();
   await closeDb();

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { laterSettled } from '../src/shared/later.ts';
 import { importPKCS8, SignJWT } from 'jose';
 import { Webhook } from 'svix';
 import { expect } from 'vitest';
@@ -81,7 +82,10 @@ export async function call(path: string, init: ReqInit = {}): Promise<Response> 
     body = typeof init.body === 'string' ? init.body : JSON.stringify(init.body);
     headers['content-type'] ??= 'application/json';
   }
-  return testApp().request(path, { method: init.method ?? 'GET', headers, body });
+  const res = await testApp().request(path, { method: init.method ?? 'GET', headers, body });
+  // Writes the api does not wait for (an event's `queued` mark): tests read them right after.
+  await laterSettled();
+  return res;
 }
 
 /** Asserts the response status is documented for the operation and the body matches the spec. */

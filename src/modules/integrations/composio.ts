@@ -248,10 +248,37 @@ function accountNotFound(err: unknown): boolean {
   return e?.status === 404 || e?.code === 'CONNECTED_ACCOUNT_NOT_FOUND';
 }
 
+/**
+ * One SDK client per process (per key): making one is not free, and each new client used to ask
+ * npm whether a newer SDK exists (`disableVersionCheck`), on every call to Composio.
+ */
+let client: { apiKey: string; sdk: Composio } | null = null;
+
 function sdk(): Composio {
   const apiKey = config().COMPOSIO_API_KEY;
   if (!apiKey) throw new Error('COMPOSIO_API_KEY is not set');
-  return new Composio({ apiKey });
+  if (client?.apiKey !== apiKey)
+    client = { apiKey, sdk: new Composio({ apiKey, disableVersionCheck: true }) };
+  return client.sdk;
+}
+
+/**
+ * The inputs Composio marks as a file to upload, given as "no file" (empty text or null): sent as
+ * no input at all, which is what Composio expects (the SDK's own execute does the same).
+ */
+export function withoutEmptyFiles(
+  args: Record<string, unknown>,
+  schema: Record<string, unknown>,
+): Record<string, unknown> {
+  const props = schema.properties;
+  if (!props || typeof props !== 'object') return args;
+  const out = { ...args };
+  for (const [name, input] of Object.entries(
+    props as Record<string, { file_uploadable?: unknown }>,
+  ))
+    if (input?.file_uploadable === true && (out[name] === '' || out[name] === null))
+      delete out[name];
+  return out;
 }
 
 const realApi: ComposioApi = {
@@ -370,13 +397,26 @@ const realApi: ComposioApi = {
     return tool.tags ?? [];
   },
   async execute(slug, input) {
-    const res = await sdk().tools.execute(slug, {
-      userId: input.userId,
-      ...(input.connectedAccountId ? { connectedAccountId: input.connectedAccountId } : {}),
-      arguments: input.arguments,
-      dangerouslySkipVersionCheck: true,
-    } as never);
-    return { successful: res.successful, data: res.data, error: res.error };
+    // The SDK's own execute asks Composio for the action's description before every run (about
+    // 0.3 s). The description is kept here instead (`describedTool`: from the app's listing, or
+    // asked once per action for a while), and the run goes straight to Composio's execute
+    // endpoint, as the SDK sends it: the latest version, no retry (a write must not run twice).
+    const tool = await describedTool(slug);
+    const res = await sdk()
+      .getClient()
+      .tools.execute(
+        tool?.slug ?? slug,
+        {
+          user_id: input.userId,
+          ...(input.connectedAccountId ? { connected_account_id: input.connectedAccountId } : {}),
+          arguments: tool
+            ? withoutEmptyFiles(input.arguments, tool.inputParameters)
+            : input.arguments,
+          version: 'latest',
+        },
+        { maxRetries: 0 },
+      );
+    return { successful: res.successful, data: res.data, error: res.error ?? null };
   },
   async createTrigger(userId, triggerSlug, connectedAccountId, triggerConfig) {
     const res = (await sdk().triggers.create(userId, triggerSlug, {
@@ -505,6 +545,25 @@ export async function actionTool(
   const listed = await toolkitTools(toolkit, now).catch(() => null);
   const found = listed?.find((t) => t.slug.toUpperCase() === key);
   if (found) return found;
+  const kept = toolCache.get(key);
+  if (kept && now - kept.at < TOOL_LIST_TTL_MS) return kept.tool;
+  const tool = await api.tool(key);
+  toolCache.set(key, { at: now, tool });
+  return tool;
+}
+
+/**
+ * One action's description for running it: from its app's listing when that is kept, else asked by
+ * its name and kept as long as a listing. Never lists an app for this. Null: Composio has no such
+ * action (its execute then says so).
+ */
+async function describedTool(slug: string, now = Date.now()): Promise<ComposioTool | null> {
+  const key = slug.toUpperCase();
+  for (const { at, tools } of toolListCache.values()) {
+    if (now - at >= TOOL_LIST_TTL_MS) continue;
+    const found = tools.find((t) => t.slug.toUpperCase() === key);
+    if (found) return found;
+  }
   const kept = toolCache.get(key);
   if (kept && now - kept.at < TOOL_LIST_TTL_MS) return kept.tool;
   const tool = await api.tool(key);

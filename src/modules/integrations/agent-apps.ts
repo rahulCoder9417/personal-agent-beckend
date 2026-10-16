@@ -16,7 +16,8 @@ import {
   CATALOG,
   type CatalogApp,
 } from './catalog.ts';
-import { toolkitTools, type ComposioTool } from './composio.ts';
+import { appOfAction } from './action-inputs.ts';
+import { actionTool, toolkitTools, type ComposioTool } from './composio.ts';
 
 /**
  * - `connected`: an active connection, on the user's plan. Its actions are listed.
@@ -123,9 +124,21 @@ export function agentAppStates(
 export async function currentAgentAppStates(
   userId: string,
   plan: PlanId,
+  rows?: Connection[],
 ): Promise<AgentAppState[]> {
-  await refreshPendingConnections(userId);
-  return agentAppStates(await listConnections(userId), plan);
+  return agentAppStates(await currentConnections(userId, rows), plan);
+}
+
+/**
+ * The user's connections after asking Composio about pending ones. `rows`: as the caller has just
+ * read them; they are read again only when one was pending, since its status may have changed.
+ */
+export async function currentConnections(
+  userId: string,
+  rows?: Connection[],
+): Promise<Connection[]> {
+  const read = rows ?? (await listConnections(userId));
+  return (await refreshPendingConnections(userId, read)) ? listConnections(userId) : read;
 }
 
 /** At most this many actions in one answer of list_app_actions. */
@@ -146,13 +159,31 @@ export function fairShares(sizes: number[], total: number): number[] {
   return out;
 }
 
+/**
+ * One action in list_app_actions: its name and what it does in one line. No input schema: with
+ * them, Gmail's 63 actions came to about 115 thousand characters (some 33 thousand tokens), and on
+ * 15 October the agent paged through that with its own tools for most of a minute. One action's
+ * inputs come from describe_app_action.
+ */
 export interface ListedAction {
   action: string;
   app: string;
   description: string;
   requires_approval: boolean;
   costs_credits: number;
-  input_schema: Record<string, unknown>;
+}
+
+/** A listed action's description: its first sentence, at most this long. */
+export const LISTED_DESCRIPTION_CHARS = 120;
+
+/** The first sentence of a description, on one line, cut at LISTED_DESCRIPTION_CHARS. */
+export function oneLine(description: string): string {
+  const flat = description.replace(/\s+/g, ' ').trim();
+  const end = flat.search(/[.!?](\s|$)/);
+  const first = end >= 0 ? flat.slice(0, end + 1) : flat;
+  return first.length <= LISTED_DESCRIPTION_CHARS
+    ? first
+    : `${first.slice(0, LISTED_DESCRIPTION_CHARS - 1).trimEnd()}…`;
 }
 
 export interface ListedApp {
@@ -173,9 +204,10 @@ export async function appActionsFor(
   userId: string,
   plan: PlanId,
   filter: { app?: string; search?: string } = {},
+  rows?: Connection[],
 ): Promise<{ apps: ListedApp[]; actions: ListedAction[]; note?: string }> {
   const wanted = filter.app?.trim().toLowerCase();
-  const states = (await currentAgentAppStates(userId, plan)).filter(
+  const states = (await currentAgentAppStates(userId, plan, rows)).filter(
     (s) => !wanted || s.app.slug === wanted || s.app.toolkit === wanted,
   );
   const q = filter.search?.trim().toLowerCase();
@@ -229,10 +261,9 @@ export async function appActionsFor(
       actions.push({
         action: t.slug,
         app: s.app.slug,
-        description: t.description.slice(0, 300),
+        description: oneLine(t.description),
         requires_approval: actionNeedsApproval(t.slug),
         costs_credits: actionChangesSomething(t.slug, t.tags) ? 1 : 0,
-        input_schema: t.inputParameters,
       });
   });
   if (states.length > 0) return { apps, actions };
@@ -243,4 +274,49 @@ export async function appActionsFor(
       ? `${named.name} is not connected. Your user connects it on the Integrations page (${appsPageUrl()}).`
       : `There is no app "${filter.app}". Call list_app_actions with no app to see the connected ones.`;
   return { apps, actions, note };
+}
+
+/** describe_app_action: one action as Composio describes it, with its inputs. */
+export interface DescribedAction {
+  action: string;
+  app: string;
+  description: string;
+  requires_approval: boolean;
+  costs_credits: number;
+  input_schema: Record<string, unknown>;
+}
+
+/**
+ * One action of a catalog app, with its input schema (from the app's listing, kept 10 minutes, or
+ * asked of Composio by name). Throws a message for the agent when the action is unknown or
+ * Composio can't be asked. Reads nothing of the user's: an action's inputs are the same for all.
+ */
+export async function describeAppAction(action: string): Promise<DescribedAction> {
+  const app = appOfAction(action);
+  if (!app)
+    throw new Error(
+      `"${action}" is not an action of an app Textcrew connects. Call list_app_actions to see the actions.`,
+    );
+  let tool: ComposioTool | null;
+  try {
+    tool = await actionTool(app.toolkit, action);
+  } catch (err) {
+    logger().warn({ app: app.slug, action, err: String(err) }, 'composio describe tool failed');
+    throw new Error(
+      `${app.name}'s actions could not be described right now. Try again in a moment.`,
+      { cause: err },
+    );
+  }
+  if (!tool)
+    throw new Error(
+      `${app.name} has no action "${action}". Find the right one with list_app_actions (app "${app.slug}").`,
+    );
+  return {
+    action: tool.slug,
+    app: app.slug,
+    description: tool.description,
+    requires_approval: actionNeedsApproval(tool.slug),
+    costs_credits: actionChangesSomething(tool.slug, tool.tags) ? 1 : 0,
+    input_schema: tool.inputParameters,
+  };
 }

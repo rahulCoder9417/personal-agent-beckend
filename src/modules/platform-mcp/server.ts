@@ -1,7 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import { runLater } from '../../shared/later.ts';
 import { logger } from '../../shared/logger.ts';
-import { audit } from '../admin/audit.ts';
+import { audit, type AuditInput } from '../admin/audit.ts';
 import { touch } from '../orchestrator/sandbox.ts';
 import { platformTools, ToolError, type ToolContext } from './registry.ts';
 import './tools/core.ts';
@@ -22,7 +23,7 @@ export function createPlatformMcpServer(ctx: ToolContext): McpServer {
         touch(ctx.userId);
         try {
           const result = await tool.run(ctx, args as never);
-          await audit({
+          auditLater(tool.name, {
             userId: ctx.userId,
             actor: 'agent',
             action: tool.name,
@@ -44,6 +45,18 @@ export function createPlatformMcpServer(ctx: ToolContext): McpServer {
     );
   }
   return server;
+}
+
+/**
+ * Writes a tool call's activity-log entry without making the agent wait for it (one round trip,
+ * about 0.26 s, on every tool call). The entry is made from the call's result before the answer
+ * goes back; a write that fails is logged as an error with the user and the tool, never the inputs.
+ */
+function auditLater(toolName: string, entry: AuditInput): void {
+  runLater('activity log entry of a tool call', () => audit(entry), {
+    userId: entry.userId,
+    tool: toolName,
+  });
 }
 
 function redactArgs(args: Record<string, unknown>): Record<string, unknown> {

@@ -73,7 +73,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 - **Contracts:** `openapi.yaml`: four new routes under `/v1/automation-drafts`, the schemas `AutomationDraft`, `AutomationDraftStatus` and `AutomationDraftSaved`, `Automation.apps`, `Message.automationDraftId` and the stream event `automation_draft.updated`. `vm.proto`: none.
 - **Database:** migration 0026: the table `automation_drafts`, the column `apps` on `automations` (empty for every automation already there) and the column `automation_draft_id` on `messages`.
 - **How it was checked:**
-  - Backend: a new test file with 25 tests: the request "every Monday at 9…" gives a draft and a card, with no automation, no timer and no watch; each check refuses at proposal and nothing is saved; apps kept once each and carried over; a full plan refused at proposal and at Save, the draft staying open; Save makes one automation with its timer and a second save is 409; three saves at once make one; Save paused has no timer; an app event's watch only at Save, a refused watch leaving the draft open and no automation; a passed moment refused in the user's words; a change replacing the old automation, also on a full plan; no change of a pull-request review; replaced, expired and discarded drafts can't be saved; the hourly expiry and the 30-day clean-up, each safe to run twice; the cap of 20; another user's draft is 404 everywhere and the agent can't read or replace it; the agent's tool list has no `create_automation` and nothing that saves; the drafts go with the account; the Telegram outline, its link and ✅ Save, a tap saving once and a second tap saying so, a replaced or expired draft's tap; a timer run and an app-event run refused a reminder while a message turn was not; a run's draft not copied to Telegram; the stream's events. The four older tests that used `create_automation` now propose and save. Lint, types and all 983 backend tests pass.
+  - Backend: a new test file with 25 tests: the request "every Monday at 9…" gives a draft and a card, with no automation, no timer and no watch; each check refuses at proposal and nothing is saved; apps kept once each and carried over; a full plan refused at proposal and at Save, the draft staying open; Save makes one automation with its timer and a second save is 409; three saves at once make one; Save paused has no timer; an app event's watch only at Save, a refused watch leaving the draft open and no automation; a passed moment refused in the user's words; a change replacing the old automation, also on a full plan; no change of a pull-request review; replaced, expired and discarded drafts can't be saved; the hourly expiry and the 30-day clean-up, each safe to run twice; the cap of 20; another user's draft is 404 everywhere and the agent can't read or replace it; the agent's tool list has no `create_automation` and nothing that saves; the drafts go with the account; the Telegram outline, its link and ✅ Save, a tap saving once and a second tap saying so, a replaced or expired draft's tap; a timer run and an app-event run refused a reminder while a message turn was not; a run's draft not copied to Telegram; the stream's events. The four older tests that used `create_automation` now propose and save. Lint, types and all 983 backend tests pass; with `main` merged into the branch (the app-action speed work), all 1013 pass.
   - vm-manager: a new Bridge test for the paragraph and its place. All 241 Bridge tests pass (1 skipped, as before); `go vet` is clean and `go test ./...` passes.
   - The web app's checks are in its README.
   - Not yet tried for real on the test server, with Telegram (the plan's "done when" asks for that).
@@ -98,9 +98,140 @@ Each entry has a heading with the date and the name of the feature, then the par
 - **Docs updated:** `hld-mvp.md` sections 5.4 and 12, and the docs table; `backend-report.md` sections 18 ("What the web app draws: the canvas") and 41.
 - **Commits:** backend `954f60f`, `48851e9`.
 
+### 16 October 2026: "check my email" without the waste: short app answers, fewer database trips, steps in plain words
+
+- **Where it is:** on `main` and on the test server (backend and vm-manager), and live in the web app, since 16 October.
+- **Why:** on 15 October "check my email" took 62 seconds. The model made 13 rounds instead of about 3, for 46.6 of those seconds (Claude Code, Sonnet 4.6, effort low, your own plan). What caused it:
+  - `list_app_actions` sent all 63 Gmail actions with every input of each: about 115 thousand characters, some 33 thousand tokens. The agent paged through that with Claude Code's own tools.
+  - Composio's email fetch sends every email's whole body and raw message unless told not to.
+  - The agent wrote its answer, ran a command, then wrote the answer again: one more round, and a "using Bash" step that flashed in the web chat.
+  - On our side, about 8 seconds were trips to the database, one after another, about 0.21 to 0.26 s each:
+    - sending from web chat made 7;
+    - each app tool read the user's connections twice;
+    - each tool call waited for its activity-log entry.
+  - The Composio library asked for the action's description before every run (about 0.33 s). We also made a new Composio client on every call, and each one asked npm for a newer version.
+  - In the web app, the text stayed in the box with a spinner until the server answered (about 1.8 s). Steps showed raw tool names ("using Bash") and folded into "Show steps (N)" when the answer came.
+- **What the user notices:**
+  - "Check my email" should take a few model rounds instead of 13. Expected, not measured with a real model yet.
+  - Tex's steps are in plain words: "Looked at your apps", "Checked your inbox", "Asked for your OK", "Ran a command". Never a raw tool name.
+  - In web chat, a sent message shows at once and the box clears. If sending fails, a toast says so and the words come back to the box.
+  - An answer keeps a short trail of its steps, such as "Checked your inbox · 2 steps". A click opens the list.
+- **Backend:**
+  - **`list_app_actions` gives names, not inputs.** Each action is one line: its name, the first sentence of what it does (at most 120 characters), whether it needs approval and what it costs.
+  - **A new tool, `describe_app_action`,** gives one action's inputs: their names, kinds and meanings, and which are required. It comes from the listing kept for 10 minutes, or is asked of Composio by name. It reads nothing of the user's. The approval check of 15 October uses the same description, unchanged.
+  - **App answers are kept short:**
+    - Gmail's fetch asks Composio for no bodies unless the agent asks for them.
+    - Each email comes back as sender, recipient, subject, date, a snippet of up to 200 characters, labels and id. At most 10 are sent, unless the agent asked for more.
+    - A note says how to read one email in full.
+    - An approved action's inputs are never changed.
+    - Any answer longer than 30,000 characters (about 8,500 tokens) is cut, long texts first, then long lists. A note says how to ask for less.
+  - **One read per tool call.**
+    - The app tools and `get_profile` read the user and the connections once, at the same time. The user comes from its copy in Redis.
+    - The connections are read again only when one was pending and Composio was asked about it.
+  - **The activity log no longer holds up the agent.**
+    - A tool call's entry is written just after its answer goes back.
+    - A write that fails is logged as an error, with the user and the tool.
+    - The api, the worker and the dev script wait for such writes before they stop.
+  - **Sending from web chat waits for 3 trips instead of 7:**
+    1. Every read at once: the credits, the files, the message sent before, the conversation.
+    2. The message, saved with its event's id, which is made beforehand.
+    3. The event and its job, beside the conversation's last message time.
+    - The event's "queued" mark is written after the answer.
+    - It is still safe to send again: one message and one event per `clientMessageId`, also for two sends at the same moment.
+    - A message whose event was lost gets it on the next send.
+    - "Out of credits" still comes before "no such conversation".
+    - A failed write of the conversation's last message time no longer fails a message on its way.
+  - **One Composio client per process,** without the npm version check. A run goes straight to Composio's run endpoint, with the action's description we already keep, and never retries. Before, the library asked for that description first, every time.
+- **vm-manager:** in the Bridge, the same for both engines.
+  - **Rules for apps in Tex's instructions:**
+    - the common Gmail actions can be run directly, with their key inputs: `GMAIL_FETCH_EMAILS` (a Gmail search, `max_results`), `GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID` (`message_id`) and `GMAIL_SEND_EMAIL` (`recipient_email`, `subject`, `body`; approval first);
+    - for other actions, the list, then `describe_app_action`;
+    - a result that is too big is asked for again with less, never paged through with commands or files.
+    - The input names were checked against Composio's Gmail documentation.
+  - **"Answer once, after your last tool call."**
+  - Byte's and Patch's briefs point to `describe_app_action` for the GitHub action they use.
+  - **Steps in plain words,** for Claude Code and for Hermes:
+    - a step names what was done, in the past tense, and an app action's own name decides it ("Checked your inbox", "Sent an email", "Looked in GitHub");
+    - an unknown tool is "Used a tool";
+    - the engine's own housekeeping (Claude Code's ToolSearch) gives no line at all;
+    - crew lines are unchanged.
+- **Cost and speed:**
+  - What the agent gets back, measured with `app-action-speed.test.ts` (Gmail's 63 actions and a fetch of 10 emails as Composio sends them; tokens estimated as characters ÷ 3.5):
+
+    | Sent back to the agent | Before | After |
+    |---|---|---|
+    | `list_app_actions`, 63 Gmail actions | 116,213 characters (about 33,200 tokens) | 8,634 (about 2,470) |
+    | `run_app_action` `GMAIL_FETCH_EMAILS`, 10 emails | 88,644 (about 25,300) | 4,091 (about 1,170) |
+    | The same, bodies asked for | 88,644 (about 25,300) | 29,193, cut (about 8,340) |
+    | `describe_app_action`, one action | did not exist | 3,499 (about 1,000) |
+    | The email check of 15 October: the list, then the fetch | about 205,000 (about 58,500) | the fetch alone, as the instructions allow: 4,091 (about 1,170); with the list and one description: about 16,200 (about 4,600) |
+
+    The model reads all of it again on every later round of the turn, so the saving is larger than these numbers.
+  - Trips to the database, each query made to wait 260 ms (`app-action-speed.test.ts` and `read-round-trips.test.ts`; the AI, Composio and the container take no time there):
+
+    | | Before | After |
+    |---|---|---|
+    | `POST /v1/messages`, until the api answers | 7 trips in a row, 1.84 s | 3 trips in a row, 0.79 s |
+    | Sending from web chat, until the reply shows | 3.15 s | 2.64 s |
+    | One `list_app_actions` or `run_app_action` | 4 trips in a row, 1.05 s | 1 trip, 0.27 s |
+    | `describe_app_action` | did not exist | no trip |
+
+    In all, a message from web chat made 30 queries before and 29 after; fewer of them are waited for.
+  - Composio: one request fewer per action run (about 0.33 s, as measured on 15 October), and no npm check per call. Not measured here: the tests use a stand-in for Composio.
+  - Expected on the server for "check my email": a few model rounds instead of 13, so tens of seconds sooner. Not measured.
+  - Tex's instructions grow by about 1,000 characters (about 250 tokens) per turn. Claude Code keeps them in its prompt cache.
+  - Credits: no change.
+- **Contracts:**
+  - `openapi.yaml` changed: a message the user wrote in the web app now carries its `clientMessageId`. The field is optional and only added. The web app follows on its own `perf/app-action-speed` branch.
+  - `vm.proto` did not change.
+  - The Platform MCP has one new tool, `describe_app_action` (`backend-report.md` section 13).
+- **Database:** none.
+- **How it was checked:**
+  - Backend, new tests:
+    - `test/app-action-speed.test.ts` (5): the email check above, with the numbers in the tables. All 5 failed on the old code.
+    - `test/app-actions-lean.test.ts` (12):
+      - the list has no inputs;
+      - `describe_app_action` gives one action's inputs from the kept listing, needs no connection, and says plainly when the action doesn't exist or Composio is down;
+      - `request_approval` still refuses `to` and names `recipient_email`;
+      - the fetch runs without bodies and comes back short;
+      - the activity-log entry is written after the answer, and a failed write is logged and doesn't fail the call;
+      - sending from web chat: one message, one event and one job, safe to send again; two sends of the same message at the same moment give one message and one event pointing to each other; a message whose event was lost gets it on the next send; a failed write of the last message time doesn't stop the message; out of credits before an unknown conversation; sending again doesn't change which conversation is active.
+    - `test/app-results.test.ts` (9): the summary of an email, in Composio's shape and in Gmail's own; at most 10 emails unless more were asked for; bodies cut to the limit with the note; any long answer cut, texts first, then lists; an action's one line.
+    - `test/composio-client.test.ts` (4), with a stand-in for the Composio library: one client, made without the npm check; an action run with its description asked once and then kept, never through the library's own run, and with no retry; the kept listing used with no question at all; an empty file input left out.
+  - Backend, changed: the test helpers wait for the writes that come after an answer; the chat-turn measurement times the answer as the browser waits for it.
+  - Backend results: lint, the type check and the contract check pass. The full run: 971 of 971 tests pass (83 files). One billing test (`turn-refund.test.ts`) failed once in an earlier run with 4 parallel workers and passed alone and in the full run; it doesn't touch this change.
+  - vm-manager: the Bridge's tests, 252 run (13 new, for the labels of both engines, a fake "check my email" run on Claude Code and the new rules), all pass, 1 skipped (the real browser). `go vet` is clean, `go test -race ./...` passes, the linter finds 0 issues. The Go code did not change.
+  - Web app: lint and the type check pass, 820 of 820 tests pass, and the build passes. Tried in demo mode at 1280 pixels: the box cleared at once, and the answer carried "Read 2 emails · 4 steps", which opened to the list. Not tried at 390 pixels.
+  - Not run on the server, and not timed with a real model.
+- **Still open:**
+  - **Time it for real.** After the merge and a deploy, ask "check my email" once on the test server and read the turn's stage times. Expected: about 3 model rounds.
+  - **Composio's answer without bodies** (`verbose` false) promises sender, recipient, time and labels; whether it also has a snippet is not documented. The summary reads every field name Composio and Gmail are known to use, and leaves out the snippet if there is none. Worth one look at a real answer.
+  - **Hermes's step lines.** The Bridge couldn't read Hermes's source from here: GitHub couldn't be reached. If Hermes doesn't name the action in its event, the line says "Used one of your apps". Hermes doesn't run on the server today.
+  - **The web app's branch conflicts with today's `main` of the web app,** in two places where both sides added something: `src/lib/api/hooks.ts` (the unread-mark code next to the new send code) and the imports of `src/components/chat/composer.tsx` (the Pricing link next to the toast). Keep both sides. Merging `main` into the branch here was blocked by a permission check, so it is left for you.
+  - **The live view of a running turn** still shows the "Tex is working…" bubble with the latest line, not the growing list of steps. Changing it would touch the working-indicator code another branch is changing. The steps reach the answer.
+  - **The Telegram webhook** still waits for its event's "queued" mark (about 0.26 s more before it answers Telegram). Nothing the user sees depends on it: the job is already queued.
+  - **A failed activity-log write** is logged but not tried again.
+  - **The biggest wait on our side** is still Neon being in Ohio (see 15 October).
+- **Docs updated:**
+  - `backend-report.md`:
+    - section 4 ("Keeping reads fast": writes nothing waits for, the new measurements);
+    - section 9 ("A message from web chat");
+    - section 12 ("Progress lines are live only");
+    - section 13 (the tools, the example, the activity log);
+    - section 14 ("How the agent finds and runs an action", "What can go wrong");
+    - section 15 ("The inputs are checked when the agent asks");
+    - section 34 (the two engines' rules, the events table).
+  - `hld-mvp.md`: 5.2 step 7, 5.3 step 3, section 12.
+  - The vm-manager's `README.md`: steps in plain words, the lead's two new rules.
+  - The web app's `README.md`.
+- **Commits:**
+  - backend: `cbcf7e6` (contract), `98e985e` (Composio client), `19d1993` (app tools), `c145013` (sending from web chat), `7a00566` (the chat-turn measurement), and the docs commit that adds this entry;
+  - vm-manager: `fa6dfb7` (instructions), `812d0fe` (labels), `07c3382` (README);
+  - web app: `c7ce6e3` (contract), `6145894` (step trail), `e331ff0` (sending at once), `4f32385` (README).
+
 ### 16 October 2026: "Tex is working…" no longer stays under a finished answer
 
-- **Where it is:** on `main` (backend) and live in the web app since 16 October. The backend log lines reach the server with the next deploy.
+- **Where it is:** on `main` and on the test server (backend), and live in the web app, since 16 October.
 - **Why:** at 10:32 AM you sent "hlo" in web chat. Tex answered "Hey! How can I help you today?", but "Tex is working…" stayed under the answer and your message kept saying "Tex is on it", though the turn was over. What happened, from the server's logs, the message as it is saved and the turn's timing record (India time):
   1. **10:32:15.** The message was saved and the turn started. The container was asleep and woke in 2.6 seconds.
   2. **10:32:19.** The agent took the message. The worker marked it "processing" and the agent "busy", and sent both to the web app. That is what "Tex is on it" and "Tex is working…" show.
@@ -124,7 +255,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 16 October 2026: the crew is asked for in chat; the web app's Crew page and crew jobs screen are gone
 
-- **Where it is:** on `main` in the vm-manager (the Bridge passage) and live in the web app since 16 October. The Bridge part reaches containers with the next deploy.
+- **Where it is:** on `main` and on the test server (the Bridge passage, in the vm-manager), and live in the web app, since 16 October.
 - **Why:** you wanted the crew simpler. The web app had a Crew page (a card per member) with a form for crew jobs ("Give Patch a review", "Give Byte a job") and a list of them. Byte and Patch are now used only from the chat: asking Tex to make a code change means Byte, and a pull-request review means Patch.
 - **What the user notices:**
   - **No Crew page, no jobs form, no jobs list.** "Crew" is gone from the sidebar, from More and from the phone's tabs. The old address `/crew` leads to the crew's part of Help (`/help#crew`).
@@ -151,7 +282,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 16 October 2026: a blue dot on unread conversations
 
-- **Where it is:** on `main` (backend, with migration 0025) and live in the web app since 16 October. The backend part is not on the test server yet.
+- **Where it is:** on `main` and on the test server (backend, with migration 0025), and live in the web app, since 16 October.
 - **Why:** you asked for the web app's chat list to show which conversations have something new in them: a reply from Tex, or anything else the user hasn't seen yet. Until now only the Automations chat had a mark, and each browser kept it for itself, so the phone and the laptop disagreed.
 - **What the user notices:**
   - **A blue dot** before the name of a conversation with a message from Tex they haven't seen, and the name a little bolder. It shows in the list beside the chat and in the phone's drawer. With the list put away, the button that shows it has a dot too.

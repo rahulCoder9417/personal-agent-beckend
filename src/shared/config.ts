@@ -279,6 +279,13 @@ export const configSchema = z.object({
   POLAR_PRODUCT_TOPUP_10: optional,
   /** Polar discount id for the waitlist offer: 50% off, once (first billing cycle only). */
   POLAR_WAITLIST_DISCOUNT_ID: optional,
+  /**
+   * Auto top-up: Pro and Max users may let Polar charge their saved card for a top-up when their
+   * balance drops under a line they pick. Needs Polar's off-session charges (in preview, switched
+   * on by Polar for the organization). Off by default: the API says it is not available, the web
+   * app hides it, and no auto top-up job charges anything.
+   */
+  AUTO_TOPUP_ENABLED: bool,
 
   /**
    * Who may pay for the AI. `platform`: Hermes on platform credits when the user brings nothing.

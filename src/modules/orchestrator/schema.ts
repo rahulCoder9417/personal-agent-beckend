@@ -45,6 +45,12 @@ export const approvals = pgTable(
     decidedVia: text(),
     /** Set when run_app_action consumed it (single use). */
     usedAt: timestamp({ withTimezone: true }),
+    /**
+     * Asked for one step of an automation's run with steps: the run (the automations module's
+     * `automation_runs`, no foreign key) and the step. Only that step of that run can use it.
+     */
+    automationRunId: text(),
+    automationStepId: text(),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index().on(t.userId, t.id), index().on(t.status, t.expiresAt)],

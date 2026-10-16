@@ -81,6 +81,7 @@ export const SETTINGS: Setting[] = [
   ['JEV_MODEL', 'routing', (c) => c.JEV_MODEL],
   ['JEV_TIMEOUT_MS', 'routing', (c) => c.JEV_TIMEOUT_MS],
   ['WAKE_WHILE_ROUTING', 'routing', (c) => c.WAKE_WHILE_ROUTING],
+  ['AUTOMATION_STEPS', 'automations', (c) => c.AUTOMATION_STEPS],
   [
     'COMPOSIO_MANAGED_APPS',
     'apps',

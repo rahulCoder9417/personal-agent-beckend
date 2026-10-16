@@ -86,6 +86,8 @@ export async function requestApproval(input: {
    * the worker's note, never from anything the agent says.
    */
   automationId?: string | null;
+  /** Asked for one step of an automation's run with steps: only that step of that run uses it. */
+  run?: { runId: string; stepId: string } | null;
 }): Promise<Approval> {
   const automationId =
     input.automationId !== undefined ? input.automationId : await turnForAutomation(input.userId);
@@ -102,6 +104,8 @@ export async function requestApproval(input: {
       sessionKey: input.sessionKey,
       automationId,
       expiresAt: new Date(Date.now() + APPROVAL_TTL_MS),
+      automationRunId: input.run?.runId ?? null,
+      automationStepId: input.run?.stepId ?? null,
     })
     .returning();
   const a = row!;
@@ -320,11 +324,16 @@ export async function handleApprovalReply(userId: string, msg: InboundMessage): 
   return true;
 }
 
-/** run_app_action: an approved, unexpired, unused approval for exactly this action. Single use. */
+/**
+ * run_app_action: an approved, unexpired, unused approval for exactly this action. Single use.
+ * `run`: the step of an automation's run with steps that uses it: the approval must have been
+ * asked for that step of that run. Left out, an approval asked for a run's step never matches.
+ */
 export async function consumeApproval(
   userId: string,
   id: string,
   action: string,
+  run?: { runId: string; stepId: string } | null,
 ): Promise<Approval | null> {
   const [row] = await db()
     .update(approvals)
@@ -337,10 +346,48 @@ export async function consumeApproval(
         eq(approvals.action, action),
         isNull(approvals.usedAt),
         gt(approvals.decidedAt, new Date(Date.now() - APPROVAL_TTL_MS)),
+        ...(run
+          ? [eq(approvals.automationRunId, run.runId), eq(approvals.automationStepId, run.stepId)]
+          : [isNull(approvals.automationRunId)]),
       ),
     )
     .returning();
   return row ?? null;
+}
+
+/**
+ * A newer run of an automation started while an older one waited for a yes on this approval:
+ * it becomes `replaced` (when still waiting, or approved and not used), so it can neither be
+ * answered nor run. Safe to run again.
+ */
+export async function replaceRunApproval(userId: string, id: string): Promise<Approval | null> {
+  const now = new Date();
+  const [row] = await db()
+    .update(approvals)
+    .set({ status: 'replaced' })
+    .where(
+      and(
+        eq(approvals.userId, userId),
+        eq(approvals.id, id),
+        isNull(approvals.usedAt),
+        or(
+          and(eq(approvals.status, 'pending'), gt(approvals.expiresAt, now)),
+          eq(approvals.status, 'approved'),
+        ),
+      ),
+    )
+    .returning();
+  if (!row) return null;
+  await publish(userId, 'approval.resolved', toApiApproval(row));
+  await settleApprovalMessages(userId, row.id, 'replaced', approvalEndNote('replaced'));
+  await audit({
+    userId,
+    actor: 'agent',
+    action: 'approval_replaced',
+    summary: `A newer run of the automation started: ${row.summary}`,
+    details: { approvalId: row.id, action: row.action, automationRunId: row.automationRunId },
+  });
+  return row;
 }
 
 /**

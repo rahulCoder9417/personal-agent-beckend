@@ -2,7 +2,7 @@
 // limits"): only the apps on its canvas (its Apps box and its trigger's app), and, when the user
 // chose it, a yes before any app action that changes something. The worker notes the automation
 // beside the turn in Redis (orchestrator/turn.ts); the agent's app tools ask here.
-import { turnAutomation } from '../orchestrator/turn.ts';
+import { turnAutomationRun } from '../orchestrator/turn.ts';
 import { appForToolkit, findApp } from '../integrations/catalog.ts';
 import { getAutomation, type Automation } from './automations.ts';
 
@@ -14,6 +14,11 @@ export interface RunLimits {
   /** The names of those apps, for the agent to tell the user. */
   appNames: string[];
   askFirst: Automation['askFirst'];
+  /**
+   * An automation with steps: the run its turn follows (runs.ts). The tools then hold every call to
+   * the run's current step.
+   */
+  runId?: string;
 }
 
 const appOf = (name: string) => findApp(name) ?? appForToolkit(name);
@@ -50,16 +55,21 @@ export class RunLimitsUnknown extends Error {}
  * the tool refuses rather than run without its limits.
  */
 export async function currentRunLimits(userId: string): Promise<RunLimits | null> {
-  const id = await turnAutomation(userId);
-  if (id === 'unknown')
+  const turn = await turnAutomationRun(userId);
+  if (turn === 'unknown')
     throw new RunLimitsUnknown('Could not check this turn just now. Try again in a moment.');
-  if (!id) return null;
-  const a = await getAutomation(userId, id);
+  if (!turn) return null;
+  const a = await getAutomation(userId, turn.automationId);
   if (!a)
     throw new RunLimitsUnknown(
       'This automation was deleted while it ran, so nothing more is done in its apps.',
     );
-  return limitsOf(a);
+  // With steps, the run is what holds the turn to its steps: without it, nothing runs free.
+  if (a.steps?.length && !turn.runId)
+    throw new RunLimitsUnknown(
+      "Could not find this run's steps just now, so nothing was done. End your turn.",
+    );
+  return { ...limitsOf(a), ...(turn.runId ? { runId: turn.runId } : {}) };
 }
 
 /**

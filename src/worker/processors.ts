@@ -12,6 +12,8 @@ import { handleBillTurn } from '../modules/billing/turn-billing.ts';
 import {
   handleAutomationTurn,
   handleComposioTrigger,
+  handleExpireRuns,
+  handleRunApprovalAnswer,
   handleRunAutomation,
 } from '../modules/automations/jobs.ts';
 import { handleCrewJob, handleCrewRerunAnswer } from '../modules/automations/crew-jobs.ts';
@@ -39,10 +41,13 @@ export function processors(): Processors {
     inbound: {
       'process-message': handleProcessMessage,
       'web-message': handleWebMessage,
-      // A "run the crew job again" answer starts the job; any other wakes the agent with it.
+      // A "run the crew job again" answer starts the job; an answer to a step of an automation's
+      // run with steps goes on with the run (or stops it); any other wakes the agent with it.
       'process-approval': async (job) => {
         const rerun = await handleCrewRerunAnswer(job);
-        return rerun === undefined ? handleProcessApproval(job) : rerun;
+        if (rerun !== undefined) return rerun;
+        const step = await handleRunApprovalAnswer(job);
+        return step === undefined ? handleProcessApproval(job) : step;
       },
       'automation-turn': handleAutomationTurn,
       'composio-trigger': handleComposioTrigger,
@@ -69,6 +74,7 @@ export function processors(): Processors {
       'settle-connection': handleSettleConnection,
       'expire-approvals': async () => expireApprovals(),
       'expire-automation-drafts': async () => expireDrafts(),
+      'expire-automation-runs': async () => handleExpireRuns(),
       cleanup: handleCleanup,
       backup: handleBackup,
       'health-check': handleHealthCheck,

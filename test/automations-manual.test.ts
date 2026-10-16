@@ -219,7 +219,12 @@ describe('check without saving: every problem on its box, and when it runs', () 
     const base = { title: 'T', instruction: 'Do it' };
 
     expect(await on({ ...base, runAt: new Date(Date.now() - 3600_000).toISOString() })).toEqual([
-      { step: 'trigger', code: 'past', message: 'That moment has passed. Pick a later one.' },
+      {
+        step: 'trigger',
+        stepId: null,
+        code: 'past',
+        message: 'That moment has passed. Pick a later one.',
+      },
     ]);
     expect((await on({ ...base, cron: '*/5 * * * *' }))[0]).toMatchObject({
       step: 'trigger',
@@ -251,7 +256,9 @@ describe('check without saving: every problem on its box, and when it runs', () 
         ...base,
         trigger: { app: 'gmail', event: 'GMAIL_NEW_GMAIL_MESSAGE', config: { interval: 'often' } },
       }),
-    ).toEqual([{ step: 'trigger', code: 'invalid', message: '"Interval" must be a number.' }]);
+    ).toEqual([
+      { step: 'trigger', stepId: null, code: 'invalid', message: '"Interval" must be a number.' },
+    ]);
     // Apps: unknown, not connected; the copy: no Telegram chat linked.
     const apps = await on({ ...base, cron: '0 9 * * *', apps: ['nope', 'gmail', 'notion'] });
     expect(apps.map((p) => p.step)).toEqual(['apps', 'apps']);
@@ -260,6 +267,7 @@ describe('check without saving: every problem on its box, and when it runs', () 
     expect(copy).toEqual([
       {
         step: 'results',
+        stepId: null,
         code: 'invalid',
         message: expect.stringMatching(/No Telegram chat is linked/),
       },
@@ -279,6 +287,7 @@ describe('check without saving: every problem on its box, and when it runs', () 
     expect(r.problems).toEqual([
       {
         step: null,
+        stepId: null,
         code: 'plan_limit',
         message: 'Your Free plan allows 1 automation, and it is in use. Delete one or upgrade.',
       },

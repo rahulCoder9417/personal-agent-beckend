@@ -517,6 +517,7 @@ A chat is one place to talk: web chat is one chat, and each linked Telegram chat
 | A title | The first message the user wrote in it, cut to 60 characters at a word. "New chat" while it has none. The user can rename it. The Automations chat is called "Automations" and keeps that name |
 | A start time and a last-message time | The list is sorted by the last message, newest first |
 | Active or not | The active one is where the chat's next message goes. Each chat has one |
+| Unread or not | Whether the agent said something in it that the user has not seen yet. See "Unread conversations" below |
 
 The rules:
 
@@ -546,10 +547,38 @@ What the web app calls:
 | `POST /v1/conversations` | Starts a new web conversation and makes it the active one |
 | `PATCH /v1/conversations/{conversationId}` | Renames it, or makes a web conversation the active one. Both answer 409 for the Automations chat |
 | `DELETE /v1/conversations/{conversationId}` | Deletes it with its messages and files. 409 for the Automations chat |
+| `POST /v1/conversations/{conversationId}/read` | Marks it read: the user has seen everything in it up to now. Any conversation, the Automations chat and Telegram ones too |
 | `GET /v1/messages` | With a conversation's id: its messages. With `channel=web` only: the active web conversation's messages. With nothing: every message |
 | `POST /v1/messages` | Sends a message. With a conversation's id it goes into that web conversation, which becomes the active one first. The Automations chat is written in where it is: it stays not active |
 
 Example: Rahul plans a trip to Goa in web chat. He clicks "New chat" and asks "what is a good laptop?". The agent answers about laptops and says nothing about Goa. The next day he opens the Goa conversation in the list and asks "and the hotel?". The agent answers with the trip in mind, and knows nothing of the laptop. In both it still knows he is vegetarian, because that is a saved memory.
+
+### Unread conversations
+
+The web app's list puts a blue dot on a conversation with something new in it: a message from the agent that the user has not seen yet. Each conversation keeps two times for this:
+
+| Time | What it is |
+|---|---|
+| The agent's newest message | When the agent last saved a message in it: a reply, an approval request, an automation run's answer, or the copy of one sent to Telegram. Empty while the agent has said nothing there |
+| Read up to | Up to when the user has seen it. Empty while they never have |
+
+A conversation is unread while the agent's newest message is later than the "read up to" time. Every conversation in the api's answers says so, as `unread`.
+
+The rules:
+
+- **Only the agent's messages make a conversation unread.** A message the user writes never does.
+- **Writing in a conversation marks it read,** in any channel: what came before the user's own message counts as seen. The "read up to" time moves to that message.
+- **The web app marks a conversation read** (`POST /v1/conversations/{conversationId}/read`) when it shows it, and again each time a new message arrives in it while it is shown. It does so only while its page is on screen: in a background tab, a reply stays unread until the tab is shown again. Marking sets "read up to" to now.
+- **Telegram counts the same way.** A reply on Telegram makes that Telegram conversation unread in the web app. Telegram does not tell a bot when its messages were read, so the backend cannot know the user saw the reply there. The conversation stays unread until it is opened in the web app, or the user writes in that Telegram chat again.
+- **The Automations chat counts the same way.** A run's answer makes it unread. It can be marked read like any other conversation.
+- **Marking is safe to repeat.** Only an unread conversation is written. When one turns read, `conversation.updated` goes out on the live stream, so the user's other tabs and devices drop the dot too. Marking a conversation that is read already writes nothing and sends nothing.
+- **Only the user's own conversations.** Marking another user's conversation answers 404 and changes nothing.
+- **What was said before this existed counts as read.** When the database was updated (migration 0025), each conversation got the time of the agent's newest message in it for both times.
+- **Marking costs nothing.** No container wakes and no credits are charged.
+
+The work is done where the conversation's last-message time is updated already, in the same write, so a message costs no extra trip to the database.
+
+Example: Rahul writes in his "Plan a trip to Goa" conversation, then opens "Laptop" before the agent answers. The answer arrives in "Goa", which gets a blue dot. He opens "Goa" and the dot goes, on his laptop and on his phone. Later the agent answers him on Telegram. In the web app, that Telegram conversation gets the dot until he opens it there or writes again on Telegram.
 
 ### Starting a new chat
 
@@ -844,10 +873,10 @@ The web app shows new messages and the agent's state without a reload. It keeps 
 | `agent.progress` | The agent reports a progress line |
 | `credits.updated` | A turn's billing job has run (a moment after the turn), or credits are added or run out |
 | `automation.updated` | An automation changes |
-| `conversation.updated` | A conversation starts, gets a message, is renamed, or becomes or stops being the active one |
+| `conversation.updated` | A conversation starts, gets a message, is renamed, becomes or stops being the active one, or is marked read |
 | `conversation.deleted` | A conversation is deleted. The event holds only its id |
 
-A message event holds the whole message, with the id of its conversation. So the web app knows which conversation to show it in. Its text is the text as it was written. A reply that went to Telegram as plain text still has its Markdown here (section 10). A conversation event holds the whole conversation: its title, its kind, its times and if it is the active one.
+A message event holds the whole message, with the id of its conversation. So the web app knows which conversation to show it in. Its text is the text as it was written. A reply that went to Telegram as plain text still has its Markdown here (section 10). A conversation event holds the whole conversation: its title, its kind, its times, if it is the active one and if it is unread.
 
 ### Progress lines are live only
 
@@ -3056,7 +3085,7 @@ There are three databases: the backend's, the vm-manager's and LiteLLM's. Each p
 | auth | `waitlist_attempts` | Every waitlist try, also repeats and blocked ones |
 | events | `events` | Everything that came in, saved once, with its status |
 | channels | `messages` | Every message in and out, with its channel, its conversation and its status. A message written during a turn keeps the turn's id. A copy sent to Telegram keeps the id of the message it copies |
-| channels | `conversations` | One row per conversation: its chat, its kind (a chat, or the user's one Automations chat), its number in that chat, its title, its start and last-message times, and if it is the active one |
+| channels | `conversations` | One row per conversation: its chat, its kind (a chat, or the user's one Automations chat), its number in that chat, its title, its start and last-message times, if it is the active one, and the two times that say if it is unread: the agent's newest message and up to when the user read it (section 8) |
 | channels | `chat_epochs` | Each chat's counter: the highest conversation number given out in it. It only goes up, so a number is never used twice |
 | channels | `attachments` | Files uploaded in the web app or received in a chat |
 | orchestrator | `sandbox_tokens` | The hash of each container's token and the user it belongs to |
@@ -3094,7 +3123,7 @@ This section says what the web app can do through the api, group by group. Almos
 |---|---|
 | Profile | Read the user's name, plan and credit summary, whether a time zone was ever set, and the two first-run marks (welcome steps done, checklist closed). Change the name and time zone, and set or clear the marks. The app sets the time zone from the browser once, while nobody has set one |
 | Channels and linking | See linked chat apps and which channels are on. Get a one-time code to link Telegram. Unlink a chat |
-| Chat and the live stream | List the conversations, with the Automations chat apart if asked. Start a new web conversation, open an earlier one, rename or delete one (the Automations chat keeps its name and cannot be deleted). Read the messages of one conversation, or of all. Send a message into the active web conversation or into one the app names. Upload a file up to 10 MB. Keep a live stream open |
+| Chat and the live stream | List the conversations, with the Automations chat apart if asked. Start a new web conversation, open an earlier one, rename or delete one (the Automations chat keeps its name and cannot be deleted). See which ones are unread and mark one read. Read the messages of one conversation, or of all. Send a message into the active web conversation or into one the app names. Upload a file up to 10 MB. Keep a live stream open |
 | Approvals | List approvals, the waiting ones by default. Approve or reject one |
 | Apps | See the app list with status and plan, and which apps can be connected on this server. Start connecting an app. Disconnect one |
 | MCP servers | List the user's own MCP servers. Add one (Max plan), rename it, switch it on or off, remove it |

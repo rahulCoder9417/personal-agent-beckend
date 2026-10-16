@@ -29,6 +29,7 @@ import {
   microToUsd,
   usdToMicro,
 } from './plans.ts';
+import { chatTuning, TUNING_VERSION } from './model-tuning.ts';
 import { litellmKeys } from './schema.ts';
 
 export interface KeySpend {
@@ -52,6 +53,8 @@ export interface OwnModel {
   model: string;
   /** The provider key. Never log it. */
   apiKey: string;
+  /** More LiteLLM settings for the model (prompt caching, the effort: model-tuning.ts). */
+  params?: Record<string, unknown>;
 }
 
 export interface LiteLLMClient {
@@ -201,7 +204,7 @@ class HttpLiteLLM implements LiteLLMClient {
   async saveModel(m: OwnModel, opts: { exists: boolean }) {
     const body = {
       model_name: m.id,
-      litellm_params: { model: m.model, api_key: m.apiKey },
+      litellm_params: { ...m.params, model: m.model, api_key: m.apiKey },
       model_info: { id: m.id },
     };
     const update = () => this.request('POST', '/model/update', body);
@@ -261,6 +264,13 @@ export async function getKeyRow(userId: string): Promise<LiteLLMKeyRow | undefin
 export function ownModelName(userId: string): string {
   return `own-${keyedHashHex(`litellm-own-model:${userId}`).slice(0, 24)}`;
 }
+
+/**
+ * What is kept as the own-key model's fingerprint: the saved key's, and the version of the
+ * settings added to it (model-tuning.ts), so a change of either saves the model again.
+ */
+const tunedFingerprint = (keyFingerprint: string) => `${keyFingerprint}+${TUNING_VERSION}`;
+const keyFingerprintOf = (stored: string | null) => stored?.split('+')[0] ?? null;
 
 /** Does this key send the user's AI to their own provider key right now? */
 export function routesToOwnKey(row: Pick<LiteLLMKeyRow, 'models' | 'ownModelId'>): boolean {
@@ -403,14 +413,19 @@ async function applyKeyState(userId: string, opts: { spendUsd?: number }): Promi
 
   // 1. The own key, stored in LiteLLM.
   let ownModelId = row.ownModelId;
-  if (own && row.ownModelFingerprint !== own.fingerprint) {
+  if (own && row.ownModelFingerprint !== tunedFingerprint(own.fingerprint)) {
     const id = row.ownModelId ?? ownModelName(userId);
     await litellm().saveModel(
-      { id, model: `${own.provider}/${own.model}`, apiKey: own.apiKey },
+      {
+        id,
+        model: `${own.provider}/${own.model}`,
+        apiKey: own.apiKey,
+        params: chatTuning(own.provider, own.model),
+      },
       { exists: row.ownModelId !== null },
     );
     ownModelId = id;
-    await setRow({ ownModelId: id, ownModelFingerprint: own.fingerprint });
+    await setRow({ ownModelId: id, ownModelFingerprint: tunedFingerprint(own.fingerprint) });
   }
 
   // 2. The key's models, aliases and budget.
@@ -465,5 +480,6 @@ export async function ownKeyInUse(userId: string): Promise<ByokProvider | null> 
   const row = await getKeyRow(userId);
   if (!row || !routesToOwnKey(row)) return null;
   const keys = await byokFingerprints(userId);
-  return keys.find((k) => k.fingerprint === row.ownModelFingerprint)?.provider ?? null;
+  const saved = keyFingerprintOf(row.ownModelFingerprint);
+  return keys.find((k) => k.fingerprint === saved)?.provider ?? null;
 }

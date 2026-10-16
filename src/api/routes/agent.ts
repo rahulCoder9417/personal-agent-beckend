@@ -1,6 +1,7 @@
 import { listAudit } from '../../modules/admin/audit.ts';
 import { PLAN_IDS, PLANS } from '../../modules/billing/plans.ts';
 import { crewOfDetails, listCrew } from '../../modules/orchestrator/crew.ts';
+import { requestPrewarm } from '../../modules/orchestrator/prewarm.ts';
 import { getAgentStatus } from '../../modules/orchestrator/sandbox.ts';
 import { iso } from '../presenters.ts';
 import { route } from '../router.ts';
@@ -10,6 +11,9 @@ export const agentRoutes = [
     const s = await getAgentStatus(c.get('user').id);
     return c.json({ state: s.state, lastActiveAt: iso(s.lastActiveAt) }, 200);
   }),
+
+  // Wake the container before the message (HLD 5.2): checks, then a job; answers at once.
+  route('prewarmAgent', async (c) => c.json(await requestPrewarm(c.get('user').id), 200)),
 
   // The crew for the apps (HLD 0.7). The browser's plan comes from the plans, not from here.
   route('listCrew', (c) => {

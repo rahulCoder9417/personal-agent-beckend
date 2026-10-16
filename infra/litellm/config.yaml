@@ -9,10 +9,22 @@ model_list:
     litellm_params:
       model: anthropic/claude-sonnet-5
       api_key: os.environ/ANTHROPIC_API_KEY
+      # Quicker chat (src/modules/billing/model-tuning.ts says what each does and how it was
+      # checked): Anthropic's prompt cache on the system message (tools and instructions) and on
+      # the last message, and a low thinking effort. A request's own effort wins.
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
+      output_config:
+        effort: low
   - model_name: gpt
     litellm_params:
       model: openai/gpt-5-mini
       api_key: os.environ/OPENAI_API_KEY
+      # A low reasoning effort, as for `claude` (OpenAI caches long prompts by itself).
+      reasoning_effort: low
   - model_name: whisper
     litellm_params:
       model: openai/whisper-1

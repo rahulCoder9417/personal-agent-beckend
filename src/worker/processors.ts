@@ -27,6 +27,7 @@ import {
 import { expireApprovals, handleProcessApproval } from '../modules/orchestrator/approvals.ts';
 import { handleSyncBrowser } from '../modules/orchestrator/browser.ts';
 import { handleDeleteUser, handleOnboardUser } from '../modules/orchestrator/lifecycle.ts';
+import { handlePrewarm } from '../modules/orchestrator/prewarm.ts';
 import { handleProcessMessage, handleWebMessage } from '../modules/orchestrator/process-message.ts';
 import type { Processors } from './runner.ts';
 import { handleCleanup } from './schedules.ts';
@@ -57,6 +58,7 @@ export function processors(): Processors {
       'delete-user': handleDeleteUser,
       'sync-allowlist': handleSyncAllowlist,
       'sync-browser': handleSyncBrowser,
+      prewarm: handlePrewarm,
       'composio-event': handleComposioEvent,
       'check-connection': handleCheckConnection,
       'settle-connection': handleSettleConnection,

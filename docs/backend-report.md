@@ -691,6 +691,23 @@ A user whose Claude plan pays never reaches Jev: the turn goes straight to the w
 18. After the turn, the worker adds a billing job for it to the system queue. That is a note in Redis: no trip to the database. Then it saves what Rahul's next message depends on: the message's last state and which engine now has the conversation. The event is marked `done` and the lock is given back. Rahul's next message can start now.
 19. The billing job runs on its own, a moment later. It counts what the turn used and charges Rahul's credits (section 25). The web app then gets the new balance.
 
+### Waking before the message
+
+A container asleep after its 3 idle minutes takes 2.5 to 3.5 seconds to wake (measured on the test server). Without help, the first message after a pause waits for that at step 11. So the web app asks for the wake earlier: when the user opens the chat, and when they start typing in an empty box.
+
+1. The web app calls `POST /v1/agent/prewarm`. It does so at most once a minute, and shows nothing for it.
+2. The api checks, in this order, and stops at the first "no": the account is suspended (an admin paused it); the user already asked within the last minute (a key in Redis that lasts 60 seconds); no AI is connected (`aiAccess: none`); the balance is zero; the container is already waking, awake or busy (asked of the vm-manager). Each "no" has its own word in the answer: `suspended`, `recent`, `no_ai`, `no_credits`, `awake`. A read that fails counts as "no".
+3. Otherwise it adds a `prewarm` job to the system queue and answers `started` at once. The job is tried once only and is not kept: a wake that comes late is of no use.
+4. The worker checks the account again, makes sure the container exists, and asks the vm-manager to wake it, as a turn does (`WakeSandbox`, with the plan's priority). When it was asleep, the web app is told the agent is awake.
+5. A full server, or a vm-manager that cannot be reached, is not an error: the job just ends, and the message wakes the container as before.
+
+When the message then comes, step 11 finds the container awake and goes straight on. The awake time is charged as usual (section 25), and the vm-manager counts the 3 idle minutes from the end of the wake. So a user who opens the chat and writes nothing pays for at most a few minutes of awake time, 1 credit per 10 minutes.
+
+- **One user only.** The user id comes from the sign-in, and the minute is counted per user. One user's call never wakes, or counts against, another user's container.
+- **Telegram has no typing signal**, so a Telegram message still wakes the container itself.
+- **What it does not save.** Claude Code starts again for every turn, about a second, and that stays. The wake alone goes.
+- **The numbers.** With the stand-in vm-manager and a wake made to take 0.6 seconds, the first message's wake took 623 ms without a prewarm and 0 ms after one (the "wake" stage of the turn: 589 ms, then 15 ms). On the server the 2.5 to 3.5 seconds should go the same way; that has not been measured there yet.
+
 ### "typing…" in the chat
 
 On Telegram the chat shows "typing…" under the bot's name while the agent works, so Rahul sees within about a second that his message is being handled.
@@ -2329,6 +2346,7 @@ Each default is the provider's current mid-priced model that can use tools. They
 - **A change of AI choice while LiteLLM is down.** The choice is saved, and the switch happens at the next 5-minute sync. Until then the web app shows the key that is really in use.
 - **Deleting the account** deletes LiteLLM's copy and the saved keys.
 - **One server rule.** LiteLLM encrypts the stored keys with its master key. If `LITELLM_MASTER_KEY` changes later, those keys can no longer be read, and these users' turns fail.
+- **Quicker chat on the user's key, too.** The model that holds the key gets the same additions as Textcrew AI's claude model, where the model takes them (`model-tuning.ts`). An Anthropic key: the prompt cache always, and a low effort for the Claude models that take one (Opus 4.6 and later, Sonnet 4.6 and later, Haiku 5.5, Fable). An OpenAI key: a low reasoning effort for its reasoning models (gpt-5 and later, the o models); OpenAI caches by itself. An OpenRouter key: the prompt cache for Claude models only. A model saved before this was added is saved again at the next 5-minute sync.
 - **Not run for real yet.** It was checked against a real LiteLLM of the same version, with a stand-in for the provider. No call has gone to a real provider, because there is no key with balance.
 
 ### The user's Claude plan
@@ -2358,8 +2376,8 @@ With a Claude plan, the user also picks which Claude model Claude Code uses, and
 
 | Setting | Choices | "Default" means |
 |---|---|---|
-| Model | Every Claude model Claude Code can use: see the list below | Claude Code's own choice |
-| Thinking effort | low, medium, high, xhigh, max | Claude Code's own choice |
+| Model | Every Claude model Claude Code can use: see the list below | Sonnet 5.5, for Tex. The web app says "Default (Sonnet 5.5, quick)" |
+| Thinking effort | low, medium, high, xhigh, max | Low, while the model is on Default too. With a model the user picked: Claude Code's own for that model |
 
 The model list, in the order the web app shows it. The current models come first, then the older models Claude still offers. In each part the newest version comes first.
 
@@ -2373,7 +2391,11 @@ The model list, in the order the web app shows it. The current models come first
 1. The user picks them in the web app's AI settings, in the Claude plan's part. They can do this whatever engine runs now.
 2. The backend saves them with the other agent settings. A model that is not in the list is refused.
 3. Every turn that runs on Claude Code carries both to the container. A choice left at "Default" is left out. A turn on Hermes carries neither.
-4. The Bridge starts Claude Code with that model and effort for the turn.
+4. The Bridge starts Claude Code with that model and effort for the turn. With the model left on "Default" it starts Tex on Sonnet 5.5 (`--model claude-sonnet-5-5`) at low effort (`--effort low`), or at the effort the user picked.
+
+- **Why "Default" is Sonnet 5.5 at low effort.** Left to itself, Claude Code picks Opus 5.5 at medium effort on a Max plan. Once it thought for 14 seconds before its first word in chat. Sonnet 5.5 at low effort answers chat quickly. Opus 5.5 at medium is what Claude Code picked with no model given (checked with Claude Code 2.1.301 against a stand-in for Anthropic's API).
+- **Byte and Patch keep their own.** They write and review code, where thinking pays. With the model on "Default" they run on Opus 5.5 at medium effort: what they ran on before, when Claude Code picked for itself. Scout reads the web and runs on Tex's model. With a model the user picked, all three run on it, as before.
+- **The default is ours.** If Anthropic refused it, that is our fault, not the user's choice: the turn is refunded (section 25).
 
 - **What the list says about each model.** Its group (current or older), the effort levels it takes, and for some a short note. The web app uses these to group the models, to offer only the levels the chosen model takes, and to show the note.
 - **An effort the model does not take.** The effort stays saved: it is the user's, and it applies again on another model. Claude Code runs the model at the nearest lower level it takes. Example: xhigh on Sonnet 4.6 runs at high. On Opus 4.5 and Haiku 4.5 the effort is left out altogether.
@@ -2392,6 +2414,7 @@ Example: Rahul picks Opus 5.5 and the effort xhigh. His next Telegram message ru
 - **The budget follows the balance.** LiteLLM compares a key's budget with all the key ever spent. So the budget is set to: spent so far, plus the balance ÷ 250 in dollars. Example: the key has spent $3.10 and the balance is 500 credits. 500 credits buy $2.00 of real cost. The budget is $5.10. At zero the budget equals what was spent, and no further call passes.
 - **The budget is set again** after every sync, and when credits are added or removed. It is also set again when an own key is saved or deleted, when the AI choice changes, and when a Claude plan is connected or goes.
 - **A provider key is needed.** Textcrew AI works only if LiteLLM holds a provider key that can pay. Without one these turns fail.
+- **Quicker chat.** LiteLLM adds two things to every call to the claude model: Anthropic's prompt cache, marked on the instructions and on the last message, and a low thinking effort. With the cache, the next model call of the same turn, and the next message within 5 minutes, reads the instructions, the tools and the conversation so far from the cache: faster, and a cached part costs a tenth. The gpt model gets a low reasoning effort too. The cheap model is left as it was. A request's own effort still wins. It was checked with LiteLLM 1.104.2, the server's version, in front of a stand-in for the provider: the marks and the effort reached it as meant. Not yet with a real model.
 
 ### Switching Textcrew AI off for the whole server
 
@@ -2775,7 +2798,7 @@ The backend never talks to Docker, the program that runs containers, and never t
 | Call | What it does | When the backend makes it |
 |---|---|---|
 | `CreateSandbox` | Makes the container and the user's folder. Leaves it stopped | At sign-up, and before a turn if none exists |
-| `WakeSandbox` | Starts the container and waits until it is ready. Says where its time went: a wait for another operation on the container, making room under the awake cap, a container made again, the start, and the Bridge's ready check | At the start of every turn, from the moment the message is one Jev will judge (section 9) |
+| `WakeSandbox` | Starts the container and waits until it is ready. Says where its time went: a wait for another operation on the container, making room under the awake cap, a container made again, the start, and the Bridge's ready check | At the start of every turn, from the moment the message is one Jev will judge (section 9). And ahead of the message, when the web app says the user opened the chat or started typing (section 9, "Waking before the message") |
 | `Deliver` | Hands one message in and streams events back | Once per turn, right after the wake |
 | `Touch` | Notes that the user was active just now | On every tool call and git call from the container |
 | `StopSandbox` | Stops a container, politely or by force | Politely, right after a crew job, so the container sleeps at once (section 20). Otherwise the vm-manager stops containers by its own rules |
@@ -2991,6 +3014,8 @@ The crew is defined once, inside the Bridge, and given to both engines. Tex is t
 - When a specialist starts and ends, a progress line goes out: "Scout: researching flight options", then "Scout: done".
 
 On Claude Code the tool lists are locks: a tool that is not on a member's list cannot be called. Tex's own calls to a web tool are refused by a small check that runs before each call. On Hermes the tool lists are only instructions, because Hermes cannot give each member its own tools.
+
+Which model each one runs on, on Claude Code: the user's pick, for all four. With the model left on "Default", Tex and Scout run on Sonnet 5.5 at low effort, and Byte and Patch on Opus 5.5 at medium effort (section 30). On Hermes all four run on the one model LiteLLM gives the container, at its low effort for chat (section 30), because Hermes gives every helper the lead's model.
 
 Example: the user asks to fix a typo in a repository and have it checked. Tex hands the fix to Byte, who opens a pull request. Tex then hands the pull request to Patch, who posts one review. Tex writes the answer.
 

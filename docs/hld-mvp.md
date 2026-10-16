@@ -172,12 +172,16 @@ Example: the user texts "email Priya the notes".
 2. The api checks that the call really comes from Telegram. It saves the message once, adds a job, and answers Telegram at once.
 3. The worker takes the job. It locks this user, so that only one turn runs for them at a time.
 4. The worker checks the user's credits. At zero, the user gets a short "out of credits" reply and the container is not started.
-5. The worker asks the vm-manager to wake the user's container. This takes a few seconds if it was asleep.
-6. The vm-manager hands the message to the Bridge inside the container. The Bridge gives it to the agent.
+5. The worker asks the vm-manager to wake the user's container. This takes 2.5 to 3.5 seconds if it was asleep. In web chat it is usually awake already: see "Waking before the message" below.
+6. The vm-manager hands the message to the Bridge inside the container. The Bridge gives it to the agent. On the user's Claude plan with the model left on "Default", Tex runs on Sonnet 5.5 at low effort, so a chat answer starts quickly; Byte and Patch keep Opus 5.5 at medium effort for code.
 7. The agent works. It may call tools, and Tex may hand parts to the crew. In web chat short progress lines show in plain words ("Checked your inbox"), and the reply shows a few words at a time while the agent writes it. The answer then keeps a one-line trail of its steps, such as "Checked your inbox · 2 steps", that opens to the list. On Telegram the chat shows "typing…" from about a second after the message, until the reply arrives in one piece.
 8. The agent gives its final reply. The worker sends it to Telegram as a simple text message: it takes the formatting symbols out first. The saved reply keeps them, so the web app shows it with its formatting.
 9. The worker gives the user's lock back, so their next message can start at once. A separate job then counts what was used and charges credits. On the user's own Claude plan that job does not ask the AI gateway at all: the AI is not ours to charge. The time the container was awake still is.
 10. After 3 idle minutes the container stops. The user's files stay.
+
+**Waking before the message.** When the user opens the web chat, and when they start typing, the web app asks the server to wake the container, at most once a minute. The server does nothing if the container is already awake, if the user has no credits or no AI connected, or if the account is paused. Otherwise the worker wakes it, as in step 5, so the message does not wait for the wake. The awake time costs credits as usual, and the 3 idle minutes count from the wake. Telegram has no typing signal, so a Telegram message still waits for the wake. Details: `backend-report.md`, section 9.
+
+**Quicker answers on Hermes.** The AI gateway adds Anthropic's prompt cache and a low thinking effort to the agent's calls, on Textcrew AI and on the user's own key, where the model takes them. Details: `backend-report.md`, section 30.
 
 **Why the api and the worker are separate:** Telegram expects an answer within seconds. So the api only saves the message and answers. The slow work happens afterwards in the worker. If the worker crashes, the job is still in the queue and runs again.
 

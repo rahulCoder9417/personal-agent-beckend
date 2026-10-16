@@ -93,7 +93,10 @@ export interface AgentSettingsView {
   platformAvailable: boolean;
   claude: { connected: boolean; connectedAt: Date | null };
   ownKeyProviders: ByokProvider[];
-  /** Claude Code's model and effort (null: its own default). Used only on Claude Code turns. */
+  /**
+   * Claude Code's model and effort (null: Default, which the Bridge runs as Sonnet 5.5 at low
+   * effort). Used only on Claude Code turns.
+   */
   claudeModel: string | null;
   claudeEffort: ClaudeEffort | null;
 }
@@ -179,7 +182,8 @@ function claudeChoiceOf(
 
 /**
  * What a Claude Code turn is told about the model and the effort (the delivery's `claude` field).
- * A value left out means Claude Code's own default.
+ * A value left out means Default: the Bridge then runs Sonnet 5.5 at low effort (vm-manager,
+ * claude.py).
  */
 export async function claudeTurnOptions(
   userId: string,

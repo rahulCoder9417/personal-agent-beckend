@@ -1363,10 +1363,11 @@ An automation is a saved instruction that the agent runs later, without the user
 
 ### Creating one
 
-There are two ways, by what the user asks for:
+There are three ways:
 
 - **A plain one-time reminder** ("remind me Friday at 10 to call the bank"): the agent calls `schedule_reminder` with a text and a time, and it is saved at once.
-- **Anything else** (a schedule, an app event, or a one-time job with work to do): the agent proposes it with `propose_automation`, and it is saved only when the user saves the draft. The part "Drafts" below explains it. Until 16 October the agent saved these at once with `create_automation`; that tool is no longer the agent's.
+- **Anything else asked in chat** (a schedule, an app event, or a one-time job with work to do): the agent proposes it with `propose_automation`, and it is saved only when the user saves the draft. The part "Drafts" below explains it. Until 16 October the agent saved these at once with `create_automation`; that tool is no longer the agent's.
+- **Built by hand** on the canvas in the web app, box by box. The part "Building and changing one by hand" below explains it.
 
 When it is saved, either way:
 
@@ -1377,7 +1378,7 @@ When it is saved, either way:
 - **The plan limit.** Free 1, Pro 5, Max 50. Reminders count, and paused automations count. A finished one-time reminder does not.
 - **The 15-minute minimum.** For a schedule, the next 50 runs must each be at least 15 minutes apart.
 - **The time zone.** It must be a real one. If none is given, the user's own is used. "Every Monday at 9" means 9 where the user lives.
-- **Other checks.** A one-time moment must not be in the past. An app event needs that app to be connected.
+- **Other checks.** A one-time moment must not be in the past. An app event needs that app to be connected and on the user's plan, and the event must be one the app really offers, with its required settings filled (Composio's list of events, below). When Composio can't give the list just now, the event is not held against it: the watch at Save asks Composio itself.
 
 **Where the user's own time zone comes from.** Every account starts on UTC. While nobody has set a time zone, the web app sets the one the browser is in, once: on the first page of the app or of the setup steps. After that the account says the time zone was set (`timezoneSet` in `GET /v1/me`), and the web app never changes it again. So a time zone the user chose in Settings is never replaced, also when they open the app in another country. The database update that added this marks every account whose time zone is not UTC as set. An account still on UTC gets the browser's time zone the next time its user opens the web app. A user who chose UTC in Settings before that cannot be told apart, and gets the browser's time zone once too.
 
@@ -1418,8 +1419,8 @@ A draft is an automation the agent proposed that the user has not saved. It neve
 - **One draft makes one automation.** The draft is locked while it is read, and it is marked saved in the same step as the automation is saved. Two saves at the same moment (a double click) make one automation: the second waits, then finds it saved and is refused with "already saved".
 - **Save paused** (web app): the automation is made switched off, "paused by you", with no timer. The user turns it on later.
 - For an app event, Composio's watch is made at Save. If Composio can't be reached, nothing is saved and the user is told to try again in a moment. A watch made for a save that then fails is removed.
-- **A change:** Save makes the new automation first, then removes the old one with its timer or watch. The plan's limit counts the old one as gone.
-- The automation keeps the apps the draft named (`apps`). For now they are only shown on the canvas. From phase 3 they become a limit on what a run may use.
+- **A change:** Save changes the automation in place: its id, its page and its runs so far stay. A new schedule replaces the timer. A changed app event gets its new watch first, then the old one is removed. The plan's limit does not count the automation being changed. Until 16 October a change made a new automation and removed the old one; if the automation was deleted meanwhile, the draft still makes a new one.
+- The automation keeps the apps the draft named (`apps`) and the draft's "ask me first". Both are limits on its runs (the part "The run's limits" below).
 - On Telegram the tap is answered in the chat: "Saved: Monday PRs. First run: 9:00 AM on Monday 20 October (Asia/Kolkata). Each run answers in your Automations chat, with a copy here." A second tap gets "That automation is already saved."
 - Saving and discarding are in the activity log as the user's.
 
@@ -1440,6 +1441,65 @@ A draft is an automation the agent proposed that the user has not saved. It neve
 - **The account goes:** its drafts go with it.
 
 **Example.** Rahul writes on Telegram "every Monday at 9, send me my open pull requests". Tex proposes it. Telegram shows the outline and ✅ Save. Nothing runs. He opens the link, sees the five boxes, then taps Save on Telegram. The automation is made, its timer set, and each Monday the list lands in his Automations chat with a copy on Telegram.
+
+### Building and changing one by hand
+
+The canvas in the web app edits the same five boxes (`hld-mvp.md`, section 5.4): the trigger, Tex's instruction, the apps, "asks you first" and the results. The api has five calls for it, all filtered by the user.
+
+**Checking without saving** (`POST /v1/automations/check`). The web app sends the parts as they stand, while the user types. The api runs every check a save runs, all at once instead of stopping at the first, and saves nothing. The answer lists each problem with the box it belongs to and a sentence for the user, and the next three run times.
+
+| Box | What is checked |
+|---|---|
+| Trigger | Exactly one of a moment, a schedule or an app event. A time zone we know. A moment not past ("That moment has passed. Pick a later one."). A schedule that can be read and runs at most every 15 minutes. An app event: the app known, on the plan and connected; an event the app offers; its required settings filled and of the right kind ("Interval" must be a number) |
+| Tex's instruction | A title, and an instruction |
+| Apps | Each one known, on the plan (Free has its own list) and connected. At most 10 |
+| Results | For a copy to Telegram: a linked Telegram chat that has not blocked the bot, and Telegram switched on |
+| The whole | The plan's number of automations. A change does not count itself |
+
+Example: a Free user with one automation types a second one. The check answers "Your Free plan allows 1 automation, and it is in use. Delete one or upgrade." with no box, and the web app shows it above the canvas.
+
+**Making one** (`POST /v1/automations`). The same checks, then the automation is made, its timer set or its watch made, as a draft's Save does. "Save paused" makes it switched off.
+
+- **Once per key.** The web app sends a one-time key with each save (`clientRequestId`). The key is kept on the automation. The same key again answers with the automation it made, and makes nothing more. Two saves of one user wait for each other in the database, so a double click makes one automation and one watch, and two different saves at once can't pass the plan's limit together.
+- **A refusal** answers 400 with every problem and its box, or 403 when the plan's automations are used. Nothing is saved, and a watch made for a save that then fails is removed.
+- **From a draft.** When a draft was open on the canvas, its id comes with the save, and the draft is marked saved in the same step, as its own Save would. A draft of a change can't make a new automation: it is saved on that automation.
+
+**Changing one** (`PUT /v1/automations/{id}`). The same checks; then the automation changes in place, locked while it does.
+
+- A new schedule or moment: the old timer goes, the new one is set.
+- A changed app event (another app, event or settings): **the new watch at Composio first,** then the automation points at it, then the old watch is removed. So exactly one watch is left, and there is no moment with none. If Composio refuses the new watch, nothing changes and the old one stays. The same words with the same event keep the watch as it is.
+- From an app event to a schedule: the watch is removed.
+- Left out, "enabled" keeps it on or paused. The count of failures in a row starts again from zero.
+- Pull-request review is changed on its own screen, and a one-time reminder that has run is finished: both are refused (409).
+
+**Run once now** (`POST /v1/automations/{id}/run`). A test run of a saved automation, on or paused.
+
+1. The api checks the credits (402 at zero) and the limit of 10 test runs an hour per user (429). A repeated click with the same key starts no second run and is not counted again.
+2. It saves an event and adds a job, as a timer does. The worker runs it.
+3. A line goes into the Automations chat first: `🧪 Test run of "Monday PRs", started by you. It runs once now, as a real run would, and costs what a run costs. The schedule doesn't change.` It is sent once, also when the job runs again.
+4. The agent gets a normal turn with the instruction, after a note that it is a test the user started. An app event's test is told that no event happened, so the agent works with the latest matching item and says which.
+5. The copy to Telegram, for one that has one, starts "🧪 Test run: Monday PRs".
+6. The run costs what a run costs, with approvals as usual, and is held to the automation's limits. It moves no schedule, does not finish a one-time reminder, counts no failure and pauses nothing.
+
+Pull-request review has no test run: it runs when a pull request opens. To try an automation before it goes live: Save paused, then Run once now.
+
+**Composio's list of events** (`GET /v1/apps/{app}/events`). For the event picker: the events an app can start an automation on, with each event's settings (name, title, kind, required or not, the allowed values, the default). It comes from Composio's list of trigger types, kept for 10 minutes and the same for every user. The checks use the same list. Any app of the catalogue can be listed; using one needs it connected and on the plan. When Composio can't be reached, the call answers 503.
+
+**The user's own draft** (`POST /v1/automation-drafts`), for "Ask Tex to change this". The parts on the canvas are kept as a draft made by the user. Nothing runs, and nothing is posted in a chat. Only its shape is checked (one way to run, a time zone we know, apps we know): the point is for the agent to fix the rest. A draft the user started from (the agent's) becomes "replaced". The web app then opens the chat with "Change this draft (drf_…): ", and the user writes what to change. The agent reads it with `get_automation_draft` and proposes again with `replaces_draft_id`. A new version of a draft of a change stays a change of the same automation. It counts towards the 20 open drafts.
+
+**In the activity log:** made, changed and run once now, as the user's.
+
+### The run's limits: its apps and "ask me first"
+
+When the worker hands an automation's run to the container (a timer, an app event or a test run), it notes the automation's id in Redis beside the turn, as it notes the kind of turn. The app tools look there, by the user, never by anything the agent says:
+
+- **Only the automation's apps.** If the automation names apps, `run_app_action` runs an action only in one of them or in the trigger's app. Another app is refused, with words for the agent to pass on: "The automation "Inbox" may only use Gmail (the apps on its canvas), so GitHub can't be used in this run. Nothing was done in GitHub. Tell the user that, and that they can add GitHub to its Apps step." `request_approval` refuses an approval for another app the same way, so a yes can't carry one past the limit either.
+- **None named** (older automations, and pull-request review): any connected app, as before.
+- **"Ask me first" before any change.** The usual rule asks first before sending, deleting or paying. An automation set to `changes` also asks before any app action that changes something (making a label, an event, a file). The action is refused until the agent asks with `request_approval` and the user says yes. It can only be made stricter, never looser.
+- **If the note can't be read,** or the automation was deleted while it ran, the action is refused. A run never acts without its limits.
+- The user's own turns, in any chat including the Automations chat, are not limited.
+
+Example: "Boss emails" names Gmail. An email from outside asks Tex to post in Slack. Tex calls `run_app_action` for Slack; it is refused, and nothing happens in Slack.
 
 ### During an automation's run: no reminder
 
@@ -1537,10 +1597,14 @@ The web app shows each automation on a page of its own as five boxes: the trigge
 
 Nothing new is saved for this. Example: Rahul's "every Monday at 9" made on Telegram reads `copyTo: telegram`, so its Results box says "Automations chat" and "Copy to Telegram".
 
+The same boxes can be edited, and an empty canvas makes a new one (the part "Building and changing one by hand" above). Each automation also says its "ask me first" (`askFirst`: `risky` or `changes`).
+
 ### What can go wrong
 
 - **The plan limit is reached.** The tool says how many the plan allows. Nothing is saved. A draft is refused when it is proposed, and again at Save; it stays open, to save once a place is free.
-- **The agent proposes an event name Composio doesn't know.** It is checked only when the watch is made, at Save: the save is refused and the draft stays open. Phase 3 brings Composio's list of events.
+- **The agent proposes an event name the app doesn't have.** Since phase 3 it is refused at once, with the app's name and "Pick one from the list". When Composio's list can't be read just now, the name is checked only when the watch is made, at Save: the save is refused and the draft stays open.
+- **A change of an app event whose new watch can't be made.** Nothing changes; the old watch keeps working. The user is told to try again in a moment.
+- **A test run at zero credits.** Refused before it starts (402). One that starts and then finds no credits says so in the Automations chat; the automation is not paused for it.
 - **No credits when it fires.** No turn runs. The user gets the out-of-credits message in the Automations chat, with a copy on Telegram when the automation was made there, and the automation is paused. The copy names the web app instead of the purchase link (section 10).
 - **The user tries to delete the Automations chat.** The api answers 409 and nothing changes. The web app does not offer it.
 - **The automation is deleted while it runs.** The run stops before the agent gets it. The job is tried again, finds no automation and ends.
@@ -3309,8 +3373,8 @@ There are three databases: the backend's, the vm-manager's and LiteLLM's. Each p
 | integrations | `user_mcp_servers` | The user's own MCP servers, with the secret encrypted |
 | integrations | `composio_triggers` | Made for app triggers. No code reads or writes it today |
 | integrations | `byok_keys` | The user's own AI keys, encrypted, plus the last 4 characters |
-| automations | `automations` | Reminders, repeating tasks and app-event tasks, each with the chat it was made in and the apps the agent named in its draft. Its runs answer in the Automations chat. A column that held a conversation per automation until 13 October is no longer used |
-| automations | `automation_drafts` | Automations the agent proposed and the user has not saved, with their state (open, saved, discarded, replaced, expired), the chat they were proposed in, the automation a change replaces, and the automation a saved one made. Removed after 30 days (section 18, "Drafts") |
+| automations | `automations` | Reminders, repeating tasks and app-event tasks, each with the chat it was made in, the apps its runs may use, its "ask me first", and for one made by hand the save's one-time key. Its runs answer in the Automations chat. A column that held a conversation per automation until 13 October is no longer used |
+| automations | `automation_drafts` | Automations the agent proposed, or the user's own version from the canvas, not saved yet, with their state (open, saved, discarded, replaced, expired), who made them, the chat they were proposed in, the automation a change is for, and the automation a saved one made. Removed after 30 days (section 18, "Drafts") |
 | automations | `pr_reviews` | One row per reviewed pull-request commit, so none is reviewed twice |
 | automations | `crew_jobs` | One row per crew job: the brief, where the report goes, its state, and the report itself |
 | billing | `subscriptions` | Each paid plan: user, Polar id, status, period |
@@ -3339,8 +3403,8 @@ This section says what the web app can do through the api, group by group. Almos
 | Apps | See the app list with status and plan, and which apps can be connected on this server. Start connecting an app. Disconnect one |
 | MCP servers | List the user's own MCP servers. Add one (Max plan), rename it, switch it on or off, remove it |
 | Own AI keys | See which providers have a key and which one is in use, never the key itself. Set, replace or remove one |
-| Automations | List reminders and automations, with why one is paused (by the user, after failures, out of credits, or by Textcrew support), where the copy of each answer goes, the trigger's settings and the apps named. Read one. Pause, resume or delete one |
-| Automation drafts | List the open drafts the agent proposed. Read one in any state. Save one (switched on, or paused), which makes the automation. Discard one |
+| Automations | List reminders and automations, with why one is paused (by the user, after failures, out of credits, or by Textcrew support), where the copy of each answer goes, the trigger's settings, the apps named and "ask me first". Read one. Check the parts of one without saving, with every problem on its box and the next three runs. Make one by hand (once per key), change one in place, run one once now as a test (10 an hour). Pause, resume or delete one. List an app's events with their settings |
+| Automation drafts | List the open drafts. Read one in any state. Keep the user's own version from the canvas as a draft, for Tex. Save one (switched on, or paused), which makes the automation or changes it. Discard one |
 | Pull-request review | List the repositories with review on. Turn review on or off for one |
 | Agent settings and the Claude sign-in | See the container's state and which engine runs. Choose the engine, and Claude Code's model and thinking effort. Start, finish or undo the Claude sign-in |
 | The crew | See the four members, which are available, and the state of Scout's browser |
@@ -3487,7 +3551,9 @@ These were found by reading the code while this report was written. Each is desc
 - **What a user is told when Textcrew AI credits run out in the middle of a turn is not settled.** The turn may be treated as our fault and given back (section 26).
 - **Disconnect does not try again when Composio cannot remove the account.** The failure is only logged and our row is deleted, so the app's sign-in can stay at Composio with nothing pointing to it. Account deletion does try again (sections 14 and 33).
 - **The refusal of reminders covers an automation's run only.** A later turn in the Automations chat (the user's follow-up there, or the agent's turn after an approval a run asked for) still has the run's text in its context and may set a reminder. A crew job, which reads other people's code, may too. The agent's instructions tell it not to act on what it read; the platform does not enforce it there (section 18).
-- **A draft's event name is checked only at Save,** when Composio makes the watch. A wrong name is refused then, with "try again in a moment", which does not say the name is wrong (section 18).
+- **A draft's event name is checked only at Save when Composio's list can't be read** at the moment it is proposed. A wrong name is then refused at Save, with "try again in a moment", which does not say the name is wrong (section 18).
+- **The apps limit covers app actions only.** During an automation's run, the agent's other tools (reading web pages, memory, a crew job) are not limited by the automation's apps. A later turn in the Automations chat, after the run, is not limited either (section 18, "The run's limits").
+- **A test run of an app event has no real event.** The agent is told so and works with the latest matching item; what it picks may not be what a real event would have brought (section 18).
 
 ### Crew jobs
 

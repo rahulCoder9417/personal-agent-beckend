@@ -394,7 +394,7 @@ describe('Save', () => {
     expect((await getOne(u, draft_id)).status).toBe('open');
   });
 
-  it('a change: Save makes the new automation, then removes the old one (a full plan allows it)', async () => {
+  it('a change: Save changes the automation in place, keeping its id (a full plan allows it)', async () => {
     const u = await person({ plan: 'free' });
     const old = await createAutomation({
       userId: u.id,
@@ -417,8 +417,12 @@ describe('Save', () => {
     expect((await getOne(u, draft_id)).changeOf).toBe(old.id);
     const saved = await expectContract<Saved>('saveAutomationDraft', await save(u, draft_id), 200);
     const rows = await automationsOf(u.id);
-    expect(rows.map((a) => a.id)).toEqual([saved.automation.id]);
+    expect(saved.automation.id).toBe(old.id);
+    expect(rows.map((a) => a.id)).toEqual([old.id]);
     expect(rows[0]!.cron).toBe('30 8 * * 1');
+    // Its timer moved with it: the scheduler has the new schedule.
+    const timer = await queue('scheduled').getJobScheduler(`auto-${old.id}`);
+    expect(timer?.pattern).toBe('30 8 * * 1');
   });
 
   it('pull-request review is not changed with a draft', async () => {

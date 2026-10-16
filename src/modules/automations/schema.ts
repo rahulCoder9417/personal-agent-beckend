@@ -30,10 +30,20 @@ export const automations = pgTable(
      */
     preset: text({ enum: ['pr_review'] }),
     /**
-     * The apps the agent said the automation will use (app slugs), from the draft it was saved
-     * from. Empty: none named (older automations). Only shown for now; a limit from phase 3.
+     * The apps its runs may use (app slugs): named by the agent in the draft it was saved from, or
+     * by the user on the canvas. A limit: a run may use only these and the trigger's app
+     * (platform-mcp run_app_action). Empty: none named (older automations), any connected app.
      */
     apps: jsonb().$type<string[]>().notNull().default([]),
+    /**
+     * When a run stops for the user's yes. `risky`: before sending, deleting or paying (the
+     * platform's rule). `changes`: stricter, before any app action that changes something.
+     */
+    askFirst: text({ enum: ['risky', 'changes'] })
+      .notNull()
+      .default('risky'),
+    /** The REST api's idempotency key for one made by hand (POST /v1/automations). */
+    clientRequestId: text(),
     /** Where results are sent. */
     sessionKey: text().notNull(),
     /**
@@ -56,7 +66,11 @@ export const automations = pgTable(
     completedAt: timestamp({ withTimezone: true }),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index().on(t.userId), index().on(t.triggerRef)],
+  (t) => [
+    index().on(t.userId),
+    index().on(t.triggerRef),
+    uniqueIndex().on(t.userId, t.clientRequestId),
+  ],
 );
 
 /** The parts of an automation, as a draft keeps them until it is saved. */
@@ -76,7 +90,7 @@ export const automationDrafts = pgTable(
     status: text({ enum: ['open', 'saved', 'discarded', 'replaced', 'expired'] })
       .notNull()
       .default('open'),
-    /** `agent`: proposed by the agent. `user`: made on the canvas (phase 3). */
+    /** `agent`: proposed by the agent. `user`: the user's own version from the canvas, for the agent to change. */
     madeBy: text({ enum: ['agent', 'user'] })
       .notNull()
       .default('agent'),
@@ -90,8 +104,12 @@ export const automationDrafts = pgTable(
     /** The time zone it runs in: the one the agent named, else the user's own then. */
     timezone: text().notNull(),
     trigger: jsonb().$type<DraftTrigger>(),
-    /** The apps the agent said it will use, as app slugs. */
+    /** The apps its runs may use, as app slugs. */
     apps: jsonb().$type<string[]>().notNull().default([]),
+    /** See `automations.askFirst`. */
+    askFirst: text({ enum: ['risky', 'changes'] })
+      .notNull()
+      .default('risky'),
     /** The chat it was proposed in: its card was posted there, and a copy of each answer goes there. */
     sessionKey: text().notNull(),
     /** `replaced`: the newer draft. */

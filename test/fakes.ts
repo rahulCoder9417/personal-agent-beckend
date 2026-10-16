@@ -9,6 +9,7 @@ import type {
   AuthConfigInfo,
   ComposioAccount,
   ComposioTool,
+  ComposioTriggerType,
 } from '../src/modules/integrations/composio.ts';
 import { setVmClient, type VmClient } from '../src/modules/orchestrator/vm.ts';
 import { laterSettled } from '../src/shared/later.ts';
@@ -446,6 +447,77 @@ export interface ExecutedAction {
   arguments: Record<string, unknown>;
 }
 
+/** A trigger type's settings as Composio describes them: a JSON schema. */
+function settingsSchema(
+  properties: Record<string, Record<string, unknown>>,
+  required: string[] = [],
+): Record<string, unknown> {
+  return { type: 'object', title: 'Config', properties, required };
+}
+
+/** The kinds of event the fake Composio offers by default, as the real one names them. */
+export const FAKE_TRIGGER_TYPES: Record<string, ComposioTriggerType[]> = {
+  gmail: [
+    {
+      slug: 'GMAIL_NEW_GMAIL_MESSAGE',
+      name: 'New Gmail Message Received Trigger',
+      description: 'Triggers when a new message is received in Gmail.',
+      config: settingsSchema({
+        labelIds: {
+          type: 'string',
+          title: 'Label Ids',
+          description: 'Filter messages by a label.',
+          default: 'INBOX',
+        },
+        query: {
+          type: 'string',
+          title: 'Query',
+          description: 'Gmail search words, e.g. from:boss@acme.com',
+        },
+        interval: {
+          type: 'number',
+          title: 'Interval',
+          description: 'Minutes between checks.',
+          default: 1,
+        },
+      }),
+    },
+  ],
+  github: [
+    {
+      slug: 'GITHUB_PULL_REQUEST_EVENT',
+      name: 'Pull Request Event',
+      description: 'Triggered when a pull request is opened, closed, or synchronized.',
+      config: settingsSchema(
+        {
+          owner: { type: 'string', title: 'Owner', description: 'Owner of the repository' },
+          repo: { type: 'string', title: 'Repo', description: 'Repository name' },
+        },
+        ['owner', 'repo'],
+      ),
+    },
+    {
+      slug: 'GITHUB_COMMIT_EVENT',
+      name: 'Commit Event',
+      description: 'Triggered when a new commit is pushed (to any repository when none is named).',
+      config: settingsSchema({
+        owner: { type: 'string', title: 'Owner' },
+        repo: { type: 'string', title: 'Repo' },
+      }),
+    },
+  ],
+  slack: [
+    {
+      slug: 'SLACK_RECEIVE_MESSAGE',
+      name: 'New Message Received',
+      description: 'Triggered when a new message is posted in a channel.',
+      config: settingsSchema({
+        channel: { type: 'string', title: 'Channel', description: 'The channel id to watch' },
+      }),
+    },
+  ],
+};
+
 /** Fake Composio: every app "connects" instantly; webhooks are "signed" with signature "valid". */
 export async function installFakeComposio() {
   const { setComposioApi } = await import('../src/modules/integrations/composio.ts');
@@ -512,6 +584,17 @@ export async function installFakeComposio() {
     triggerListings: [] as Array<{ triggerIds?: string[]; connectedAccountIds?: string[] }>,
     /** The next deleteAccount throws this (used once). */
     deleteAccountError: null as Error | null,
+    /**
+     * The kinds of event of each toolkit (listTriggerTypes). Gmail, GitHub and Slack have a few by
+     * default (FAKE_TRIGGER_TYPES); any other toolkit can't be listed (Composio "unavailable").
+     */
+    triggerTypes: new Map<string, ComposioTriggerType[]>(
+      Object.entries(FAKE_TRIGGER_TYPES).map(([k, v]) => [k, v]),
+    ),
+    /** listTriggerTypes calls, by toolkit. */
+    triggerTypeLookups: [] as string[],
+    /** The next listTriggerTypes call fails with this (used once). */
+    triggerTypesError: null as Error | null,
     /**
      * What Composio says about each setup (auth config). One not listed here is Composio's
      * shared sign-in, as the real setups made in the dashboard are by default.
@@ -723,6 +806,15 @@ export async function installFakeComposio() {
     async deleteTrigger(triggerId) {
       const i = triggers.findIndex((t) => t.triggerId === triggerId);
       if (i >= 0) triggers.splice(i, 1);
+    },
+    async listTriggerTypes(toolkit) {
+      state.triggerTypeLookups.push(toolkit);
+      const err = state.triggerTypesError;
+      state.triggerTypesError = null;
+      if (err) throw err;
+      const types = state.triggerTypes.get(toolkit);
+      if (!types) throw new Error(`no trigger types for ${toolkit}`);
+      return types;
     },
     async verifyWebhook(input) {
       if (input.signature !== 'valid') throw new Error('bad signature');

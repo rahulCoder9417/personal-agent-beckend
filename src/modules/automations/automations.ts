@@ -18,7 +18,8 @@ import { WEB_APP_NAME } from '../channels/purchase-links.ts';
 import { publish } from '../channels/stream.ts';
 import { parseSessionKey, sessionKeyFor } from '../channels/types.ts';
 import { queue } from '../events/queues.ts';
-import { appForToolkit, findApp } from '../integrations/catalog.ts';
+import { appEventProblems } from '../integrations/app-events.ts';
+import { appAllowedOnPlan, appForToolkit, findApp } from '../integrations/catalog.ts';
 import { connectionForToolkit } from '../integrations/apps.ts';
 import { composio } from '../integrations/composio.ts';
 import { automationDrafts, automations, prReviews } from './schema.ts';
@@ -29,6 +30,28 @@ export type Automation = typeof automations.$inferSelect;
 let limitFor: (plan: PlanId) => number = (plan) => ({ free: 1, pro: 5, max: 50 })[plan];
 export function setAutomationLimit(fn: (plan: PlanId) => number): void {
   limitFor = fn;
+}
+
+/** How many automations a plan allows. */
+export function automationLimit(plan: PlanId): number {
+  return limitFor(plan);
+}
+
+/**
+ * The user's automations that count against the plan (every one not finished). `replacing`: one
+ * that a change takes the place of, so it does not count. `exec`: in a transaction.
+ */
+export async function countAutomations(
+  userId: string,
+  opts: { exec?: Tx; replacing?: string | null } = {},
+): Promise<number> {
+  const counted = [eq(automations.userId, userId), isNull(automations.completedAt)];
+  if (opts.replacing) counted.push(ne(automations.id, opts.replacing));
+  const [{ n } = { n: 0 }] = await (opts.exec ?? db())
+    .select({ n: count() })
+    .from(automations)
+    .where(and(...counted));
+  return n;
 }
 
 /** 15 minutes between runs (HLD 0.4). Tests lower it. */
@@ -119,6 +142,7 @@ export function toApiAutomation(a: Automation, copyTo: CopyChannel = copyToOf(a.
       : null,
     copyTo,
     apps: a.apps ?? [],
+    askFirst: a.askFirst ?? 'risky',
     preset: a.preset ?? null,
     enabled: a.enabled,
     pausedReason: a.pausedReason ?? null,
@@ -131,6 +155,11 @@ export function toApiAutomation(a: Automation, copyTo: CopyChannel = copyToOf(a.
 function nextRuns(cron: string, tz: string, n: number): Date[] {
   const expr = CronExpressionParser.parse(cron, { tz, currentDate: new Date() });
   return Array.from({ length: n }, () => expr.next().toDate());
+}
+
+/** The schedule's next `n` times from now, in its time zone. Throws when the line can't be read. */
+export function nextCronRuns(cron: string, tz: string, n: number): Date[] {
+  return nextRuns(cron, tz, n);
 }
 
 /** The schedule's next time from now, in its time zone. Null when the line can't be read. */
@@ -218,10 +247,14 @@ export interface CreateInput {
   cron?: string;
   timezone?: string;
   trigger?: { app: string; event: string; config?: Record<string, unknown> };
-  /** The apps the agent said it will use (app slugs), from the draft it was saved from. */
+  /** The apps its runs may use (app slugs). Empty: any connected app. */
   apps?: string[];
+  /** When a run stops for the user's yes (default `risky`). */
+  askFirst?: Automation['askFirst'];
   /** False: made switched off, paused by the user ("Save paused"). Default on. */
   enabled?: boolean;
+  /** The REST api's idempotency key (made by hand). */
+  clientRequestId?: string;
   /** Set only by the platform itself (pr-review.ts), never from the agent's tools. */
   preset?: NonNullable<Automation['preset']>;
 }
@@ -237,6 +270,9 @@ export interface CheckedAutomation {
 
 /** Composio could not make the trigger (a watch on the app). Not one of the checks' refusals. */
 export class TriggerError extends Error {}
+
+/** The idempotency key made an automation already (insertAutomation). */
+export class DuplicateRequest extends Error {}
 
 /**
  * The checks a save makes, without saving or watching anything: exactly one of a moment, a
@@ -256,12 +292,7 @@ export async function checkAutomation(
   const tz = input.timezone ?? user.timezone;
   if (!isValidTimezone(tz)) throw new AutomationError(`Unknown timezone ${tz}`);
 
-  const counted = [eq(automations.userId, input.userId), isNull(automations.completedAt)];
-  if (opts.replacing) counted.push(ne(automations.id, opts.replacing));
-  const [{ n } = { n: 0 }] = await (opts.exec ?? db())
-    .select({ n: count() })
-    .from(automations)
-    .where(and(...counted));
+  const n = await countAutomations(input.userId, opts);
   const limit = limitFor(user.plan);
   if (n >= limit)
     throw new AutomationError(
@@ -285,8 +316,21 @@ export async function checkAutomation(
   }
   const app = findApp(input.trigger!.app) ?? appForToolkit(input.trigger!.app);
   if (!app) throw new AutomationError(`Unknown app ${input.trigger!.app}`);
+  if (!appAllowedOnPlan(app, user.plan))
+    throw new AutomationError(`${app.name} is not on the ${user.plan} plan`);
   const conn = await connectionForToolkit(input.userId, app.toolkit);
   if (!conn) throw new AutomationError(`Connect ${app.name} first`);
+  // The event must be one the app offers, its required settings filled (when Composio can say).
+  // Pull-request review is the platform's own, with its settings made by the platform.
+  if (!input.preset) {
+    const wrong = await appEventProblems(
+      app.toolkit,
+      app.name,
+      input.trigger!.event,
+      input.trigger!.config ?? {},
+    );
+    if (wrong?.length) throw new AutomationError(wrong.join(' '));
+  }
   return { kind: 'event', timezone: tz, nextRunAt: null, watchAccount: conn.composioAccountId };
 }
 
@@ -334,13 +378,18 @@ export async function insertAutomation(
         triggerRef,
         preset: input.preset ?? null,
         apps: input.apps ?? [],
+        askFirst: input.askFirst ?? 'risky',
+        clientRequestId: input.clientRequestId ?? null,
         sessionKey: input.sessionKey,
         enabled,
         pausedReason: enabled ? null : 'user',
         nextRunAt: checked.nextRunAt,
       })
+      // Only the idempotency key can clash: the same request made one already (DuplicateRequest).
+      .onConflictDoNothing()
       .returning();
-    return row!;
+    if (!row) throw new DuplicateRequest();
+    return row;
   } catch (err) {
     if (triggerRef) await dropTrigger(triggerRef);
     delete made.triggerRef;
@@ -374,6 +423,97 @@ export async function createAutomation(input: CreateInput): Promise<Automation> 
   const row = await insertAutomation(input, checked);
   await activateAutomation(row);
   return row;
+}
+
+/** Two app events watch the same thing: the same app, event and settings. */
+function sameWatch(a: Automation['trigger'], b: CreateInput['trigger']): boolean {
+  if (!a || !b) return false;
+  const app = (x: string) => (findApp(x) ?? appForToolkit(x))?.toolkit ?? x.toLowerCase();
+  return (
+    app(a.app) === app(b.app) &&
+    a.event.toUpperCase() === b.event.toUpperCase() &&
+    isDeepStrictEqual(a.config ?? {}, b.config ?? {})
+  );
+}
+
+/**
+ * Changes a saved automation in place, inside the caller's transaction (which locked the row and
+ * ran the checks): its parts, when it runs and where results go. Its id, its page and its runs
+ * stay. A changed app event gets its new watch at Composio FIRST (a TriggerError when Composio
+ * refuses, with nothing changed); `made.triggerRef` holds it, so a caller whose transaction fails
+ * afterwards can remove it. The old watch is removed only after the change is saved (afterChange).
+ * `enabled` left out keeps it on or paused as it is. Failures in a row start again from zero.
+ */
+export async function updateAutomationInTx(
+  tx: Tx,
+  existing: Automation,
+  input: CreateInput,
+  checked: CheckedAutomation,
+  opts: { enabled?: boolean },
+  made: { triggerRef?: string } = {},
+): Promise<Automation> {
+  let triggerRef: string | null = null;
+  if (checked.kind === 'event') {
+    const keep =
+      existing.kind === 'event' &&
+      existing.triggerRef &&
+      sameWatch(existing.trigger, input.trigger);
+    if (keep) triggerRef = existing.triggerRef;
+    else {
+      try {
+        triggerRef = (
+          await composio().createTrigger(
+            input.userId,
+            input.trigger!.event,
+            checked.watchAccount!,
+            input.trigger!.config ?? {},
+          )
+        ).triggerId;
+      } catch (err) {
+        throw new TriggerError(String(err));
+      }
+      made.triggerRef = triggerRef;
+    }
+  }
+  const state =
+    opts.enabled === undefined
+      ? {}
+      : opts.enabled
+        ? { enabled: true, pausedReason: null }
+        : { enabled: false, pausedReason: 'user' as const };
+  const [row] = await tx
+    .update(automations)
+    .set({
+      kind: checked.kind,
+      title: input.title,
+      instruction: input.instruction,
+      runAt: input.runAt ?? null,
+      cron: input.cron ?? null,
+      timezone: checked.timezone,
+      trigger: input.trigger ?? null,
+      triggerRef,
+      apps: input.apps ?? [],
+      askFirst: input.askFirst ?? 'risky',
+      sessionKey: input.sessionKey,
+      nextRunAt: checked.nextRunAt,
+      failCount: 0,
+      ...state,
+    })
+    .where(and(eq(automations.id, existing.id), eq(automations.userId, existing.userId)))
+    .returning();
+  return row!;
+}
+
+/**
+ * After a change is saved: the old timer goes and the new one is set (none while paused), the old
+ * watch at Composio is removed if the change replaced it, and the web app is told.
+ */
+export async function afterChange(before: Automation, after: Automation): Promise<void> {
+  await removeTimer(before);
+  await registerTimer(after);
+  if (before.triggerRef && before.triggerRef !== after.triggerRef)
+    await dropTrigger(before.triggerRef);
+  await emit(after);
 }
 
 /**

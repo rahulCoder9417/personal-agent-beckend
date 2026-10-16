@@ -19,20 +19,21 @@ import { connectionForToolkit } from '../integrations/apps.ts';
 import { turnMessageFields } from '../orchestrator/turn.ts';
 import {
   activateAutomation,
+  afterChange,
   AutomationError,
   checkAutomation,
   copyToOf,
-  deleteAutomation,
   dropTrigger,
   getAutomation,
   insertAutomation,
   nextCronRun,
   TriggerError,
+  updateAutomationInTx,
   type Automation,
   type CreateInput,
 } from './automations.ts';
 import { describeDueTime } from './jobs.ts';
-import { automationDrafts, type DraftTrigger } from './schema.ts';
+import { automationDrafts, automations, type DraftTrigger } from './schema.ts';
 import { cronInWords, triggerInWords } from './words.ts';
 
 export type Draft = typeof automationDrafts.$inferSelect;
@@ -48,6 +49,7 @@ export const DRAFT_KEEP_MS = 30 * 24 * 3600 * 1000;
 export const SAVE_TITLE = '✅ Save';
 /** What the user is told a draft waits for before it runs, in the outline. */
 const ASKS_FIRST = 'Asks first: before sending, deleting or paying';
+const ASKS_FIRST_CHANGES = 'Asks first: before anything that changes something';
 
 const PLAN_NAMES: Record<PlanId, string> = { free: 'Free', pro: 'Pro', max: 'Max' };
 
@@ -61,9 +63,9 @@ export class DraftError extends Error {
     /**
      * `not_found`: no such draft for this user. `not_open`: saved, discarded, replaced or expired
      * (`details.status`). `plan_limit`, `invalid`: a check refused it. `unavailable`: Composio could
-     * not make the watch just now.
+     * not make the watch just now. `too_many`: 20 open drafts already (the user's own).
      */
-    readonly code: 'not_found' | 'not_open' | 'plan_limit' | 'invalid' | 'unavailable',
+    readonly code: 'not_found' | 'not_open' | 'plan_limit' | 'invalid' | 'unavailable' | 'too_many',
     readonly details?: Record<string, unknown>,
   ) {
     super(message);
@@ -108,6 +110,7 @@ export function toApiDraft(d: Draft) {
       ? { app: d.trigger.app, event: d.trigger.event, config: d.trigger.config ?? {} }
       : null,
     apps: d.apps ?? [],
+    askFirst: d.askFirst ?? 'risky',
     copyTo: copyToOf(d.sessionKey),
     nextRunAt: next ? next.toISOString() : null,
     replacedBy: d.replacedBy,
@@ -118,7 +121,7 @@ export function toApiDraft(d: Draft) {
   };
 }
 
-const emitDraft = (d: Draft) => publish(d.userId, 'automation_draft.updated', toApiDraft(d));
+export const emitDraft = (d: Draft) => publish(d.userId, 'automation_draft.updated', toApiDraft(d));
 
 // ---------------------------------------------------------------- what the user is shown
 
@@ -154,7 +157,7 @@ export function draftOutline(d: Draft, changes?: Pick<Automation, 'title'> | nul
     `When: ${draftWhen(d)}`,
     `Tex: ${cut(d.instruction, 300)}`,
     ...(d.apps.length ? [`Apps: ${d.apps.map(appName).join(', ')}`] : []),
-    ASKS_FIRST,
+    d.askFirst === 'changes' ? ASKS_FIRST_CHANGES : ASKS_FIRST,
     copyToOf(d.sessionKey)
       ? 'Results: your Automations chat, and a copy here'
       : 'Results: your Automations chat',
@@ -210,6 +213,8 @@ export interface ProposeInput {
   trigger?: DraftTrigger;
   /** The apps the agent says it will use, by app slug or toolkit. */
   apps?: string[];
+  /** `changes`: the user asked to be asked before anything that changes something. */
+  askFirst?: Draft['askFirst'];
   /** The automation it would change. */
   changeOf?: string;
   /** The agent's earlier draft that this one takes the place of. */
@@ -262,11 +267,13 @@ export async function proposeDraft(
   const { userId } = input;
   const old = input.replaces ? await getDraft(userId, input.replaces) : undefined;
   if (input.replaces && !old) throw new DraftError(`Unknown draft ${input.replaces}`, 'invalid');
+  // A new version of a draft of a change (the user's own from the canvas, say) is still that change.
+  const changeOf = input.changeOf ?? old?.changeOf ?? undefined;
   let changes: Automation | undefined;
-  if (input.changeOf) {
-    changes = await getAutomation(userId, input.changeOf);
+  if (changeOf) {
+    changes = await getAutomation(userId, changeOf);
     if (!changes || changes.completedAt)
-      throw new DraftError(`Unknown automation ${input.changeOf}`, 'invalid');
+      throw new DraftError(`Unknown automation ${changeOf}`, 'invalid');
     if (changes.preset === 'pr_review')
       throw new DraftError(
         'Pull-request review is changed by the user in the web app, under Automations, Pull-request review, not with a draft',
@@ -287,7 +294,7 @@ export async function proposeDraft(
   };
   let checked;
   try {
-    checked = await checkAutomation(parts, { replacing: input.changeOf ?? null });
+    checked = await checkAutomation(parts, { replacing: changeOf ?? null });
   } catch (err) {
     throw refused(err, false);
   }
@@ -317,7 +324,7 @@ export async function proposeDraft(
         id: newId('drf'),
         userId,
         madeBy: 'agent',
-        changeOf: input.changeOf ?? null,
+        changeOf: changeOf ?? null,
         kind: checked.kind,
         title: input.title,
         instruction: input.instruction,
@@ -326,6 +333,7 @@ export async function proposeDraft(
         timezone: checked.timezone,
         trigger: input.trigger ?? null,
         apps,
+        askFirst: input.askFirst ?? 'risky',
         sessionKey: input.sessionKey,
         expiresAt: new Date(now.getTime() + DRAFT_TTL_MS),
       })
@@ -370,7 +378,7 @@ export async function proposeDraft(
 // ---------------------------------------------------------------- the user's answer
 
 /** The refusal for a draft that is not open. */
-function notOpen(d: Draft, status: DraftStatus): DraftError {
+export function notOpen(d: Draft, status: DraftStatus): DraftError {
   const words: Record<Exclude<DraftStatus, 'open'>, string> = {
     saved: 'This draft is already saved.',
     replaced: 'Tex made a newer version of this draft. Save the newest one.',
@@ -396,6 +404,7 @@ function partsOf(d: Draft, enabled: boolean): CreateInput {
     ...(d.cron ? { cron: d.cron } : {}),
     ...(d.trigger ? { trigger: d.trigger } : {}),
     apps: d.apps ?? [],
+    askFirst: d.askFirst ?? 'risky',
     enabled,
   };
 }
@@ -405,8 +414,10 @@ function partsOf(d: Draft, enabled: boolean): CreateInput {
  * limit counts the automation a change replaces as gone). The draft row is locked while it is
  * read and marked saved in the same transaction as the automation is saved, so one draft makes one
  * automation, also when two saves come at once (the second waits, then finds it saved). Then the
- * timer is set (or the watch made with it), and a change removes the automation it replaces.
- * `enabled: false` makes it paused. `via`: where the user saved it, for the activity log.
+ * timer is set (or the watch made with it). A change changes its automation in place (its id and
+ * page stay; a changed app event gets its new watch before the old one goes); if that automation
+ * was deleted meanwhile, the draft makes a new one. `enabled: false` makes it paused. `via`: where
+ * the user saved it, for the activity log.
  */
 export async function saveDraft(
   userId: string,
@@ -414,7 +425,7 @@ export async function saveDraft(
   opts: { enabled?: boolean; via: string },
 ): Promise<{ draft: Draft; automation: Automation }> {
   const made: { triggerRef?: string } = {};
-  let saved: { draft: Draft; automation: Automation };
+  let saved: { draft: Draft; automation: Automation; before: Automation | null };
   try {
     saved = await db().transaction(async (tx) => {
       const [d] = await tx
@@ -426,15 +437,34 @@ export async function saveDraft(
       const status = statusOf(d);
       if (status !== 'open') throw notOpen(d, status);
       const parts = partsOf(d, opts.enabled !== false);
+      // A change: its automation, locked, while it is still there to change (not review, not finished).
+      const [before] = d.changeOf
+        ? await tx
+            .select()
+            .from(automations)
+            .where(and(eq(automations.userId, userId), eq(automations.id, d.changeOf)))
+            .for('update')
+        : [];
+      const inPlace =
+        before && !before.completedAt && before.preset !== 'pr_review' ? before : null;
       let checked;
       try {
-        checked = await checkAutomation(parts, { exec: tx, replacing: d.changeOf });
+        checked = await checkAutomation(parts, { exec: tx, replacing: inPlace?.id ?? null });
       } catch (err) {
         throw refused(err, true);
       }
       let automation: Automation;
       try {
-        automation = await insertAutomation(parts, checked, tx, made);
+        automation = inPlace
+          ? await updateAutomationInTx(
+              tx,
+              inPlace,
+              parts,
+              checked,
+              { enabled: opts.enabled !== false },
+              made,
+            )
+          : await insertAutomation(parts, checked, tx, made);
       } catch (err) {
         if (!(err instanceof TriggerError)) throw err;
         logger().warn({ userId, draftId, err: err.message }, 'draft save: trigger not made');
@@ -448,19 +478,16 @@ export async function saveDraft(
         .set({ status: 'saved', automationId: automation.id, decidedAt: new Date() })
         .where(eq(automationDrafts.id, d.id))
         .returning();
-      return { draft: done!, automation };
+      return { draft: done!, automation, before: inPlace };
     });
   } catch (err) {
     // The transaction did not save: a watch made for it must not stay behind.
     if (made.triggerRef) await dropTrigger(made.triggerRef);
     throw err;
   }
-  await activateAutomation(saved.automation);
-  // A change: the new automation is live, so the one it replaces goes, with its timer or watch.
-  if (saved.draft.changeOf)
-    await deleteAutomation(userId, saved.draft.changeOf).catch((err: unknown) =>
-      logger().warn({ userId, draftId, err: String(err) }, 'replaced automation not removed'),
-    );
+  // A change: the old timer or watch goes, the new one is set. A new one: its timer is set.
+  if (saved.before) await afterChange(saved.before, saved.automation);
+  else await activateAutomation(saved.automation);
   await emitDraft(saved.draft);
   await audit({
     userId,
@@ -471,7 +498,7 @@ export async function saveDraft(
       draftId,
       automationId: saved.automation.id,
       via: opts.via,
-      ...(saved.draft.changeOf ? { replaced: saved.draft.changeOf } : {}),
+      ...(saved.before ? { changed: saved.before.id } : {}),
     },
   });
   return saved;

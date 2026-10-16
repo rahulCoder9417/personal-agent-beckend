@@ -21,11 +21,18 @@ import {
   type Connection,
 } from '../../integrations/apps.ts';
 import { claimCrewJobComment, releaseCrewJobComment } from '../../automations/crew-jobs.ts';
+import {
+  appRefusal,
+  currentRunLimits,
+  RunLimitsUnknown,
+  type RunLimits,
+} from '../../automations/run-limits.ts';
 import { prCommentAllowed } from '../../automations/pr-review.ts';
 import { appOfAction, checkActionInputs } from '../../integrations/action-inputs.ts';
 import {
   actionNeedsApproval,
   appAllowedOnPlan,
+  appForToolkit,
   prCommentTarget,
 } from '../../integrations/catalog.ts';
 import { composio } from '../../integrations/composio.ts';
@@ -75,6 +82,19 @@ function allowedToolkits(user: User | undefined, rows: Connection[]): string[] {
  */
 async function userAndConnections(userId: string) {
   return Promise.all([getActiveUserCached(userId), listConnections(userId)]);
+}
+
+/**
+ * The limits of the automation whose run this is (its apps, "ask me first"), or null outside a
+ * run. A note that can't be read refuses the tool: a run never acts without its limits.
+ */
+async function runLimits(userId: string): Promise<RunLimits | null> {
+  try {
+    return await currentRunLimits(userId);
+  } catch (err) {
+    if (err instanceof RunLimitsUnknown) throw new ToolError(err.message);
+    throw err;
+  }
 }
 
 // The profile asks Composio about connections still pending first, so an app the user just
@@ -188,6 +208,10 @@ defineTool({
           reason: "its details didn't fit the action, so you weren't asked",
         });
       if (check) {
+        // During an automation's run, only its own apps: no approval for another one either.
+        const limits = await runLimits(userId);
+        const refusal = limits && appRefusal(limits, check.app.toolkit, check.app.name);
+        if (refusal) throw new ToolError(refusal);
         app = check.app.slug;
         approved = args.arguments ?? {};
       }
@@ -261,7 +285,10 @@ defineTool({
   name: 'run_app_action',
   description:
     "Run an action in one of your user's connected apps (from list_app_actions; its inputs from describe_app_action). Risky actions need approval_id from an APPROVED request_approval " +
-    'for the same action: it runs exactly the arguments the user approved, so leave arguments out (any you pass must be the approved ones). Posting a new review or comment on a pull request needs no approval in a repo where your user turned on ' +
+    'for the same action: it runs exactly the arguments the user approved, so leave arguments out (any you pass must be the approved ones). ' +
+    "During an automation's run only that automation's apps can be used, and one set to ask first before any change needs " +
+    'request_approval for every action that changes something. ' +
+    'Posting a new review or comment on a pull request needs no approval in a repo where your user turned on ' +
     'pull-request review (a review must use event "COMMENT"); merging, approving and comments on other repos still do. ' +
     'A successful action that changes something (send, create, update, delete) costs your user 1 credit; reading, listing and searching are free. ' +
     'The answer is kept short: GMAIL_FETCH_EMAILS gives the sender, subject, date and a snippet of each email (pass include_payload true for ' +
@@ -274,8 +301,12 @@ defineTool({
   async run({ userId }, args) {
     // What runs: the agent's arguments, or with an approval exactly the approved ones (below).
     let runArgs = args.arguments ?? {};
-    // One read of the user's connections serves every check below (it was three or four).
-    const [user, read] = await userAndConnections(userId);
+    // One read of the user's connections serves every check below (it was three or four). The
+    // run's limits (an automation's run only) are read at the same time.
+    const [[user, read], limits] = await Promise.all([
+      userAndConnections(userId),
+      runLimits(userId),
+    ]);
     let rows = read;
     let toolkit = toolkitOf(args.action, allowedToolkits(user, rows));
     if (!toolkit && (await refreshPendingConnections(userId, rows))) {
@@ -296,6 +327,10 @@ defineTool({
     const conn = newestActiveConnection(rows, toolkit);
     if (!conn)
       throw new ToolError('That app is not connected', { reason: "the app isn't connected" });
+    // An automation's run may use only the apps on its canvas.
+    const refusal = limits && appRefusal(limits, toolkit, appForToolkit(toolkit)?.name ?? toolkit);
+    if (refusal)
+      throw new ToolError(refusal, { reason: "the automation isn't set to use this app" });
 
     // HLD 7.5: at zero credits an action that changes something doesn't run (reading still does).
     const changes = await appActionChangesSomething(args.action);
@@ -313,18 +348,29 @@ defineTool({
     // A crew job whose brief says "post it on the pull request": the user's yes for ONE review or
     // comment on that pull request, during that job (docs/backend-report.md, "The crew").
     let crewJobId: string | null = null;
-    if (actionNeedsApproval(args.action) && !args.approval_id) {
+    const risky = actionNeedsApproval(args.action);
+    // The automation's "ask me first" set to every change: an action that changes something
+    // waits for the user's yes too, not only a risky one.
+    const askedFirst = !risky && changes && limits?.askFirst === 'changes';
+    if (risky && !args.approval_id) {
       const target = prCommentTarget(args.action, runArgs);
       if (target && (await prCommentAllowed(userId, target)))
         prReviewRepo = `${target.owner}/${target.repo}`;
       else if (target) crewJobId = await claimCrewJobComment(userId, target);
     }
-    if (actionNeedsApproval(args.action) && !prReviewRepo && !crewJobId) {
+    if ((risky && !prReviewRepo && !crewJobId) || askedFirst) {
       if (!args.approval_id)
         throw new ToolError(
-          "This action needs the user's approval. If the user already approved it, call run_app_action again " +
-            'with that approval_id. Otherwise call request_approval and end your turn.',
-          { reason: 'it needs your approval, and none was given' },
+          askedFirst
+            ? `The automation "${limits!.title}" asks the user first before anything that changes something. ` +
+                'Call request_approval for this action and end your turn; run it with that approval_id after the yes.'
+            : "This action needs the user's approval. If the user already approved it, call run_app_action again " +
+                'with that approval_id. Otherwise call request_approval and end your turn.',
+          {
+            reason: askedFirst
+              ? 'the automation asks you first, and no approval was given'
+              : 'it needs your approval, and none was given',
+          },
         );
       const approval = await consumeApproval(userId, args.approval_id, args.action);
       if (!approval)

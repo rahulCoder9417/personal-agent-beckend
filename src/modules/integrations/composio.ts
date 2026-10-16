@@ -38,6 +38,17 @@ export interface ComposioTriggerInstance {
   config: Record<string, unknown>;
 }
 
+/**
+ * One kind of event an app can start an automation on (Composio's trigger type), with its
+ * settings as a JSON schema (`properties`, `required`).
+ */
+export interface ComposioTriggerType {
+  slug: string;
+  name: string;
+  description: string;
+  config: Record<string, unknown>;
+}
+
 /** What Composio says about one app setup (auth config). */
 export interface AuthConfigInfo {
   /** Composio's shared sign-in app at the provider. False: our own app (a custom auth config). */
@@ -160,6 +171,11 @@ export interface ComposioApi {
     triggerConfig: Record<string, unknown>,
   ): Promise<{ triggerId: string }>;
   deleteTrigger(triggerId: string): Promise<void>;
+  /**
+   * The kinds of event one toolkit offers, with their settings. Read-only. Composio answers in
+   * pages; up to 500 are read (see `appEventTypes`, which keeps them for a while).
+   */
+  listTriggerTypes(toolkit: string): Promise<ComposioTriggerType[]>;
   /**
    * Trigger instances (switched off ones too), by their ids or by the connected accounts they
    * watch. Read-only. Composio answers in pages; all pages are read, up to 2,000 instances.
@@ -428,6 +444,27 @@ const realApi: ComposioApi = {
   async deleteTrigger(triggerId) {
     await sdk().triggers.delete(triggerId);
   },
+  async listTriggerTypes(toolkit) {
+    const out: ComposioTriggerType[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 5; page++) {
+      const res = await sdk().triggers.listTypes({
+        toolkits: [toolkit],
+        limit: 100,
+        ...(cursor ? { cursor } : {}),
+      });
+      for (const t of res.items)
+        out.push({
+          slug: t.slug,
+          name: t.name,
+          description: t.description ?? '',
+          config: t.config ?? {},
+        });
+      cursor = res.nextCursor ?? undefined;
+      if (!cursor) break;
+    }
+    return out;
+  },
   async listTriggers(filter) {
     const { triggerIds, connectedAccountIds } = filter;
     // An empty filter would list every trigger in the project.
@@ -507,6 +544,8 @@ export const TOOL_LIST_TTL_MS = 10 * 60_000;
 const toolListCache = new Map<string, { at: number; tools: ComposioTool[] }>();
 /** One action asked by its name (`actionTool`), kept as long as a listing. */
 const toolCache = new Map<string, { at: number; tool: ComposioTool | null }>();
+/** An app's kinds of event, the same for every user: kept as long as a listing. */
+const triggerTypeCache = new Map<string, { at: number; types: ComposioTriggerType[] }>();
 
 export function composio(): ComposioApi {
   return api;
@@ -519,6 +558,23 @@ export function setComposioApi(fake: ComposioApi | undefined): void {
   authConfigCache.clear();
   toolListCache.clear();
   toolCache.clear();
+  triggerTypeCache.clear();
+}
+
+/**
+ * The kinds of event one app (its Composio toolkit) offers, from the last listing when it is
+ * recent enough. Throws when Composio can't be asked; a failed listing is not kept.
+ */
+export async function appEventTypes(
+  toolkit: string,
+  now = Date.now(),
+): Promise<ComposioTriggerType[]> {
+  const key = toolkit.toLowerCase();
+  const kept = triggerTypeCache.get(key);
+  if (kept && now - kept.at < TOOL_LIST_TTL_MS) return kept.types;
+  const types = await api.listTriggerTypes(key);
+  triggerTypeCache.set(key, { at: now, types });
+  return types;
 }
 
 /** One app's actions (its Composio toolkit), from the last listing when it is recent enough. */

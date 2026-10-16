@@ -83,7 +83,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 16 October 2026: the privacy page's promises made true
 
-- **Where it is:** on the branch `fix/privacy-retention` in the backend, the vm-manager, the landing page and the web app. Not on `main`, not on the server.
+- **Where it is:** on `main` and on the test server (backend and vm-manager), and live in the web app and on textcrew.in, since 16 October.
 - **Why:** HLD section 12 asked "change the backend, or the page?" about four gaps between textcrew.in/privacy and what the backend keeps. You left the choice to Claude: fix the backend where it falls short, and make the page say exactly what is true. The four gaps: the page said backups are kept 14 days (the backend keeps 7); "fully cleared within 30 days", while the archives of users' files were never deleted; raw events "kept 30 days", while a failed one was never removed; and a deleted account's row kept its email and name.
 - **What the user notices:** nothing in use. Deleting an account now also deletes every backup copy of the user's files at once. The privacy page, the home page, the web app's Delete account line and its Help say backups are kept 7 days, and what goes when. The web app's Settings no longer marks "Your own API key" as "Recommended": only the Claude plan has been tried end to end, and it is still marked Beta, so no choice is recommended now.
 - **Backend:**
@@ -111,7 +111,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 16 October 2026: Telegram polish (the "/" menu, `/help`, the linked reply, failed app actions in the activity log)
 
-- **Where it is:** on branch `feat/telegram-polish` in the backend, the vm-manager and the web app, not merged or deployed yet.
+- **Where it is:** on `main` and on the test server (backend and vm-manager), and live in the web app and on textcrew.in, since 16 October.
 - **Why:** small things found while testing on Telegram. The bot had no "/" menu, `/help` went to Tex like any message and cost a turn, the "Linked!" reply said nothing about `/new`, the Bridge sent people to an Apps page address that moved, and an app action that failed or was refused left no trace in the activity log. That last one hid the approvals whose arguments did not fit their action.
 - **What the user notices:**
   - In Telegram, typing "/" or tapping the menu button lists `/new` ("Start a new conversation") and `/help` ("How Textcrew works"). `/clear` and `/reset` still work but are not listed.

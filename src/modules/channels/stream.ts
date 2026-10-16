@@ -14,6 +14,7 @@ export type StreamEventType =
   | 'credits.updated'
   | 'automation.updated'
   | 'automation_draft.updated'
+  | 'automation_run.updated'
   | 'conversation.updated'
   | 'conversation.deleted';
 

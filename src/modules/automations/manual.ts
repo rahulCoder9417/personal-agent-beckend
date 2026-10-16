@@ -44,9 +44,11 @@ import {
   statusOf,
   type Draft,
 } from './drafts.ts';
-import { automationDrafts, automations, type DraftTrigger } from './schema.ts';
+import { automationDrafts, automations, type AutomationStep, type DraftTrigger } from './schema.ts';
+import { examineSteps, MAX_STEPS, type StepInput } from './steps.ts';
 
-export type Step = 'trigger' | 'instruction' | 'apps' | 'asks' | 'results';
+/** A box of the canvas. `steps`: one of its steps (the problem's `stepId`), or the list itself. */
+export type Step = 'trigger' | 'instruction' | 'apps' | 'asks' | 'results' | 'steps';
 export type CopyTo = 'telegram' | 'whatsapp' | 'imessage';
 
 /** The parts of an automation as the canvas holds them (any of them may be missing). */
@@ -60,11 +62,15 @@ export interface Parts {
   apps?: string[];
   askFirst?: Automation['askFirst'];
   copyTo?: CopyTo | null;
+  /** Up to 6 steps (steps.ts). With steps, `instruction` is the purpose and `apps` is ignored. */
+  steps?: StepInput[];
 }
 
 /** One thing wrong with the parts, for the box it belongs to (null: the whole, the plan). */
 export interface Problem {
   step: Step | null;
+  /** `step` = `steps`: the step it belongs to (null: the list itself). */
+  stepId?: string | null;
   code: 'invalid' | 'plan_limit' | 'past';
   message: string;
 }
@@ -142,11 +148,18 @@ export async function examine(
   const say = (step: Step | null, message: string, code: Problem['code'] = 'invalid') =>
     problems.push({ step, code, message });
 
-  // Tex's instruction.
+  // Tex's instruction (with steps: the purpose in one line).
+  const stepped = (parts.steps ?? []).length > 0;
   const title = (parts.title ?? '').trim();
   const instruction = (parts.instruction ?? '').trim();
   if (!title) say('instruction', 'Give it a title.');
-  if (!instruction) say('instruction', 'Write what Tex should do each time it runs.');
+  if (!instruction)
+    say(
+      'instruction',
+      stepped
+        ? 'Write its purpose in one line, for example "Reply fast to urgent mail from my boss".'
+        : 'Write what Tex should do each time it runs.',
+    );
 
   // The trigger: exactly one of a moment, a schedule or an app event.
   const ways = [parts.runAt, parts.cron?.trim(), parts.trigger].filter(Boolean).length;
@@ -191,9 +204,19 @@ export async function examine(
     }
   }
 
+  // The steps: each one's app, action and inputs, every problem on its step. They name the apps.
+  let steps: AutomationStep[] = [];
+  let apps: string[] = [];
+  if (stepped) {
+    const found = await examineSteps(userId, user.plan, parts.steps!);
+    for (const p of found.problems)
+      problems.push({ step: 'steps', stepId: p.stepId, code: 'invalid', message: p.message });
+    steps = found.steps;
+    apps = found.apps;
+  }
+
   // The apps it may use: known, on the plan, connected. Once each, by slug.
-  const apps: string[] = [];
-  for (const name of parts.apps ?? []) {
+  for (const name of stepped ? [] : (parts.apps ?? [])) {
     const app = appOf(name);
     if (!app) {
       say('apps', `"${name}" is not an app we know.`);
@@ -241,6 +264,7 @@ export async function examine(
       : {}),
     apps,
     askFirst: parts.askFirst ?? 'risky',
+    steps,
   };
   const checked: CheckedAutomation = {
     kind,
@@ -541,11 +565,20 @@ export async function createUserDraft(
   const timezone = body.timezone?.trim() || user.timezone;
   if (!isValidTimezone(timezone))
     throw new DraftError(`"${timezone}" is not a time zone we know.`, 'invalid');
-  const apps: string[] = [];
+  let apps: string[] = [];
   for (const name of body.apps ?? []) {
     const app = appOf(name);
     if (!app) throw new DraftError(`"${name}" is not an app we know.`, 'invalid');
     if (!apps.includes(app.slug)) apps.push(app.slug);
+  }
+  // Steps: only made whole (ids, titles); Tex fixes the rest.
+  let steps: AutomationStep[] = [];
+  if (body.steps?.length) {
+    const shaped = await examineSteps(userId, user.plan, body.steps.slice(0, MAX_STEPS), {
+      shapeOnly: true,
+    });
+    steps = shaped.steps;
+    apps = shaped.apps;
   }
   let current: Automation | undefined;
   if (body.changeOf) {
@@ -600,6 +633,7 @@ export async function createUserDraft(
             : null,
         apps,
         askFirst: body.askFirst ?? 'risky',
+        steps,
         sessionKey,
         expiresAt: new Date(now.getTime() + DRAFT_TTL_MS),
       })

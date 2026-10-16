@@ -9,6 +9,42 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
+/**
+ * When a step runs ("only if"), checked on the result of the step before it (docs/backend-report.md,
+ * "Automations with steps"). A false one stops the run there.
+ */
+export type StepCondition =
+  | { kind: 'always' }
+  | { kind: 'found' }
+  | { kind: 'mentions'; words: string[] }
+  | { kind: 'tex'; question: string };
+
+/**
+ * One step of an automation: an app action (one named action, with the inputs the user fixed) or
+ * a Tex instruction (words; it may read the apps it names, never change them).
+ */
+export interface AutomationStep {
+  /** Short, unique in the automation: it names the step's results, so reordering mixes nothing up. */
+  id: string;
+  type: 'action' | 'tex';
+  title: string;
+  /** `action`: the app slug. */
+  app: string | null;
+  /** `action`: the Composio action slug. */
+  action: string | null;
+  /** `action`: the inputs the user fixed; Tex fills the rest. */
+  inputs: Record<string, unknown>;
+  /** `tex`: what Tex does in this step. */
+  instruction: string | null;
+  /** `tex`: the apps Tex may read in this step (app slugs). */
+  readApps: string[];
+  /** `action`: wait for the user's yes before it runs (always, for a risky action). */
+  askFirst: boolean;
+  onlyIf: StepCondition;
+  /** "Show me this": its result also goes into the run's answer. */
+  showResult: boolean;
+}
+
 /** Source of truth for automations; BullMQ only holds the timers (HLD 0.4). */
 export const automations = pgTable(
   'automations',
@@ -42,6 +78,12 @@ export const automations = pgTable(
     askFirst: text({ enum: ['risky', 'changes'] })
       .notNull()
       .default('risky'),
+    /**
+     * Up to 6 steps a run follows one at a time (steps.ts). Empty, as for every automation made
+     * before steps: one instruction. With steps, `instruction` is the purpose in one line and
+     * `apps` every app the steps name.
+     */
+    steps: jsonb().$type<AutomationStep[]>().notNull().default([]),
     /** The REST api's idempotency key for one made by hand (POST /v1/automations). */
     clientRequestId: text(),
     /** Where results are sent. */
@@ -110,6 +152,8 @@ export const automationDrafts = pgTable(
     askFirst: text({ enum: ['risky', 'changes'] })
       .notNull()
       .default('risky'),
+    /** See `automations.steps`. */
+    steps: jsonb().$type<AutomationStep[]>().notNull().default([]),
     /** The chat it was proposed in: its card was posted there, and a copy of each answer goes there. */
     sessionKey: text().notNull(),
     /** `replaced`: the newer draft. */
@@ -122,6 +166,66 @@ export const automationDrafts = pgTable(
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index().on(t.userId, t.status), index().on(t.status, t.expiresAt)],
+);
+
+/** One step of a run: how far it got, its short result, and why it stopped. */
+export interface RunStep {
+  stepId: string;
+  state: 'pending' | 'running' | 'done' | 'skipped' | 'failed' | 'waiting';
+  /** Its short result (at most 4,000 characters). Removed 2 days after the run ended. */
+  result: string | null;
+  /** Tex said it found nothing (finish_step `found: false`). */
+  found?: boolean;
+  /** Why it failed or was skipped, or Tex's line for a "Tex decides" condition. */
+  reason: string | null;
+  /** `tex` condition: Tex's answer, once given. */
+  conditionMet?: boolean;
+  /** How many times its own action was tried (a second failure fails the step). */
+  tries: number;
+  /** App calls made during this step. */
+  calls: number;
+  /** `waiting`: the approval it waits for. */
+  approvalId: string | null;
+  /** When it started waiting for the user's OK. */
+  waitingSince?: string;
+}
+
+/**
+ * One run of an automation with steps (docs/backend-report.md, "Automations with steps"): which
+ * step it is on, and each step's result. One per event (unique), so a job that runs again never
+ * starts it twice; it carries on from the first step not done. The steps are copied in at the
+ * start, so a change while it waits never mixes old and new.
+ */
+export const automationRuns = pgTable(
+  'automation_runs',
+  {
+    id: text().primaryKey(),
+    userId: text().notNull(),
+    automationId: text().notNull(),
+    /** The event that started it (a timer's, an app event's, or "Run once now"). */
+    eventId: text().notNull().unique(),
+    state: text({ enum: ['running', 'waiting', 'done', 'stopped', 'failed', 'superseded'] })
+      .notNull()
+      .default('running'),
+    /** "Run once now". */
+    test: boolean().notNull().default(false),
+    /** The step it is on; null once it ended. */
+    currentStepId: text(),
+    /** The automation's steps when the run started. */
+    plan: jsonb().$type<AutomationStep[]>().notNull(),
+    steps: jsonb().$type<RunStep[]>().notNull(),
+    /** App calls in the whole run (at most 30). */
+    appCalls: integer().notNull().default(0),
+    /** Why it stopped or failed, in words for the user. */
+    stopReason: text(),
+    /** The turn now running it (its delivery id): the first one's, then the one after a yes. */
+    turnId: text(),
+    startedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    endedAt: timestamp({ withTimezone: true }),
+    /** When the steps' results were removed (2 days after the end). */
+    resultsRemovedAt: timestamp({ withTimezone: true }),
+  },
+  (t) => [index().on(t.userId, t.automationId, t.startedAt), index().on(t.state)],
 );
 
 /**

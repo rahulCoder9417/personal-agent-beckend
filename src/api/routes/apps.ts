@@ -2,6 +2,7 @@ import { appEvents } from '../../modules/integrations/app-events.ts';
 import { appCatalogFor, disconnect, startConnect } from '../../modules/integrations/apps.ts';
 import { appForToolkit, findApp } from '../../modules/integrations/catalog.ts';
 import { composioCallbackUrl } from '../../modules/integrations/composio.ts';
+import { actionsForPicker } from '../../modules/integrations/step-actions.ts';
 import {
   createMcpServer,
   deleteMcpServer,
@@ -43,6 +44,18 @@ export const appRoutes = [
     } catch (err) {
       logger().warn({ app: app.slug, err: String(err) }, 'app events not listed');
       throw unavailable(`Couldn't get ${app.name}'s events just now. Try again in a moment.`);
+    }
+  }),
+
+  // The actions a step of an automation can run in an app, for the step panel (kept 10 minutes).
+  route('listAppActions', async (c, { params, query }) => {
+    const app = findApp(params.appSlug) ?? appForToolkit(params.appSlug);
+    if (!app) throw notFound('Unknown app');
+    try {
+      return c.json({ items: await actionsForPicker(app, query.search) }, 200);
+    } catch (err) {
+      logger().warn({ app: app.slug, err: String(err) }, 'app actions not listed');
+      throw unavailable(`Couldn't get ${app.name}'s actions just now. Try again in a moment.`);
     }
   }),
 

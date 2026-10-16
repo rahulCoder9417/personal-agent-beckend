@@ -9,7 +9,7 @@ import { db } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import { logger } from '../../shared/logger.ts';
 import { audit } from '../admin/audit.ts';
-import type { PlanId } from '../auth/users.ts';
+import { getActiveUser, type PlanId } from '../auth/users.ts';
 import type { MessageRow } from '../channels/messages.ts';
 import { queueOutbound } from '../channels/outbound.ts';
 import { publish } from '../channels/stream.ts';
@@ -33,7 +33,8 @@ import {
   type CreateInput,
 } from './automations.ts';
 import { describeDueTime } from './jobs.ts';
-import { automationDrafts, automations, type DraftTrigger } from './schema.ts';
+import { automationDrafts, automations, type AutomationStep, type DraftTrigger } from './schema.ts';
+import { examineSteps, stepLine, toApiStep, type StepInput } from './steps.ts';
 import { cronInWords, triggerInWords } from './words.ts';
 
 export type Draft = typeof automationDrafts.$inferSelect;
@@ -111,6 +112,7 @@ export function toApiDraft(d: Draft) {
       : null,
     apps: d.apps ?? [],
     askFirst: d.askFirst ?? 'risky',
+    steps: (d.steps ?? []).map(toApiStep),
     copyTo: copyToOf(d.sessionKey),
     nextRunAt: next ? next.toISOString() : null,
     replacedBy: d.replacedBy,
@@ -155,7 +157,14 @@ export function draftOutline(d: Draft, changes?: Pick<Automation, 'title'> | nul
       : `${icon} New automation, not saved yet: ${d.title}`,
     ...(changes ? [`Changes: "${changes.title}". Saving replaces it.`] : []),
     `When: ${draftWhen(d)}`,
-    `Tex: ${cut(d.instruction, 300)}`,
+    ...(d.steps?.length
+      ? [
+          `Purpose: ${cut(d.instruction, 200)}`,
+          `Steps:`,
+          ...d.steps.map((s, i) => stepLine(s, i + 1)),
+          'A false "only if" stops the run there.',
+        ]
+      : [`Tex: ${cut(d.instruction, 300)}`]),
     ...(d.apps.length ? [`Apps: ${d.apps.map(appName).join(', ')}`] : []),
     d.askFirst === 'changes' ? ASKS_FIRST_CHANGES : ASKS_FIRST,
     copyToOf(d.sessionKey)
@@ -215,6 +224,8 @@ export interface ProposeInput {
   apps?: string[];
   /** `changes`: the user asked to be asked before anything that changes something. */
   askFirst?: Draft['askFirst'];
+  /** Up to 6 steps (steps.ts). With steps, `instruction` is the purpose and `apps` comes from them. */
+  steps?: StepInput[];
   /** The automation it would change. */
   changeOf?: string;
   /** The agent's earlier draft that this one takes the place of. */
@@ -280,7 +291,21 @@ export async function proposeDraft(
         'invalid',
       );
   }
-  const apps = await checkApps(userId, input.apps ?? []);
+  let apps = await checkApps(userId, input.apps ?? []);
+  // Steps: each one checked, every problem named by its step ("Step 4: …"), for the agent to fix.
+  let steps: AutomationStep[] = [];
+  if (input.steps?.length) {
+    const user = await getActiveUser(userId);
+    if (!user) throw new DraftError('User not found', 'not_found');
+    const found = await examineSteps(userId, user.plan, input.steps);
+    if (found.problems.length)
+      throw new DraftError(
+        `${found.problems.map((p) => p.message).join(' ')} Nothing was proposed.`,
+        'invalid',
+      );
+    steps = found.steps;
+    apps = found.apps;
+  }
   const parts: CreateInput = {
     userId,
     title: input.title,
@@ -334,6 +359,7 @@ export async function proposeDraft(
         trigger: input.trigger ?? null,
         apps,
         askFirst: input.askFirst ?? 'risky',
+        steps,
         sessionKey: input.sessionKey,
         expiresAt: new Date(now.getTime() + DRAFT_TTL_MS),
       })
@@ -392,8 +418,8 @@ export function notOpen(d: Draft, status: DraftStatus): DraftError {
   });
 }
 
-/** The parts of the automation a draft makes. */
-function partsOf(d: Draft, enabled: boolean): CreateInput {
+/** The parts of the automation a draft makes. `enabled` left out: switched on. */
+function partsOf(d: Draft, enabled?: boolean): CreateInput {
   return {
     userId: d.userId,
     title: d.title,
@@ -405,8 +431,25 @@ function partsOf(d: Draft, enabled: boolean): CreateInput {
     ...(d.trigger ? { trigger: d.trigger } : {}),
     apps: d.apps ?? [],
     askFirst: d.askFirst ?? 'risky',
-    enabled,
+    steps: d.steps ?? [],
+    ...(enabled !== undefined ? { enabled } : {}),
   };
+}
+
+/**
+ * A draft's steps checked again at Save (time has passed: an app may be disconnected, an action
+ * gone at Composio). The first problem, in words for the user.
+ */
+async function recheckSteps(d: Draft): Promise<void> {
+  if (!d.steps?.length) return;
+  const user = await getActiveUser(d.userId);
+  if (!user) throw new DraftError('User not found', 'not_found');
+  const found = await examineSteps(d.userId, user.plan, d.steps);
+  if (found.problems.length)
+    throw new DraftError(
+      `${found.problems[0]!.message} Fix it on the canvas, or ask Tex for a new draft.`,
+      'invalid',
+    );
 }
 
 /**
@@ -416,8 +459,9 @@ function partsOf(d: Draft, enabled: boolean): CreateInput {
  * automation, also when two saves come at once (the second waits, then finds it saved). Then the
  * timer is set (or the watch made with it). A change changes its automation in place (its id and
  * page stay; a changed app event gets its new watch before the old one goes); if that automation
- * was deleted meanwhile, the draft makes a new one. `enabled: false` makes it paused. `via`: where
- * the user saved it, for the activity log.
+ * was deleted meanwhile, the draft makes a new one. `enabled: false` makes it paused, `true` on;
+ * left out, a new one is on and a change keeps its automation on or paused. Steps are checked
+ * again first. `via`: where the user saved it, for the activity log.
  */
 export async function saveDraft(
   userId: string,
@@ -425,6 +469,9 @@ export async function saveDraft(
   opts: { enabled?: boolean; via: string },
 ): Promise<{ draft: Draft; automation: Automation }> {
   const made: { triggerRef?: string } = {};
+  // Its steps are checked again first, outside the transaction: that asks Composio.
+  const first = await getDraft(userId, draftId);
+  if (first && statusOf(first) === 'open') await recheckSteps(first);
   let saved: { draft: Draft; automation: Automation; before: Automation | null };
   try {
     saved = await db().transaction(async (tx) => {
@@ -436,7 +483,7 @@ export async function saveDraft(
       if (!d) throw new DraftError('Draft not found', 'not_found');
       const status = statusOf(d);
       if (status !== 'open') throw notOpen(d, status);
-      const parts = partsOf(d, opts.enabled !== false);
+      const parts = partsOf(d, opts.enabled);
       // A change: its automation, locked, while it is still there to change (not review, not finished).
       const [before] = d.changeOf
         ? await tx
@@ -455,13 +502,15 @@ export async function saveDraft(
       }
       let automation: Automation;
       try {
+        // A change keeps its automation on or paused as it is, unless the save says (as the
+        // canvas's Save of a change does). A new one is switched on unless saved paused.
         automation = inPlace
           ? await updateAutomationInTx(
               tx,
               inPlace,
               parts,
               checked,
-              { enabled: opts.enabled !== false },
+              opts.enabled === undefined ? {} : { enabled: opts.enabled },
               made,
             )
           : await insertAutomation(parts, checked, tx, made);

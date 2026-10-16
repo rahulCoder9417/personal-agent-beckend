@@ -50,18 +50,37 @@ function typeOf(schema: Record<string, unknown>): SettingType {
 
 /** One kind of event as the web app's picker shows it. */
 export function toAppEvent(t: ComposioTriggerType): AppEvent {
-  const props = (t.config.properties ?? {}) as Record<string, Record<string, unknown>>;
-  const required = new Set(Array.isArray(t.config.required) ? (t.config.required as string[]) : []);
-  const settings = Object.entries(props).map(([name, schema]) => ({
+  return {
+    slug: t.slug,
+    name: t.name || titleOf(t.slug),
+    description: t.description,
+    settings: settingsOf(t.config),
+  };
+}
+
+/**
+ * The settings (or an action's inputs) a JSON schema names (`properties`, `required`), as a form
+ * needs them. Also used for an action's inputs in a step's panel (step-actions.ts).
+ */
+export function settingsOf(schema: Record<string, unknown>): AppEventSetting[] {
+  const props = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
+  const required = new Set(Array.isArray(schema.required) ? (schema.required as string[]) : []);
+  return Object.entries(props).map(([name, s]) => ({
     name,
-    title: typeof schema.title === 'string' && schema.title ? schema.title : titleOf(name),
-    description: typeof schema.description === 'string' ? schema.description : '',
-    type: typeOf(schema),
+    title: typeof s.title === 'string' && s.title ? s.title : titleOf(name),
+    description: typeof s.description === 'string' ? s.description : '',
+    type: typeOf(s),
     required: required.has(name),
-    ...(Array.isArray(schema.enum) ? { enum: schema.enum } : {}),
-    ...('default' in schema ? { default: schema.default } : {}),
+    ...(Array.isArray(s.enum) ? { enum: s.enum } : {}),
+    ...('default' in s ? { default: s.default } : {}),
   }));
-  return { slug: t.slug, name: t.name || titleOf(t.slug), description: t.description, settings };
+}
+
+/** "GMAIL_SEND_EMAIL" of Gmail → "Send email". */
+export function actionTitle(slug: string, toolkit: string): string {
+  const prefix = `${toolkit.toUpperCase()}_`;
+  const rest = slug.toUpperCase().startsWith(prefix) ? slug.slice(prefix.length) : slug;
+  return titleOf(rest);
 }
 
 /** The events one app (its toolkit) offers. Throws when Composio can't be asked. */

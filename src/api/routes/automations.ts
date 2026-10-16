@@ -64,11 +64,21 @@ function partsOf(body: JsonBody<'checkAutomation'> | JsonBody<'createAutomation'
     apps: body.apps ?? [],
     askFirst: body.askFirst ?? 'risky',
     copyTo: body.copyTo ?? null,
+    steps: (body.steps ?? []).map((s) => ({
+      ...s,
+      ...(s.onlyIf ? { onlyIf: { ...s.onlyIf } } : {}),
+    })),
   };
 }
 
-const apiProblem = (p: { step: string | null; code: string; message: string }) => ({
+const apiProblem = (p: {
+  step: string | null;
+  stepId?: string | null;
+  code: string;
+  message: string;
+}) => ({
   step: p.step,
+  stepId: p.stepId ?? null,
   code: p.code,
   message: p.message,
 });
@@ -252,8 +262,9 @@ export const automationRoutes = [
     const userId = c.get('user').id;
     await enforce({ key: `draft-save:user:${userId}`, max: 30, windowSeconds: 3600 });
     try {
+      // Left out: a new automation is switched on, a change keeps it on or paused.
       const { draft, automation } = await saveDraft(userId, params.draftId, {
-        enabled: body?.enabled !== false,
+        ...(body?.enabled !== undefined ? { enabled: body.enabled } : {}),
         via: 'web',
       });
       return c.json({ draft: toApiDraft(draft), automation: await withCopyTo(automation) }, 200);

@@ -22,7 +22,14 @@ import { appEventProblems } from '../integrations/app-events.ts';
 import { appAllowedOnPlan, appForToolkit, findApp } from '../integrations/catalog.ts';
 import { connectionForToolkit } from '../integrations/apps.ts';
 import { composio } from '../integrations/composio.ts';
-import { automationDrafts, automations, prReviews } from './schema.ts';
+import {
+  automationDrafts,
+  automationRuns,
+  automations,
+  prReviews,
+  type AutomationStep,
+} from './schema.ts';
+import { toApiStep } from './steps.ts';
 
 export type Automation = typeof automations.$inferSelect;
 
@@ -143,6 +150,7 @@ export function toApiAutomation(a: Automation, copyTo: CopyChannel = copyToOf(a.
     copyTo,
     apps: a.apps ?? [],
     askFirst: a.askFirst ?? 'risky',
+    steps: (a.steps ?? []).map(toApiStep),
     preset: a.preset ?? null,
     enabled: a.enabled,
     pausedReason: a.pausedReason ?? null,
@@ -251,6 +259,8 @@ export interface CreateInput {
   apps?: string[];
   /** When a run stops for the user's yes (default `risky`). */
   askFirst?: Automation['askFirst'];
+  /** Its steps, checked already (steps.ts). Empty or left out: one instruction. */
+  steps?: AutomationStep[];
   /** False: made switched off, paused by the user ("Save paused"). Default on. */
   enabled?: boolean;
   /** The REST api's idempotency key (made by hand). */
@@ -379,6 +389,7 @@ export async function insertAutomation(
         preset: input.preset ?? null,
         apps: input.apps ?? [],
         askFirst: input.askFirst ?? 'risky',
+        steps: input.steps ?? [],
         clientRequestId: input.clientRequestId ?? null,
         sessionKey: input.sessionKey,
         enabled,
@@ -494,6 +505,7 @@ export async function updateAutomationInTx(
       triggerRef,
       apps: input.apps ?? [],
       askFirst: input.askFirst ?? 'risky',
+      steps: input.steps ?? [],
       sessionKey: input.sessionKey,
       nextRunAt: checked.nextRunAt,
       failCount: 0,
@@ -516,16 +528,36 @@ export async function afterChange(before: Automation, after: Automation): Promis
   await emit(after);
 }
 
+const CHAT_APP_NAMES = {
+  telegram: 'Telegram',
+  whatsapp: 'WhatsApp',
+  imessage: 'iMessage',
+} as const;
+
 /**
  * Where an automation's runs answer, in words for the agent to tell the user: always the
- * Automations chat; made in a chat app (Telegram), a copy of each answer there too.
+ * Automations chat, and whether a copy goes to a chat app now (`copyTo`, from copyRules). Made in a
+ * chat app: a copy there while that chat is linked, not blocked and switched on. Made in the web
+ * app: a copy to the linked Telegram chat only while the user's switch "Automation runs finish"
+ * (Settings, General) is on; it is off at first.
  */
-export function whereRunsAnswer(a: Pick<Automation, 'sessionKey'>): string {
-  const chat = parseSessionKey(a.sessionKey)?.channel;
-  const app = chat === 'telegram' ? 'Telegram' : chat === 'whatsapp' ? 'WhatsApp' : 'iMessage';
+export function whereRunsAnswer(a: Pick<Automation, 'sessionKey'>, copyTo: CopyChannel): string {
+  const made = parseSessionKey(a.sessionKey)?.channel;
+  const base = `Each run answers in the Automations chat in ${WEB_APP_NAME}, never in the user's other chats.`;
+  if (copyTo) {
+    const why =
+      made === 'web'
+        ? ` (their switch "Automation runs finish" in Settings, General is on)`
+        : made === copyTo
+          ? ', the chat it was made in'
+          : '';
+    return `${base} A copy of each answer also goes to their ${CHAT_APP_NAMES[copyTo]} chat${why}.`;
+  }
+  if (made && made !== 'web')
+    return `${base} No copy goes to ${CHAT_APP_NAMES[made]} now: that chat is no longer linked, it blocked the bot, or ${CHAT_APP_NAMES[made]} is switched off.`;
   return (
-    `Each run answers in the Automations chat in ${WEB_APP_NAME}, never in the user's other chats` +
-    (chat && chat !== 'web' ? `, and a copy of each answer is sent to this ${app} chat.` : '.')
+    `${base} No copy goes to Telegram. If they want one there, they link a Telegram chat and turn on ` +
+    `"Automation runs finish" in Settings, General (it is off at first).`
   );
 }
 
@@ -579,6 +611,10 @@ export async function deleteAutomation(userId: string, id: string): Promise<bool
       .catch((err: unknown) => logger().warn({ err: String(err) }, 'delete trigger failed'));
   }
   await db().delete(automations).where(eq(automations.id, id));
+  // Its runs' trails go with it.
+  await db()
+    .delete(automationRuns)
+    .where(and(eq(automationRuns.userId, userId), eq(automationRuns.automationId, id)));
   return true;
 }
 
@@ -786,4 +822,5 @@ export async function deleteUserAutomations(userId: string): Promise<void> {
   await db().delete(automations).where(eq(automations.userId, userId));
   await db().delete(prReviews).where(eq(prReviews.userId, userId));
   await db().delete(automationDrafts).where(eq(automationDrafts.userId, userId));
+  await db().delete(automationRuns).where(eq(automationRuns.userId, userId));
 }

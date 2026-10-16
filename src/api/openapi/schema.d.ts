@@ -1955,7 +1955,7 @@ export interface paths {
          * Put chosen agent settings back to their defaults (admin)
          * @description `engine`: the chosen engine goes back to Hermes (a Claude plan stays connected; the user
          *     can choose Claude Code again). `model` and `effort`: Claude Code's model and thinking effort
-         *     go back to Default, Claude Code's own choice. `browser`: Scout's browser switch is set again
+         *     go back to Default (Sonnet 5.5, quick). `browser`: Scout's browser switch is set again
          *     from the user's plan and the deployment, as a plan change does. The same functions the user's
          *     own settings use make each change, so the vm-manager is told the same way.
          */

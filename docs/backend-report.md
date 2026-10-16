@@ -2833,11 +2833,12 @@ Example: the limit is 3 and three containers are awake. A Free user was quiet fo
 
 A stop keeps everything in the user's folder: the engines' memory and chat sessions, the Claude sign-in, the workspace with files and cloned code, and the browser's profile. A new agent image keeps the folder too. Only deleting the account removes it:
 
-1. `DeleteSandbox` removes the container, the user's folder, the proxy rule and the vm-manager's record. Awake periods stay for billing history.
+1. `DeleteSandbox` removes the container, the user's folder, the proxy rule, every nightly archive of the user's folder (section 37) and the vm-manager's record. Awake periods stay for billing history.
 2. The backend removes the token record, the agent settings, the shared memories, the record of which engine ran each chat, the turn timings, the approvals (with the exact inputs each was asked for, such as an email's recipient), the chat links, the conversations, the messages and the uploaded files.
 3. The user's gateway key is revoked, and a paid subscription is set to not renew. The user's own AI keys, their own MCP servers, automations (with their Composio triggers) and crew jobs are removed.
 4. App connections are removed, at Composio first, which drops the app's sign-in.
-5. Last, the activity log, with the inputs of every action. The one row that stays is an admin's record that they deleted the account (section 31). It goes last so that a row written by an earlier step does not stay behind.
+5. Then the activity log, with the inputs of every action. The one row that stays is an admin's record that they deleted the account (section 31). It goes late so that a row written by an earlier step does not stay behind.
+6. Last, the `users` row is cleaned. It stays, marked deleted, with its id and Clerk id, so the money records still point to it and a late webhook from Clerk finds it. Its email becomes `deleted-<id>@deleted.invalid` (an address that can never receive mail), its name "Deleted user" and its time zone UTC. A "user updated" from Clerk that arrives after the deletion never writes the row again.
 
 Each module deletes its own tables. Every step is safe to run again, so a job that stopped half-way is simply run again. The steps that ask outside services (LiteLLM, Polar, Composio) come after the user's own data, so a failure there holds back as little as possible.
 
@@ -2847,13 +2848,13 @@ Each module deletes its own tables. Every step is safe to run again, so a job th
 
 | What | Why |
 |---|---|
-| The `users` row, marked deleted, with the email and the name still in it | The admin list shows deleted accounts. Nothing removes the email and the name yet |
+| The `users` row, marked deleted, with no email, name or time zone (step 6) | The admin list shows deleted accounts, and the money records point to it |
 | Credit grants, the credit ledger, usage periods, payments and subscriptions | Money records. The ledger is never edited (Part C) |
 | Coupon redemptions, with the IP address | One redemption per coupon and user, and the abuse flags (section 29) |
 | An admin's record that they deleted the account | Who deleted it and why (section 31) |
-| Saved webhooks in `events`, such as a Telegram message as it came in | The daily clean-up removes finished ones after 30 days. A failed one stays |
+| Saved webhooks in `events`, such as a Telegram message as it came in | The daily clean-up removes every event after 30 days, a failed one too (section 37) |
 | The vm-manager's awake periods | Billing history |
-| The nightly backups | A dump folder goes after `BACKUP_KEEP_DAYS` days, 7 by default. The archives of users' folders are never deleted (section 37) |
+| The nightly database dumps | A dump folder goes after `BACKUP_KEEP_DAYS` days, 7 by default, so the user's rows are gone from them within 7 days. The archives of the user's folder already went in step 1 (section 37) |
 
 ### The health check and the reconciler
 
@@ -3113,6 +3114,8 @@ The backup job runs every night at 02:00 on the worker's clock.
 3. If `BACKUP_UPLOAD_CMD` is set, it runs that command to copy the backup off the server.
 4. It deletes dump folders older than `BACKUP_KEEP_DAYS`, which is 7 by default.
 
+The archives of users' folders are deleted by the vm-manager, which owns them: once an hour it deletes every archive older than its own setting `SNAPSHOT_KEEP_DAYS`, also 7 by default, and `DeleteSandbox` deletes all of one user's archives at once. The two settings must stay equal. The worker cannot do it itself: the vm-manager writes the archives as root into folders only root may open.
+
 The restore test is a script that is run by hand. It restores the newest dump into a scratch database and checks that the main tables and some users are there. It also checks that every archive opens.
 
 ### After a worker crash or a restart
@@ -3123,7 +3126,7 @@ Every job is safe to run again, so a job that did not finish is simply run again
 2. It registers the timer of every enabled automation again.
 3. It registers the repeating jobs again: usage sync, credit expiry, approval expiry, clean-up, backup and health check.
 
-A failing job is tried 5 times, with waits of 5 seconds, 30 seconds, 2 minutes and 10 minutes. After the last failure its event is marked "failed" and an alert is raised. A daily clean-up removes finished events older than 30 days, turn timings older than 30 days, and messages older than 365 days. A conversation that has had no message for 365 days, has none left and is not the active one is removed too, except the Automations chat.
+A failing job is tried 5 times, with waits of 5 seconds, 30 seconds, 2 minutes and 10 minutes. After the last failure its event is marked "failed" and an alert is raised. A daily clean-up removes saved events older than 30 days, whatever their state (done, ignored, failed or still waiting), turn timings older than 30 days, and messages older than 365 days. An event's row is what makes a provider's resend of it harmless, and providers resend within hours or a few days, so no duplicate check needs a key older than 30 days. A worker start queues again only events of the last 7 days. A conversation that has had no message for 365 days, has none left and is not the active one is removed too, except the Automations chat.
 
 ### Rate limits on public endpoints
 
@@ -3143,7 +3146,9 @@ Example: a person sends 11 link codes from one unlinked Telegram chat within an 
 ### What can go wrong
 
 - The users' files are not copied off the server. With the default settings their archives go to a separate "volumes" folder, and the upload command is given only the dump folder. The command must name the volumes folder too.
-- Old archives of users' files pile up: step 4 of the backup deletes only the dump folders. So a deleted user's files also stay in the archives made before the deletion, with no end date. Their database rows stay in the dumps for `BACKUP_KEEP_DAYS` days.
+- A deleted user's database rows stay in the dumps for up to `BACKUP_KEEP_DAYS` days. Their files leave the archives at once.
+- `SNAPSHOT_KEEP_DAYS` (vm-manager) and `BACKUP_KEEP_DAYS` (backend) set to different values: the files and the database are kept for different times, and the privacy page (7 days) is wrong for one of them.
+- An off-server copy, once `BACKUP_UPLOAD_CMD` is set, keeps its own copies. Its retention must be 7 days too, and it does not see account deletions, so a deleted user's files stay there up to 7 days.
 - One user's folder cannot be packed: the others still are, and one alert names the users that failed.
 - `ALERT_WEBHOOK_URL` is empty: alerts are only in the logs.
 
@@ -3397,7 +3402,7 @@ These were found by reading the code while this report was written. Each is desc
 - **A turn that breaks after the agent took the message is not run again.** The message is then `processing`. A retried job sees that it is no longer `queued` and stops, and the event is marked `done`. So the user gets no reply, and the message stays `processing`. This is what made the failed refund of 8 October silent (sections 9 and 25).
 - **LiteLLM no longer reports a key's spend per model** (checked on version 1.104.2). So on Pro and Max all Textcrew AI counts as "other models", and credits with the "cheap model only" mark never pay for it, even on the cheap model (sections 23 and 25).
 - **When the server is full, the user is told nothing.** The job tries 5 times over about 13 minutes, then fails with an alert (section 33).
-- **Users' files are not copied off the server by the nightly backup.** The upload command gets only the database dump. Old file archives are also never cleaned up (section 37).
+- **Users' files are not copied off the server by the nightly backup.** The upload command gets only the database dump (section 37).
 - **Coupon credits last 30 days when the admin gives no length,** not 90 (section 29).
 - **An approval's details are compared only if the agent gave details when it asked.** Without them, only the action's name is checked (section 15).
 - **A plan's limits are checked only when something is added.** After a move to a lower plan, extra automations and the user's own MCP servers stay (section 27).
@@ -3407,7 +3412,6 @@ These were found by reading the code while this report was written. Each is desc
 - **Scout's instructions in the agent image are out of date.** They still say the page reader refuses the built-in search's results. On Claude Code it no longer does (section 21).
 - **What a user is told when Textcrew AI credits run out in the middle of a turn is not settled.** The turn may be treated as our fault and given back (section 26).
 - **Disconnect does not try again when Composio cannot remove the account.** The failure is only logged and our row is deleted, so the app's sign-in can stay at Composio with nothing pointing to it. Account deletion does try again (sections 14 and 33).
-- **A deleted account keeps its email and name** in its `users` row, and its data stays in backups for a while: 7 days in the database dumps by default, and with no end in the archives of users' files (sections 33 and 37).
 - **The refusal of reminders covers an automation's run only.** A later turn in the Automations chat (the user's follow-up there, or the agent's turn after an approval a run asked for) still has the run's text in its context and may set a reminder. A crew job, which reads other people's code, may too. The agent's instructions tell it not to act on what it read; the platform does not enforce it there (section 18).
 - **A draft's event name is checked only at Save,** when Composio makes the watch. A wrong name is refused then, with "try again in a moment", which does not say the name is wrong (section 18).
 

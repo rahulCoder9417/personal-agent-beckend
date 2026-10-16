@@ -16,7 +16,7 @@ import {
   proposeDraft,
   toApiDraft,
 } from '../../automations/drafts.ts';
-import { automationRunInProgress } from '../../orchestrator/turn.ts';
+import { turnWithOthersText, type OthersTextTurn } from '../../orchestrator/turn.ts';
 import { defineTool, ToolError } from '../registry.ts';
 import { resolveSession } from './core.ts';
 
@@ -34,19 +34,32 @@ async function create(userId: string, input: Parameters<typeof createAutomation>
   }
 }
 
+/** Why no reminder is set in such a turn, in words for the agent (turnWithOthersText). */
+const NO_REMINDER: Record<OthersTextTurn, string> = {
+  automation_run:
+    "A reminder can't be set while an automation runs: what the run read could have asked for it.",
+  crew_job:
+    "A reminder can't be set during a crew job: the code and pull requests it reads could have asked for it.",
+  automations_chat:
+    "A reminder can't be set in the Automations chat: the runs' results there hold text the user didn't write, which could have asked for it.",
+  approval_answer:
+    "A reminder can't be set while you carry on after an approval: what you read before asking could have asked for it.",
+};
+
 /**
- * During an automation's run (a timer or an app event) the agent read things the user did not
- * write: an email, a page, a pull request. A reminder is saved without the user seeing it first,
- * so none is set then; a draft (propose_automation) still is, because the user sees and saves it.
+ * In some turns the agent has things in mind that the user did not write: an email, a page, a
+ * pull request (an automation's run, a crew job, the Automations chat, the turn after an approval).
+ * A reminder is saved without the user seeing it first, so none is set then; a draft
+ * (propose_automation) still is, because the user sees and saves it. Only the user's own message
+ * in their own chat sets one.
  */
-async function refuseDuringAutomationRun(userId: string): Promise<void> {
-  const during = await automationRunInProgress(userId);
-  if (during === 'unknown')
+async function refuseWithOthersText(userId: string): Promise<void> {
+  const why = await turnWithOthersText(userId);
+  if (why === 'unknown')
     throw new ToolError('Could not check this turn just now. Try again in a moment.');
-  if (during)
+  if (why)
     throw new ToolError(
-      "A reminder can't be set while an automation runs: what the run read could have asked for it. " +
-        'If the user wants one, propose it with propose_automation; they save it themselves.',
+      `${NO_REMINDER[why]} If the user wants one, propose it with propose_automation; they save it themselves.`,
     );
 }
 
@@ -61,7 +74,7 @@ defineTool({
     session_key: z.string().optional(),
   },
   async run({ userId }, args) {
-    await refuseDuringAutomationRun(userId);
+    await refuseWithOthersText(userId);
     return create(userId, {
       userId,
       title: `Reminder: ${args.text.slice(0, 60)}`,

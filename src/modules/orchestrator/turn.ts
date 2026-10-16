@@ -309,6 +309,39 @@ export async function automationRunInProgress(userId: string): Promise<boolean |
 }
 
 /**
+ * Why the user's turn in progress may have text in mind that the user did not write, and so must
+ * not save what the user would not see first (schedule_reminder):
+ * - `automation_run`: an automation's run (a timer or an app event, pull-request review included);
+ * - `crew_job`: a crew job, which reads other people's code and pull requests;
+ * - `automations_chat`: any turn in the Automations chat (the user's follow-up there, an approval's
+ *   answer there): the runs before it are in its context;
+ * - `approval_answer`: the agent carrying on after an approval, in any chat: what it read before
+ *   asking is still in its context.
+ * Null: a message from the user in their own chat, or no turn in progress. `unknown`: the record
+ * could not be read.
+ */
+export type OthersTextTurn = 'automation_run' | 'crew_job' | 'automations_chat' | 'approval_answer';
+
+export async function turnWithOthersText(
+  userId: string,
+): Promise<OthersTextTurn | null | 'unknown'> {
+  try {
+    const raw = await redis().get(turnConversationKey(userId));
+    if (!raw) return null;
+    const record = JSON.parse(raw) as { kind?: unknown; inAutomationsChat?: unknown };
+    const kind = typeof record.kind === 'string' ? record.kind : '';
+    if (AUTOMATION_RUNS.has(kind)) return 'automation_run';
+    if (kind === 'crew_job') return 'crew_job';
+    if (record.inAutomationsChat === true) return 'automations_chat';
+    if (kind === 'approval_answer') return 'approval_answer';
+    return null;
+  } catch (err) {
+    logger().warn({ userId, err: String(err) }, 'kind of the turn not readable');
+    return 'unknown';
+  }
+}
+
+/**
  * The automation whose run is the user's turn in progress, in any chat (a timer, an app event or
  * a test run). Null: no turn in progress, or a turn that is not an automation's run. `unknown`:
  * the record could not be read.

@@ -73,13 +73,13 @@ Each entry has a heading with the date and the name of the feature, then the par
   - row counts that differ stopping the move before the switch;
   - that no password is printed.
 
-  Results: 16 of 16 pass. The full run's lint, type check and test results are given with the commits below. Not run against a real database or on the server.
+  Results: 16 of 16 pass. The full run on the branch, rebased on today's `main`: lint and type check clean, 1,048 of 1,048 tests pass in 91 files. An earlier full run, before the rebase, had 2 to 7 failures that changed from one run to the next. They were in tests this change doesn't touch (automation drafts, crew jobs), and `main` has since fixed that timing race. Not run against a real database or on the server.
 - **Still open:**
   - Your steps in the Neon console (`aws-setup.md`, section 8, "Moving the databases to Neon in Singapore"): the new project in Singapore on Postgres 18, the three databases, and the three direct addresses in `compose.env` as `NEW_*`.
   - Then merge, deploy, the dry run, the move and the checks.
   - After about a week of good replies, delete the three Ohio databases (not the project, which holds the waitlist) and the `OLD_*` lines.
 - **Docs updated:** `aws-setup.md`, sections 6, 8 (the runbook) and 14.
-- **Commits:** backend `c44c500` (the script and its tests), `f338aa2` (the runbook), and this entry.
+- **Commits:** backend `783380e` (the script and its tests), `6617291` (the runbook), `6b755b3` (this entry) and the commit that adds the results to this entry.
 
 ### 16 October 2026: the privacy page's promises made true
 

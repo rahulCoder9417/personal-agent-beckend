@@ -50,7 +50,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 16 October 2026: a blue dot on unread conversations
 
-- **Where it is:** on the branch `feat/unread-dot` in the backend and in the web app, since 16 October. Not on `main` and not on the test server yet.
+- **Where it is:** on `main` (backend, with migration 0025) and live in the web app since 16 October. The backend part is not on the test server yet.
 - **Why:** you asked for the web app's chat list to show which conversations have something new in them: a reply from Tex, or anything else the user hasn't seen yet. Until now only the Automations chat had a mark, and each browser kept it for itself, so the phone and the laptop disagreed.
 - **What the user notices:**
   - **A blue dot** before the name of a conversation with a message from Tex they haven't seen, and the name a little bolder. It shows in the list beside the chat and in the phone's drawer. With the list put away, the button that shows it has a dot too.

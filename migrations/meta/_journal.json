@@ -190,6 +190,13 @@
       "when": 1792131782323,
       "tag": "0026_automation_drafts",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1792145604722,
+      "tag": "0027_cc_approvals",
+      "breakpoints": true
     }
   ]
 }

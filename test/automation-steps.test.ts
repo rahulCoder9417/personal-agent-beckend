@@ -20,6 +20,7 @@ import {
   MAX_CALLS_PER_STEP,
   startRun,
 } from '../src/modules/automations/runs.ts';
+import { decideCondition } from '../src/modules/automations/steps.ts';
 import {
   automationDrafts,
   automationRuns,
@@ -637,6 +638,71 @@ describe("4b: the runner, on Priya's example", () => {
     expect(composioFake.executed.some((e) => e.slug === SEND)).toBe(false);
   });
 
+  // Seen in the 4d run on the test server (16 October): Tex's "not urgent, no urgent emails found"
+  // holds the word "urgent", so step 3 ran on nothing and step 4 failed the run.
+  it('a step that found nothing mentions nothing: a non-urgent email stops before step 3, one line, Tex says nothing more', async () => {
+    const u = await person();
+    composioFake.state.executeData.set(FETCH, {
+      messages: [{ messageId: 'm2', sender: 'boss@acme.com', subject: 'Lunch next week?' }],
+    });
+    const seen: Record<string, McpResult> = {};
+    vmFake.state.agent = async (d, mcp) => {
+      if (d.userId !== u.id || d.kind !== DeliverKind.AUTOMATION) return;
+      seen.fetch = await mcp('run_app_action', { action: FETCH });
+      seen.pick = await mcp('finish_step', {
+        step_id: 'pick',
+        result: 'The one email is a lunch invite, not urgent. No urgent emails found.',
+        found: false,
+      });
+      // As the 4d run's Tex did: an answer of its own after the run ended.
+      seen.extra = await mcp('send_message', {
+        text: 'Test run: nothing urgent, so nothing was sent.',
+        session_key: d.sessionKey,
+      });
+    };
+    const a = await create(u, priya);
+    await fire(a);
+    await waitFor(async () => (await runsOf(u, a.id))[0]?.state === 'stopped', 15_000);
+    const [run] = await runsOf(u, a.id);
+    expect(run!.steps.map((s) => s.state)).toEqual(['done', 'done', 'skipped', 'skipped']);
+    expect(run!.stopReason).toBe(
+      'Nothing to do: step 3 runs only if step 2 mentions "Urgent", and step 2 found nothing.',
+    );
+    expect(json(seen.pick)).toMatchObject({ saved: true, run_state: 'stopped' });
+    expect(String(json(seen.pick).next)).toMatch(/The run ends here/);
+    // The platform's one line is the only message: Tex's own is refused.
+    expect(seen.extra!.isError).toBe(true);
+    expect(seen.extra!.text).toMatch(/Nothing was sent\. The run ends here/);
+    await waitFor(async () => (await chatTexts(u.id)).some((t) => t.includes('Nothing to do')));
+    const texts = await chatTexts(u.id);
+    expect(texts.some((t) => t.includes('nothing urgent, so nothing was sent'))).toBe(false);
+    expect(texts.find((t) => t.includes('Nothing to do'))).toMatch(
+      /Steps: 1 ✓ 2 ✓ 3 skipped 4 skipped/,
+    );
+    expect(composioFake.executed.some((e) => e.slug === SEND)).toBe(false);
+    // A stop is not a failure.
+    const [row] = await db().select().from(automations).where(eq(automations.id, a.id));
+    expect(row!.failCount).toBe(0);
+  });
+
+  it('"mentions" still holds when the step before found something with the word', () => {
+    const urgent = { kind: 'mentions' as const, words: ['urgent'] };
+    const step = (result: string, found?: boolean) => ({
+      stepId: 'pick',
+      state: 'done' as const,
+      result,
+      reason: null,
+      tries: 0,
+      calls: 0,
+      approvalId: null,
+      ...(found === undefined ? {} : { found }),
+    });
+    expect(decideCondition(urgent, step('One is URGENT: the deck', true))).toBe(true);
+    expect(decideCondition(urgent, step('One is urgent: the deck'))).toBe(true);
+    expect(decideCondition(urgent, step('No urgent emails found.', false))).toBe(false);
+    expect(decideCondition(urgent, step('A lunch invite', true))).toBe(false);
+  });
+
   it('a new run while one waits for a yes: the older is superseded, its question replaced', async () => {
     const u = await person();
     composioFake.state.executeData.set(FETCH, URGENT_FETCH);
@@ -674,6 +740,12 @@ describe("4b: the runner, on Priya's example", () => {
     await waitFor(async () => (await runsOf(u, a.id))[0]?.state === 'failed', 15_000);
     const [run] = await runsOf(u, a.id);
     expect(run!.stopReason).toBe('Stopped at step 2: Tex ended before finishing it.');
+    // The user is told why, above the trail (Tex's own "Done." says nothing of it).
+    await waitFor(async () =>
+      (await chatTexts(u.id)).includes(
+        'Stopped at step 2: Tex ended before finishing it.\nSteps: 1 ✓ 2 ✗ failed 3 skipped 4 skipped',
+      ),
+    );
     await waitFor(
       async () =>
         (await db().select().from(automations).where(eq(automations.id, a.id)))[0]!.failCount === 1,

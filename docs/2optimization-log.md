@@ -48,6 +48,29 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 16 October 2026: automations with steps, the real run on the test server (4d) and its fixes
+
+- **Where it is:** the real run was done on the test server on 16 October, on your current account, on Claude Code. The fixes are on the branch `fix/steps-4d` in the backend, not merged and not on the server yet.
+- **Why:** step 4d of phase 4: Priya's example ("Urgent mail from my boss, in steps") run for real, with Gmail and Tex, to see what the tests with stand-ins could not.
+- **What was run:** the automation was made paused on your account, with its search fixed to emails from your own Gmail to itself with "textcrew-4d" in the subject, and the send's recipient fixed to your own address, so nothing could reach anyone else. Then:
+  - No email yet, Run once now: stopped after step 1 ("Nothing to do: step 2 runs only if step 1 found something"), nothing charged. As designed.
+  - A non-urgent email ("Lunch next week"), Run once now: Tex said in step 2 that it was not urgent and that it found nothing. But step 3 ran anyway, step 4 had nothing to send, Tex ended, and the run was marked failed ("Stopped at step 4: Tex ended before finishing it."). **This was the bug.**
+  - An urgent email, Run once now: steps 1 to 3, a good two-line draft, then the question in the web app, with no copy to Telegram. As designed. Approved: the email was sent once to your own address and 1 credit was charged.
+  - Run once now again, then Deny: "You said no to step 4, so it did not run.", nothing sent, nothing charged. As designed.
+  - A real timer run (the schedule set a few minutes ahead, then switched off again): steps 1 to 3, and the question also went to your Telegram with "Asked by one of your automations". Denied. As designed.
+  - Hermes could not be tried: the server offers no Textcrew AI and the account has no key of its own, so even with Hermes chosen, Claude Code runs. The choice was put back to Claude Code.
+- **What was wrong, and the fixes:**
+  - **"Mentions" matched a "no".** Step 3 runs "only if step 2 mentions urgent". Tex's "not urgent … no urgent emails found" holds the word, so step 3 ran on nothing. Now "mentions" is false when the step before found nothing (Tex says so in `finish_step`, or the app's answer was empty). The stop line says "… mentions "urgent", and step 2 found nothing."
+  - **The user was told twice.** After a stop, the platform posts its one line, and Tex (told "write nothing more") still wrote its own answer, because a test run asks it to start with "Test run:". Now a `send_message` from Tex in a run that has stopped is refused, and the platform's line is the only message.
+  - **A failed run did not say why.** Only "Steps: 1 ✓ 2 ✓ 3 ✓ 4 ✗ failed" was shown. Now the reason comes above the trail ("Stopped at step 4: Tex ended before finishing it."), in the Automations chat and in a Telegram copy.
+- **What the user notices:** a non-urgent email ends the run quietly with one line. A failed run says why.
+- **Cost and speed:** nothing new. The run itself: 1 credit for the one approved send, and 1 credit of awake time (most of it from before the test). A run is about 20 to 30 seconds; the turn after a yes is about 19 seconds.
+- **Contracts:** none changed.
+- **Database:** none.
+- **How it was checked:** new tests: a non-urgent email stops before step 3 with one line, Tex's own message refused, no failure counted; "mentions" still holds when something was found; a failed run's line says why. All three fail on the old code. Backend lint and type-check clean, the full suite 1189 tests in 102 files passed.
+- **Still open:** an app step with no "only if" after a step that found nothing (here step 4) still fails the run when Tex has nothing to give it. Priya's example no longer gets there. A template's send step could run "only if the step before found something"; that is for you to decide. Hermes is not tried on steps yet.
+- **Docs updated:** `backend-report.md` section 18, "Automations with steps" (the "only if" check and the table of what goes wrong).
+
 ### 16 October 2026: launch prices (Pro $19, Max $30) and Polar's real account set up
 
 - **Where it is:** on the branch `feat/launch-prices` in the backend, the web app and the landing page, pushed, not on `main` and not on the server. Polar's real account was changed the same day (below).

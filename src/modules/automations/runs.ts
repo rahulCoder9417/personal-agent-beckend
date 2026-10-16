@@ -565,12 +565,18 @@ function advance(r: Run, fromIndex: number): void {
   }
   r.currentStepId = next.id;
   const rec = r.steps[fromIndex + 1]!;
-  const held = decideCondition(next.onlyIf, r.steps[fromIndex]);
+  const prev = r.steps[fromIndex];
+  const held = decideCondition(next.onlyIf, prev);
   if (held === false) {
+    // "mentions" after a step that found nothing: say so, since its words may hold the word.
+    const why =
+      next.onlyIf.kind === 'mentions' && prev?.found === false
+        ? `step ${fromIndex + 1} found nothing`
+        : "it didn't";
     end(
       r,
       'stopped',
-      `Nothing to do: step ${fromIndex + 2} runs ${conditionWords(next.onlyIf, fromIndex + 2)}, and it didn't.`,
+      `Nothing to do: step ${fromIndex + 2} runs ${conditionWords(next.onlyIf, fromIndex + 2)}, and ${why}.`,
       { state: 'skipped', reason: 'Its "only if" was false.' },
     );
     return;

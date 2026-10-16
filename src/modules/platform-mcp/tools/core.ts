@@ -1,14 +1,29 @@
 import { z } from 'zod';
 import { isChannelEnabled } from '../../../shared/config.ts';
 import { recordCrewJobReport } from '../../automations/crew-jobs.ts';
+import { getRun, nowText } from '../../automations/runs.ts';
 import { getActiveUserCached } from '../../auth/users.ts';
 import { ownsChat } from '../../auth/links.ts';
 import { getConversation } from '../../channels/conversations.ts';
 import { lastInboundSession } from '../../channels/messages.ts';
 import { queueOutbound } from '../../channels/outbound.ts';
 import { parseSessionKey } from '../../channels/types.ts';
-import { turnMessageFields } from '../../orchestrator/turn.ts';
+import { turnAutomationRun, turnMessageFields } from '../../orchestrator/turn.ts';
 import { defineTool, ToolError } from '../registry.ts';
+
+/**
+ * During the turn of a run with steps that has stopped (a false "only if", Tex deciding no) or was
+ * superseded: the platform tells the user in one line, so a message from Tex would say it twice.
+ * The refusal for the agent, or null. A note that can't be read lets the message through: a
+ * message must never be lost for want of this check.
+ */
+async function endedRunRefusal(userId: string): Promise<string | null> {
+  const turn = await turnAutomationRun(userId);
+  if (!turn || turn === 'unknown' || !turn.runId) return null;
+  const run = await getRun(userId, turn.runId).catch(() => undefined);
+  if (!run || (run.state !== 'stopped' && run.state !== 'superseded')) return null;
+  return `Nothing was sent. ${nowText(run)}`;
+}
 
 /** Where the agent's messages may go: only this user's own sessions. */
 export async function resolveSession(userId: string, sessionKey?: string): Promise<string> {
@@ -59,10 +74,12 @@ defineTool({
     // the agent write to this chat, and the conversation of the turn in progress there. Both only
     // read: nothing is saved before the chat is known to be the user's own.
     const asked = args.session_key || undefined;
-    const [sessionKey, early] = await Promise.all([
+    const [sessionKey, early, ended] = await Promise.all([
       resolveSession(userId, asked),
       asked ? turnFields(userId, asked) : undefined,
+      endedRunRefusal(userId),
     ]);
+    if (ended) throw new ToolError(ended, { reason: 'the run has ended' });
     // Sent during a turn in this chat: it belongs to the turn's conversation, with the turn's id.
     const turn =
       early && sessionKey === asked ? early : await turnFields(userId, sessionKey, false);

@@ -1,6 +1,7 @@
 import { cleanupLinkCodes } from '../modules/auth/links.ts';
 import { cleanupWaitlistAttempts } from '../modules/auth/waitlist.ts';
 import { cleanupDrafts } from '../modules/automations/drafts.ts';
+import { cleanupRuns } from '../modules/automations/runs.ts';
 import { cleanupMessages } from '../modules/channels/messages.ts';
 import { cleanupEvents } from '../modules/events/cleanup.ts';
 import { queue } from '../modules/events/queues.ts';
@@ -21,6 +22,11 @@ export async function registerSystemSchedules(): Promise<void> {
     { name: 'expire-automation-drafts', data: {} },
   );
   await system.upsertJobScheduler(
+    'expire-automation-runs',
+    { pattern: '20 * * * *' },
+    { name: 'expire-automation-runs', data: {} },
+  );
+  await system.upsertJobScheduler(
     'cleanup',
     { pattern: '30 3 * * *' },
     { name: 'cleanup', data: {} },
@@ -35,7 +41,8 @@ export async function registerSystemSchedules(): Promise<void> {
 
 /**
  * system/cleanup (daily): old events and messages, used link codes, turn timings past 30 days,
- * automation drafts made more than 30 days ago.
+ * automation drafts made more than 30 days ago, the step results of automation runs 2 days after
+ * they ended and the runs themselves after 30 days.
  */
 export async function handleCleanup(): Promise<unknown> {
   const result = {
@@ -45,6 +52,7 @@ export async function handleCleanup(): Promise<unknown> {
     waitlistAttempts: await cleanupWaitlistAttempts(),
     turnTimings: await cleanupTurnTimings(),
     automationDrafts: await cleanupDrafts(),
+    automationRuns: await cleanupRuns(),
   };
   logger().info(result, 'cleanup done');
   return result;

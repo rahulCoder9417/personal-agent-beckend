@@ -32,6 +32,7 @@ import {
   TEST_RUNS_PER_HOUR,
   type Parts,
 } from '../../modules/automations/manual.ts';
+import { listRuns, toApiRun } from '../../modules/automations/runs.ts';
 import { userHasCredits } from '../../modules/orchestrator/turn.ts';
 import {
   AppError,
@@ -141,6 +142,15 @@ export const automationRoutes = [
     const row = await getAutomation(c.get('user').id, params.automationId);
     if (!row) throw notFound('Automation not found');
     return c.json(await withCopyTo(row), 200);
+  }),
+
+  // The last runs of an automation with steps, each with its trail (the canvas after a run).
+  route('listAutomationRuns', async (c, { params }) => {
+    const userId = c.get('user').id;
+    const row = await getAutomation(userId, params.automationId);
+    if (!row) throw notFound('Automation not found');
+    const runs = await listRuns(userId, row.id);
+    return c.json({ items: runs.map(toApiRun) }, 200);
   }),
 
   // Building and changing by hand (manual.ts). The checks while typing save nothing.

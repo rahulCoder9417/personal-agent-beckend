@@ -66,6 +66,12 @@ export interface TurnInput {
    * (approvals.ts). Left out: the user's own work.
    */
   forAutomation?: string;
+  /**
+   * The run of an automation with steps (its first turn, or the one after the user's yes): noted
+   * beside the turn too, so the tools follow its step pointer. An approval answer that carries it
+   * is an automation's run as well.
+   */
+  automationRunId?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -226,6 +232,8 @@ export interface CurrentTurn {
   automationId?: string;
   /** The automation whose work the turn is (TurnInput.forAutomation). */
   forAutomation?: string;
+  /** A run of an automation with steps: the run. */
+  automationRunId?: string;
 }
 
 /** Never fails the turn: without the record a reply goes to the chat's active conversation. */
@@ -301,6 +309,20 @@ export async function turnInProgress(
 const AUTOMATION_RUNS: ReadonlySet<string> = new Set<TurnKind>(['automation', 'app_event']);
 
 /**
+ * Whether a turn's record is an automation's run: a timer's or an app event's, or the turn after
+ * the user's yes to a step of a run with steps (an approval answer that names the run).
+ */
+function isRunRecord(record: { kind?: unknown; automationRunId?: unknown }): boolean {
+  if (typeof record.kind !== 'string') return false;
+  if (AUTOMATION_RUNS.has(record.kind)) return true;
+  return (
+    record.kind === 'approval_answer' &&
+    typeof record.automationRunId === 'string' &&
+    record.automationRunId !== ''
+  );
+}
+
+/**
  * Whether the user's turn in progress, in any chat, is an automation's run (a timer or an app
  * event, pull-request review included). What the agent read during such a run was not written by
  * the user, so some tools refuse then (schedule_reminder). `unknown`: the record could not be read.
@@ -309,8 +331,7 @@ export async function automationRunInProgress(userId: string): Promise<boolean |
   try {
     const raw = await redis().get(turnConversationKey(userId));
     if (!raw) return false;
-    const kind = (JSON.parse(raw) as { kind?: unknown }).kind;
-    return typeof kind === 'string' && AUTOMATION_RUNS.has(kind);
+    return isRunRecord(JSON.parse(raw) as { kind?: unknown });
   } catch (err) {
     logger().warn({ userId, err: String(err) }, 'kind of the turn not readable');
     return 'unknown';
@@ -319,22 +340,40 @@ export async function automationRunInProgress(userId: string): Promise<boolean |
 
 /**
  * The automation whose run is the user's turn in progress, in any chat (a timer, an app event or
- * a test run). Null: no turn in progress, or a turn that is not an automation's run. `unknown`:
- * the record could not be read.
+ * a test run, or the turn after a yes in a run with steps), and the run of one with steps. Null:
+ * no turn in progress, or a turn that is not an automation's run. `unknown`: the record could not
+ * be read.
  */
-export async function turnAutomation(userId: string): Promise<string | null | 'unknown'> {
+export async function turnAutomationRun(
+  userId: string,
+): Promise<{ automationId: string; runId: string | null } | null | 'unknown'> {
   try {
     const raw = await redis().get(turnConversationKey(userId));
     if (!raw) return null;
-    const record = JSON.parse(raw) as { kind?: unknown; automationId?: unknown };
-    if (typeof record.kind !== 'string' || !AUTOMATION_RUNS.has(record.kind)) return null;
-    return typeof record.automationId === 'string' && record.automationId
-      ? record.automationId
-      : null;
+    const record = JSON.parse(raw) as {
+      kind?: unknown;
+      automationId?: unknown;
+      automationRunId?: unknown;
+    };
+    if (!isRunRecord(record)) return null;
+    if (typeof record.automationId !== 'string' || !record.automationId) return null;
+    return {
+      automationId: record.automationId,
+      runId:
+        typeof record.automationRunId === 'string' && record.automationRunId
+          ? record.automationRunId
+          : null,
+    };
   } catch (err) {
     logger().warn({ userId, err: String(err) }, 'automation of the turn not readable');
     return 'unknown';
   }
+}
+
+/** The automation whose run is the user's turn in progress (turnAutomationRun's automation). */
+export async function turnAutomation(userId: string): Promise<string | null | 'unknown'> {
+  const run = await turnAutomationRun(userId);
+  return run === 'unknown' || run === null ? run : run.automationId;
 }
 
 /**
@@ -645,6 +684,7 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
     kind: input.kind,
     ...(input.automationId ? { automationId: input.automationId } : {}),
     ...(input.forAutomation ? { forAutomation: input.forAutomation } : {}),
+    ...(input.automationRunId ? { automationRunId: input.automationRunId } : {}),
   });
   const outcome = await deliverTurn(
     input,

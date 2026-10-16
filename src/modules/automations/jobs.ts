@@ -20,7 +20,21 @@ import {
   type Automation,
 } from './automations.ts';
 import { finishPrReview, preparePrReview } from './pr-review.ts';
+import {
+  closeTurn,
+  currentStep,
+  expireWaitingRuns,
+  getRun,
+  resumeAfterYes,
+  runTurnText,
+  startRun,
+  stopAfterNo,
+  trailLine,
+  type Run,
+} from './runs.ts';
 import { automations } from './schema.ts';
+import { conversationOfApproval } from '../channels/messages.ts';
+import { getApproval } from '../orchestrator/approvals.ts';
 
 export const MAX_FAILURES = 3;
 
@@ -144,17 +158,40 @@ export function copyText(
 async function copyToChat(
   a: Automation,
   message: MessageRow | undefined,
-  opts: { test?: boolean } = {},
+  opts: { test?: boolean; suffix?: string } = {},
 ): Promise<void> {
   if (!message) return;
   const target = (await copyRules(a.userId))(a);
   if (!target) return;
+  const text = opts.suffix ? `${message.text.trim()}\n\n${opts.suffix}` : message.text;
   await queueOutbound({
     userId: a.userId,
     sessionKey: target,
-    text: copyText(a, message.text, opts),
+    text: copyText(a, text, opts),
     copyOf: message.id,
   });
+}
+
+/**
+ * A run's outcome counts toward "paused after 3 failures in a row" (a success starts again from
+ * zero), with the notice in the Automations chat and its copy when it pauses.
+ */
+async function countRun(
+  a: Automation,
+  ok: boolean,
+  chat: { sessionKey: string; id: string },
+): Promise<void> {
+  const updated = await recordRun(a, ok);
+  if (ok || updated.failCount < MAX_FAILURES || !updated.enabled) return;
+  await setEnabled(a.userId, a.id, false, 'failures');
+  const notice = await queueOutbound({
+    userId: a.userId,
+    sessionKey: chat.sessionKey,
+    conversationId: chat.id,
+    inAutomationsChat: true,
+    text: `I paused the automation "${a.title}" because it failed ${MAX_FAILURES} times in a row. You can resume it in the web app.`,
+  });
+  await copyToChat(a, notice);
 }
 
 /**
@@ -195,19 +232,222 @@ async function runAutomationTurn(
     await setEnabled(a.userId, a.id, false, 'out_of_credits');
     return outcome;
   }
-  const updated = await recordRun(a, outcome !== 'error');
-  if (outcome === 'error' && updated.failCount >= MAX_FAILURES && updated.enabled) {
-    await setEnabled(a.userId, a.id, false, 'failures');
-    const notice = await queueOutbound({
+  await countRun(a, outcome !== 'error', chat);
+  return outcome;
+}
+
+// ---------------------------------------------------------------- automations with steps
+
+/** The line a run says when steps are switched off on this server (AUTOMATION_STEPS=false). */
+export const STEPS_OFF_TEXT = (a: Pick<Automation, 'title'>) =>
+  `"${a.title}" has steps, and automations with steps are switched off on this server for now, so nothing ran.`;
+
+/** Once per key (a job that runs again says nothing twice). A Redis that can't be asked: say it. */
+async function once(key: string): Promise<boolean> {
+  const first = await redis()
+    .set(key, '1', 'EX', 7 * 24 * 3600, 'NX')
+    .catch(() => 'OK');
+  return first === 'OK';
+}
+
+/**
+ * After a turn of a run with steps (its first, or the one after a yes): what the user is told, and
+ * what it counts. Once per turn, so a job that runs again tells nothing twice.
+ * - A run that stopped (a false "only if", a no, no answer): one line in the Automations chat with
+ *   the trail, and no copy to Telegram (decision 2). Not a failure.
+ * - Otherwise the trail line ("Steps: 1 ✓ 2 ✓ 3 ✓ 4 waiting for your OK") after Tex's answer; the
+ *   turn's answer is copied to the chat app with the trail, as a run's answer is.
+ * - A failed run counts toward "paused after 3 failures in a row"; a test run counts nothing.
+ */
+async function reportRun(
+  a: Automation,
+  run: Run,
+  turnId: string,
+  opts: { first: boolean; outcome?: TurnOutcome },
+): Promise<void> {
+  if (!(await once(`auto-run-report:${run.id}:${turnId}`))) return;
+  const chat = await automationsChat(a.userId);
+  const say = (text: string) =>
+    queueOutbound({
       userId: a.userId,
       sessionKey: chat.sessionKey,
       conversationId: chat.id,
       inAutomationsChat: true,
-      text: `I paused the automation "${a.title}" because it failed ${MAX_FAILURES} times in a row. You can resume it in the web app.`,
+      text,
     });
-    await copyToChat(a, notice);
+  if (opts.outcome === 'out_of_credits') {
+    // The turn said so itself; as a run without steps, its answer is copied and it pauses.
+    if (opts.first) await copyToChat(a, await turnReply(a.userId, turnId), { test: run.test });
+    if (!run.test) await setEnabled(a.userId, a.id, false, 'out_of_credits');
+    return;
   }
-  return outcome;
+  const trail = trailLine(run);
+  if (run.state === 'stopped' || run.state === 'superseded') {
+    await say(`${run.test ? '🧪 ' : ''}${a.title}: ${run.stopReason ?? 'stopped'}\n${trail}`);
+    if (!run.test && opts.first) await countRun(a, true, chat);
+    return;
+  }
+  await say(trail);
+  // Tex's answer of this turn (the first, or the one after a yes) is copied, as a run's answer is.
+  if (opts.first || opts.outcome)
+    await copyToChat(a, await turnReply(a.userId, turnId), { test: run.test, suffix: trail });
+  if (run.test) return;
+  if (run.state === 'failed') await countRun(a, false, chat);
+  else if (opts.first) await countRun(a, true, chat);
+}
+
+const closeOutcome = (o: TurnOutcome) =>
+  o === 'done'
+    ? 'done'
+    : o === 'error'
+      ? 'error'
+      : o === 'out_of_credits'
+        ? 'out_of_credits'
+        : 'other';
+
+/**
+ * One run of an automation with steps (docs/backend-report.md, "Automations with steps"): its run
+ * record (one per event), then one turn of Tex that follows the steps, with the run noted beside
+ * the turn so the tools hold every call to the current step. A job that runs again finds the run:
+ * a run still at a step carries on from the first step not done; one that ended, or waits for a
+ * yes, only finishes what it tells the user.
+ */
+async function runStepped(
+  a: Automation,
+  eventId: string,
+  kind: TurnKind,
+  opts: { head: string; tail?: string; test?: boolean; metadata?: Record<string, unknown> },
+): Promise<void> {
+  const chat = await automationsChat(a.userId);
+  if (!config().AUTOMATION_STEPS) {
+    if (await once(`auto-steps-off:${eventId}`))
+      await queueOutbound({
+        userId: a.userId,
+        sessionKey: chat.sessionKey,
+        conversationId: chat.id,
+        inAutomationsChat: true,
+        text: STEPS_OFF_TEXT(a),
+      });
+    return;
+  }
+  const { run, created } = await startRun(a, eventId, { test: opts.test === true });
+  if (!created && run.state !== 'running') {
+    await reportRun(a, run, eventId, { first: true });
+    return;
+  }
+  if (!created && run.turnId !== eventId) return;
+  if (opts.test && (await once(`test-run-notice:${eventId}`)))
+    await queueOutbound({
+      userId: a.userId,
+      sessionKey: chat.sessionKey,
+      conversationId: chat.id,
+      inAutomationsChat: true,
+      text: testRunNotice(a),
+    });
+  const outcome = await runTurn({
+    automationId: a.id,
+    automationRunId: run.id,
+    // An approval its run asks may go to Telegram too. Not for a test run: that is the user's own.
+    ...(opts.test ? {} : { forAutomation: a.id }),
+    userId: a.userId,
+    deliveryId: eventId,
+    kind,
+    sessionKey: chat.sessionKey,
+    channel: chat.channel,
+    text: runTurnText(a, run, { head: opts.head, ...(opts.tail ? { tail: opts.tail } : {}) }),
+    conversationId: chat.id,
+    inAutomationsChat: true,
+    metadata: {
+      automationId: a.id,
+      title: a.title,
+      automation_run: run.id,
+      ...(opts.test ? { test_run: true } : {}),
+      ...opts.metadata,
+    },
+  });
+  if (outcome === 'suspended') {
+    if (!opts.test) await setEnabled(a.userId, a.id, false, 'suspended');
+    return;
+  }
+  const after = (await closeTurn(a.userId, run.id, closeOutcome(outcome))) ?? run;
+  await reportRun(a, after, eventId, { first: true, outcome });
+}
+
+/**
+ * inbound/process-approval, for an approval asked for a step of a run with steps. Undefined: not
+ * one, so the usual answer path takes it. A no stops the run there, with one line and no turn. A
+ * yes wakes Tex in the Automations chat with the run noted beside that turn too: Tex runs the
+ * approved action and goes on with the steps after it. An older run superseded meanwhile, or a
+ * paused automation, runs nothing.
+ */
+export async function handleRunApprovalAnswer(job: Job): Promise<unknown> {
+  const { approvalId, userId, eventId } = job.data as {
+    approvalId?: string;
+    userId?: string;
+    eventId: string;
+  };
+  if (!approvalId || !userId) return undefined;
+  const ap = await getApproval(userId, approvalId);
+  if (!ap?.automationRunId) return undefined;
+  if (ap.status !== 'approved' && ap.status !== 'rejected') return IGNORED;
+  const run = await getRun(userId, ap.automationRunId);
+  const a = run ? await load(run.automationId) : undefined;
+  if (!run || !a || a.userId !== userId) return IGNORED;
+  if (ap.status === 'rejected') {
+    const stopped = await stopAfterNo(userId, run.id, ap.id);
+    if (stopped) await reportRun(a, stopped, eventId, { first: false });
+    return null;
+  }
+  if ((!run.test && !a.enabled) || !config().AUTOMATION_STEPS) {
+    const stopped = await stopAfterNo(userId, run.id, ap.id, {
+      why: (n) =>
+        a.enabled
+          ? `Automations with steps are switched off on this server, so step ${n} did not run.`
+          : `The automation is paused, so step ${n} did not run.`,
+      reason: a.enabled ? 'Steps are switched off.' : 'The automation was paused.',
+    });
+    if (stopped) await reportRun(a, stopped, eventId, { first: false });
+    return null;
+  }
+  const resumed = await resumeAfterYes(userId, run.id, ap.id, eventId);
+  if (!resumed) return IGNORED;
+  const chat = await automationsChat(userId);
+  const conversationId = await conversationOfApproval(userId, ap.id);
+  const n = (currentStep(resumed)?.index ?? 0) + 1;
+  const head =
+    `[Automation "${a.title}": the user APPROVED step ${n}: ${ap.summary}.] Go ahead: call run_app_action with ` +
+    `action "${ap.action}" and approval_id "${ap.id}" (leave arguments out: the approved ones run). Then go on ` +
+    'with the steps after it, one at a time.';
+  const outcome = await runTurn({
+    automationId: a.id,
+    automationRunId: run.id,
+    // The yes to an automation's question: what its run asks next may go to Telegram too.
+    ...(ap.automationId ? { forAutomation: ap.automationId } : {}),
+    userId,
+    deliveryId: eventId,
+    kind: 'approval_answer',
+    sessionKey: ap.sessionKey,
+    channel: chat.channel,
+    conversationId: conversationId ?? chat.id,
+    inAutomationsChat: true,
+    approval: { id: ap.id, approved: true },
+    text: runTurnText(a, resumed, { head }),
+    metadata: { automationId: a.id, title: a.title, automation_run: run.id },
+  });
+  if (outcome === 'suspended') return null;
+  const after = (await closeTurn(userId, run.id, closeOutcome(outcome))) ?? resumed;
+  await reportRun(a, after, eventId, { first: false, outcome });
+  return null;
+}
+
+/** system/expire-automation-runs (hourly): runs that waited 24 hours stop, with their line. */
+export async function handleExpireRuns(): Promise<number> {
+  const stopped = await expireWaitingRuns();
+  for (const r of stopped) {
+    const a = await load(r.automationId);
+    if (a) await reportRun(a, r, 'expired', { first: false });
+  }
+  return stopped.length;
 }
 
 /**
@@ -239,11 +479,16 @@ export function testRunNotice(a: Pick<Automation, 'title'>): string {
  * and for an app event that no event happened.
  */
 export function testRunText(a: Pick<Automation, 'kind' | 'title' | 'instruction'>): string {
+  return `${testRunHead(a)} ${a.instruction}`;
+}
+
+/** The note a test run starts with: a test the user started, and for an app event, no event. */
+export function testRunHead(a: Pick<Automation, 'kind' | 'title'>): string {
   const event =
     a.kind === 'event'
       ? ' No app event happened, so there is no event data: follow the instruction as well as you can without it, for example with the latest matching item, and say what you used.'
       : '';
-  return `[Test run of automation "${a.title}", started by the user from the web app.${event} Start your answer with "Test run:".] ${a.instruction}`;
+  return `[Test run of automation "${a.title}", started by the user from the web app.${event} Start your answer with "Test run:".]`;
 }
 
 /**
@@ -290,11 +535,24 @@ export async function handleAutomationTurn(job: Job): Promise<unknown> {
   // A test run is the user's own "Run once now": on or paused, but not a finished reminder.
   if (test) {
     if (!a || a.completedAt) return IGNORED;
+    if (a.steps?.length) {
+      await runStepped(a, eventId, 'automation', {
+        head: testRunHead(a),
+        test: true,
+      });
+      return null;
+    }
     await runTestTurn(a, eventId);
     return null;
   }
   if (!a || !a.enabled) return IGNORED;
   const note = dueAt ? lateNote(new Date(dueAt), new Date(), a.timezone ?? 'UTC') : null;
+  if (a.steps?.length) {
+    await runStepped(a, eventId, 'automation', {
+      head: `[Automation "${a.title}"]${note ? ` ${note}` : ''}`,
+    });
+    return null;
+  }
   await runAutomationTurn(
     a,
     eventId,
@@ -323,6 +581,13 @@ export async function handleComposioTrigger(job: Job): Promise<unknown> {
     return null;
   }
   const summary = JSON.stringify(t.payload).slice(0, 4000);
+  if (a.steps?.length) {
+    await runStepped(a, eventId, 'app_event', {
+      head: `[Automation "${a.title}"]`,
+      tail: `Event ${t.triggerSlug}: ${summary}`,
+    });
+    return null;
+  }
   await runAutomationTurn(
     a,
     eventId,

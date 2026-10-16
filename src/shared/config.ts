@@ -265,6 +265,15 @@ export const configSchema = z.object({
     .enum(['true', 'false', '1', '0'])
     .optional()
     .transform((v) => v !== 'false' && v !== '0'),
+  /**
+   * Whether automations with steps run (docs/backend-report.md, "Automations with steps"). Off:
+   * they can still be proposed, made and changed, but a run does nothing and one line in the
+   * Automations chat says steps are switched off. Default on; `false` switches them off.
+   */
+  AUTOMATION_STEPS: z
+    .enum(['true', 'false', '1', '0'])
+    .optional()
+    .transform((v) => v !== 'false' && v !== '0'),
   /** Speech-to-text (OpenAI-compatible /audio/transcriptions), via LiteLLM by default. */
   STT_MODEL: z.string().default('whisper'),
 

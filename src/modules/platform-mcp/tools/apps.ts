@@ -28,6 +28,16 @@ import {
   type RunLimits,
 } from '../../automations/run-limits.ts';
 import { prCommentAllowed } from '../../automations/pr-review.ts';
+import {
+  failStep,
+  gateAppAction,
+  gateApprovalRequest,
+  markWaiting,
+  nowText,
+  stepActionDone,
+  stepActionFailed,
+  type StepGate,
+} from '../../automations/runs.ts';
 import { appOfAction, checkActionInputs } from '../../integrations/action-inputs.ts';
 import {
   actionNeedsApproval,
@@ -199,22 +209,39 @@ defineTool({
     const action = args.action ?? null;
     let app: string | null = null;
     let approved = args.arguments ?? null;
+    // During an automation's run, its limits. A run with steps: only the current step's action can
+    // be asked for (no plain question, no crew job), its fixed inputs put in, and the approval is
+    // bound to that step of that run.
+    const limits = await runLimits(userId);
+    let step: { runId: string; stepId: string } | null = null;
+    if (limits?.runId) {
+      const gate = await gateApprovalRequest(userId, limits.runId, {
+        action,
+        args: args.arguments ?? {},
+      });
+      if (!gate.ok)
+        throw new ToolError(gate.refusal, {
+          reason: "it didn't fit the automation's current step, so you weren't asked",
+        });
+      step = { runId: limits.runId, stepId: gate.step.id };
+      approved = gate.args;
+    }
     // An app action: its arguments must fit the action, so the user approves something that can
     // run exactly as shown. Its approval always holds what will run (no arguments means none).
     if (action && action !== START_CREW_JOB_ACTION) {
-      const check = await checkActionInputs(action, args.arguments ?? {});
+      const check = await checkActionInputs(action, approved ?? {});
       if (check && !check.ok)
         throw new ToolError(check.problem, {
           reason: "its details didn't fit the action, so you weren't asked",
         });
       if (check) {
         // During an automation's run, only its own apps: no approval for another one either.
-        const limits = await runLimits(userId);
         const refusal = limits && appRefusal(limits, check.app.toolkit, check.app.name);
         if (refusal) throw new ToolError(refusal);
         app = check.app.slug;
-        approved = args.arguments ?? {};
-      }
+        approved = approved ?? {};
+      } else if (step)
+        throw new ToolError("During a run with steps, ask only for the current step's action.");
     }
     const earlier = args.replaces_approval_id
       ? await getApproval(userId, args.replaces_approval_id)
@@ -231,13 +258,17 @@ defineTool({
       app,
       action,
       arguments: approved,
+      run: step,
     });
     const replaced = earlier ? await replaceApproval(userId, earlier.id, a) : null;
+    // The run waits for the yes on its step, holding no container.
+    if (step) await markWaiting(userId, step.runId, a.id);
     return {
       approval_id: a.id,
       status: 'pending',
       expires_at: a.expiresAt.toISOString(),
       shown_to_user: approvalAskText(a.summary, channelOfSession(sessionKey)),
+      ...(step ? { step_id: step.stepId } : {}),
       ...(replaced
         ? {
             replaced_approval_id: replaced.id,
@@ -332,14 +363,35 @@ defineTool({
     if (refusal)
       throw new ToolError(refusal, { reason: "the automation isn't set to use this app" });
 
-    // HLD 7.5: at zero credits an action that changes something doesn't run (reading still does).
     const changes = await appActionChangesSomething(args.action);
-    if (changes && !(await userHasCredits(userId)))
+    // A run of an automation with steps: the call must fit the current step (its own action, with
+    // its fixed inputs put in, or a read to look something up first); it is counted.
+    let gate: Extract<StepGate, { ok: true }> | null = null;
+    if (limits?.runId) {
+      const g = await gateAppAction(userId, limits.runId, {
+        action: args.action,
+        args: runArgs,
+        changes,
+      });
+      if (!g.ok)
+        throw new ToolError(g.refusal, { reason: "it didn't fit the automation's current step" });
+      gate = g;
+      runArgs = g.args;
+    }
+    const stepAction = gate?.kind === 'step' ? gate : null;
+
+    // HLD 7.5: at zero credits an action that changes something doesn't run (reading still does).
+    if (changes && !(await userHasCredits(userId))) {
+      // A step's action that can't run fails its step, and the run stops.
+      const next = stepAction
+        ? await failStep(userId, stepAction.run.id, stepAction.step.id, 'out of credits')
+        : '';
       throw new ToolError(
         "Your user is out of credits, so actions that change something can't run (reading still works). " +
-          'Tell them to open the Textcrew web app to top up or upgrade. Do not send a link.',
+          `Tell them to open the Textcrew web app to top up or upgrade. Do not send a link.${next ? ` ${next}` : ''}`,
         { reason: 'you were out of credits' },
       );
+    }
 
     let consumedId: string | null = null;
     // Pull-request review is on for this repo: the user's standing approval covers a new review
@@ -350,9 +402,12 @@ defineTool({
     let crewJobId: string | null = null;
     const risky = actionNeedsApproval(args.action);
     // The automation's "ask me first" set to every change: an action that changes something
-    // waits for the user's yes too, not only a risky one.
-    const askedFirst = !risky && changes && limits?.askFirst === 'changes';
-    if (risky && !args.approval_id) {
+    // waits for the user's yes too, not only a risky one. A step set to ask first: its action.
+    const askedFirst =
+      !risky && ((changes && limits?.askFirst === 'changes') || stepAction?.step.askFirst === true);
+    // In a run with steps the standing permissions (pull-request review, a crew job's one review)
+    // don't apply: a step that changes things asks first as its step says.
+    if (risky && !args.approval_id && !limits?.runId) {
       const target = prCommentTarget(args.action, runArgs);
       if (target && (await prCommentAllowed(userId, target)))
         prReviewRepo = `${target.owner}/${target.repo}`;
@@ -362,7 +417,7 @@ defineTool({
       if (!args.approval_id)
         throw new ToolError(
           askedFirst
-            ? `The automation "${limits!.title}" asks the user first before anything that changes something. ` +
+            ? `The automation "${limits!.title}" asks the user first ${stepAction ? `at step ${stepAction.index + 1}` : 'before anything that changes something'}. ` +
                 'Call request_approval for this action and end your turn; run it with that approval_id after the yes.'
             : "This action needs the user's approval. If the user already approved it, call run_app_action again " +
                 'with that approval_id. Otherwise call request_approval and end your turn.',
@@ -372,7 +427,13 @@ defineTool({
               : 'it needs your approval, and none was given',
           },
         );
-      const approval = await consumeApproval(userId, args.approval_id, args.action);
+      // In a run with steps, only an approval asked for this step of this run.
+      const approval = await consumeApproval(
+        userId,
+        args.approval_id,
+        args.action,
+        stepAction ? { runId: stepAction.run.id, stepId: stepAction.step.id } : null,
+      );
       if (!approval)
         throw new ToolError(
           'No matching approved approval (it must be approved, unused, for this exact action)',
@@ -421,11 +482,28 @@ defineTool({
       if (consumedId)
         await db().update(approvals).set({ usedAt: null }).where(eq(approvals.id, consumedId));
       if (crewJobId) await releaseCrewJobComment(userId, crewJobId);
-      if (err instanceof ToolError) throw err;
-      logger().warn({ userId, action: args.action, err: String(err) }, 'composio execute failed');
-      throw new ToolError('The app is unavailable right now; tell the user and try later', {
-        reason: "the app couldn't be reached",
-      });
+      const failed =
+        err instanceof ToolError
+          ? err
+          : new ToolError('The app is unavailable right now; tell the user and try later', {
+              reason: "the app couldn't be reached",
+            });
+      if (!(err instanceof ToolError))
+        logger().warn({ userId, action: args.action, err: String(err) }, 'composio execute failed');
+      // A step's own action: one more try, then the step fails and the run stops.
+      if (stepAction) {
+        const next = await stepActionFailed(
+          userId,
+          stepAction.run.id,
+          stepAction.step.id,
+          failed.reason ?? 'the app refused it',
+        );
+        if (next)
+          throw new ToolError(`${failed.message} ${next}`, {
+            ...(failed.reason ? { reason: failed.reason } : {}),
+          });
+      }
+      throw failed;
     }
 
     // Only a successful action is charged. The approval id is the charge's key when there is one
@@ -445,6 +523,15 @@ defineTool({
     }
     // No more than the agent needs: Gmail's fetch summarised, anything too long cut (app-results.ts).
     const shaped = shapeResult(args.action, runArgs, data);
+    // A run with steps: the step's own action is done (its short result saved, the pointer moved
+    // on); a look-up leaves it where it is. Either way the answer says what comes next.
+    let next: string | null = null;
+    if (gate) {
+      const after = stepAction
+        ? await stepActionDone(userId, gate.run.id, gate.step.id, shaped.data)
+        : null;
+      next = nowText(after ?? gate.run);
+    }
     return {
       ok: true,
       data: shaped.data,
@@ -452,6 +539,7 @@ defineTool({
       credits_charged: creditsCharged,
       ...(prReviewRepo ? { pr_review: prReviewRepo } : {}),
       ...(crewJobId ? { crew_job: crewJobId } : {}),
+      ...(next ? { next } : {}),
     };
   },
   summarize: (args, result) => {

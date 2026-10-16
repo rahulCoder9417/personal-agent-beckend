@@ -16,6 +16,8 @@ import {
   proposeDraft,
   toApiDraft,
 } from '../../automations/drafts.ts';
+import { currentRunLimits, RunLimitsUnknown } from '../../automations/run-limits.ts';
+import { finishStep, nowText } from '../../automations/runs.ts';
 import type { StepInput } from '../../automations/steps.ts';
 import { automationRunInProgress } from '../../orchestrator/turn.ts';
 import { defineTool, ToolError } from '../registry.ts';
@@ -192,6 +194,50 @@ defineTool({
     if (!d) throw new ToolError('Draft not found');
     return { ...toApiDraft(d), review_link: draftLink(d) };
   },
+});
+
+defineTool({
+  name: 'finish_step',
+  description:
+    "Only during the run of an automation with steps. Saves the current step's result when it is a Tex step (result: in words, " +
+    'at most 4,000 characters; found false when you found nothing), then the platform moves to the next step. When the current step ' +
+    'runs only if you decide (a "Tex decides" condition), call it first with condition_met true or false and why in one line: a no ends ' +
+    'the run there. An app step is not finished here: run its action with run_app_action. The answer ends with what comes next (next): follow it.',
+  input: {
+    step_id: z.string().min(1).max(24),
+    result: z.string().max(8000).optional(),
+    found: z.boolean().optional(),
+    condition_met: z.boolean().optional(),
+    why: z.string().max(500).optional(),
+  },
+  async run({ userId }, args) {
+    let limits;
+    try {
+      limits = await currentRunLimits(userId);
+    } catch (err) {
+      if (err instanceof RunLimitsUnknown) throw new ToolError(err.message);
+      throw err;
+    }
+    if (!limits?.runId)
+      throw new ToolError(
+        'finish_step is only for the run of an automation with steps, and this turn is not one. Nothing was saved.',
+      );
+    const done = await finishStep(userId, limits.runId, {
+      stepId: args.step_id,
+      ...(args.result !== undefined ? { result: args.result } : {}),
+      ...(args.found !== undefined ? { found: args.found } : {}),
+      ...(args.condition_met !== undefined ? { conditionMet: args.condition_met } : {}),
+      ...(args.why !== undefined ? { why: args.why } : {}),
+    });
+    if (!done.ok) throw new ToolError(done.refusal, { reason: "it didn't fit the current step" });
+    return { saved: true, run_state: done.run.state, next: nowText(done.run) };
+  },
+  summarize: (args) =>
+    args.condition_met !== undefined
+      ? `Decided step ${args.step_id}'s condition: ${args.condition_met ? 'yes' : 'no'}`
+      : `Finished step ${args.step_id}`,
+  // The result can quote an email: the log keeps only which step.
+  auditArgs: (args) => ({ step_id: args.step_id }),
 });
 
 defineTool({

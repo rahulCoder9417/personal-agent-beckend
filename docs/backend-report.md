@@ -122,7 +122,7 @@ There are two because some work is slow. One agent turn can take up to 15 minute
 
 | Service | What it is for |
 |---|---|
-| Postgres | The database. Keeps what must last: users, messages, events, credits. On the laptop it is a container. On the server it moves to Neon, a managed Postgres in Ohio (section 40). |
+| Postgres | The database. Keeps what must last: users, messages, events, credits. On the laptop it is a container. For the server it is on Neon, a managed Postgres in Ohio, since 14 October 2026 (section 40). |
 | Redis | A fast store in memory. Holds the job queues, locks, counters and live updates, and short-lived copies of what almost every request reads (section 4, "Keeping reads fast"). |
 | vm-manager | Our Go service. The only one that may create, wake or delete containers. |
 | LiteLLM | A gateway to the AI models. Gives each user a key with a spending limit. |

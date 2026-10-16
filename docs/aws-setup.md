@@ -33,8 +33,8 @@ No secret values are written here. Secrets live in two files on the server (`com
 | **Where** | AWS, Mumbai (`ap-south-1`), one EC2 server |
 | **Server** | `m7i-flex.large`: 2 vCPU, 7.6 GB RAM, 30 GB disk, Ubuntu 24.04 |
 | **Address** | Fixed IP `3.111.132.222`, reached as `https://api.textcrew.in` since 2026-10-08. Before that it was `https://3-111-132-222.sslip.io`, which no longer answers |
-| **What runs** | The whole platform in Docker Compose: api, worker, vm-manager, Postgres, Redis, LiteLLM, Caddy, the egress proxy, and one sandboxed container per user |
-| **Databases** | Today in the `postgres` container on the server. The code on `main` since 14 October 2026 expects them on Neon (managed Postgres, in Ohio); the move is a script still to be run (section 8, "Moving the databases to Neon") |
+| **What runs** | The whole platform in Docker Compose: api, worker, vm-manager, Redis, LiteLLM, Caddy, the egress proxy, and one sandboxed container per user. The databases are not on the server (next line) |
+| **Databases** | On Neon (managed Postgres, in Ohio, `us-east-2`) since 14 October 2026: the backend's, the vm-manager's and LiteLLM's. The server's old `postgres` container is stopped; its volume is kept as the way back. A move to Neon in Singapore is prepared, not run (section 8) |
 | **Code source** | GitHub `main` of both repos, pulled with read-only deploy keys |
 | **Deploy** | One command on the server: `/opt/textcrew/deploy.sh` |
 | **Paid from** | AWS credits (about $82 left on 2026-09-30) |
@@ -110,7 +110,7 @@ aws ec2 associate-address --instance-id $IID --allocation-id <allocation id>
 - **`sslip.io` host name:** free and needs no DNS setup. `3-111-132-222.sslip.io` simply resolves to `3.111.132.222`, which is enough for a real Let's Encrypt certificate. You own `textcrew.in` and can switch to it later.
 - **Shutdown behaviour:** left at the AWS default, **stop**. So shutting the server down from inside stops it and keeps the disk. It does not delete anything.
 
-**Not created:** no IAM users or access keys, no load balancer, no managed database in AWS (Postgres runs in Docker on the server until it moves to Neon, which is outside AWS: section 8), no S3 bucket, no DNS records, no CloudWatch alarms.
+**Not created:** no IAM users or access keys, no load balancer, no managed database in AWS (the databases are on Neon since 14 October 2026, outside AWS: section 8), no S3 bucket, no DNS records, no CloudWatch alarms.
 
 ---
 
@@ -186,7 +186,7 @@ Everything is under `/opt/textcrew`, owned by the `ubuntu` user.
 
 **SSH on the server** (`~/.ssh/`): two deploy keys, `deploy_beckend` and `deploy_vmm`, and a config with two host aliases, `gh-beckend` and `gh-vmm`, that point at `github.com` with the matching key.
 
-**Docker volumes** (the data that must survive): `personal-agent_pgdata` (Postgres; after the move to Neon it is kept, untouched, as the way back), `personal-agent_redisdata` (Redis), `personal-agent_caddydata` (the TLS certificate), and one `pa-data-<user id>` volume per user (the agent's memory, workspace and Claude sign-in).
+**Docker volumes** (the data that must survive): `personal-agent_pgdata` (the old Postgres; since the move to Neon on 14 October it is kept, untouched, as the way back), `personal-agent_redisdata` (Redis), `personal-agent_caddydata` (the TLS certificate), and one `pa-data-<user id>` volume per user (the agent's memory, workspace and Claude sign-in).
 
 ---
 
@@ -200,7 +200,7 @@ Started with `./dc --profile app up -d`. All long-running services restart on th
 | `api` | built from `beckend/infra/Dockerfile` | REST, webhooks, the Platform MCP (`/mcp`) and the git gateway (`/git`) |
 | `worker` | same image as the api | Runs the BullMQ jobs: messages, replies, schedules, backups |
 | `vm-manager` | built from `vm-manager/` | Creates, wakes and stops the user containers. The only service with the Docker socket |
-| `postgres` | `postgres:16` | The three databases (backend, vm-manager, LiteLLM). After the move to Neon it is stopped and no longer started: it is behind the `localdb` profile, which only the laptop uses |
+| `postgres` | `postgres:16` | Not running on the server. It held the three databases until the move to Neon on 14 October; now it is behind the `localdb` profile, which only the laptop uses |
 | `redis` | `redis:7` | Queues, locks, rate limits |
 | `litellm` | `ghcr.io/berriai/litellm:main-stable` | Model gateway and per-user keys |
 | `egress-proxy` | `ubuntu/squid` | The only way out of user containers |
@@ -241,9 +241,9 @@ A deploy restarts the api and worker for a few seconds. A Telegram message that 
 
 ### Moving the databases to Neon
 
-Decided on 14 October 2026: the three databases leave the server's `postgres` container for Neon, a managed Postgres. The Neon project is in Ohio (`us-east-2`), not Mumbai, and you chose that knowing each database query from the server then takes about 260 ms instead of under 1 ms.
+Decided and done on 14 October 2026: the three databases left the server's `postgres` container for Neon, a managed Postgres. The Neon project is in Ohio (`us-east-2`), not Mumbai, and you chose that knowing each database query from the server then takes about 260 ms instead of under 1 ms.
 
-| On the server today | On Neon |
+| On the server before | On Neon |
 |---|---|
 | `agent` (the backend) | `agent` |
 | `vm_manager` | `vm_manager` |
@@ -255,7 +255,7 @@ All three services connect to Neon's **direct** address (the host name without `
 
 **What runs the move:** `beckend/infra/deploy/move-to-neon.sh`. It checks everything first and changes nothing until every check passes: the three addresses are in `compose.env`, the old copy answers, and each Neon database is empty or missing (a missing one is created). Then it stops the api, worker, vm-manager and LiteLLM, copies each database with the Postgres 18 tools, compares the number of rows in every table on both sides, stops the old `postgres` (its volume is kept) and runs `deploy.sh`, which starts everything on Neon. It refuses to copy into a Neon database that already has tables, unless it is run with `--force`. The copies and the row counts stay in `backups/neon-move-<time>/`.
 
-**Steps, on the server, from `/opt/textcrew`:**
+**The steps, as run on the server from `/opt/textcrew` on 14 October:**
 
 1. `./deploy.sh`, before touching `compose.env`. It pulls the new code, then stops on purpose with "compose.env has no ...". Nothing is rebuilt or restarted; the services keep running on the old copy. Do not add the lines first: a deploy with them in place would start everything on the empty Neon databases.
 2. Keep a copy of `compose.env`, then add the three lines from `.env.deploy` (`BACKEND_DATABASE_URL`, `VM_MANAGER_DATABASE_URL`, `LITELLM_DATABASE_URL`).
@@ -456,7 +456,6 @@ aws ec2 authorize-security-group-ingress --no-cli-pager --group-id sg-0a41006d88
 
 - **The git gateway against real GitHub:** a real clone, a branch push, and the refusal of a push to the default branch. It also depends on Composio returning the GitHub token to the api, which has not been confirmed.
 - **The nightly backup** after the `pg_dump` fix, and a restore from it. Since 14 October the image has `pg_dump` 18, to match Neon. Neon also keeps its own history of the databases, so the nightly copy is a second, independent one.
-- **The move to Neon** (section 8) is written and was tried from the laptop into scratch Neon databases, but has not been run on the server.
 - **The move to Neon in Singapore** (section 8) is prepared, not run. The script was tested only with stand-in Postgres tools. It waits for the new Neon project, which you create.
 - **RAM with several users awake.** One user's container with the browser used 625 to 661 MiB of its 2 GiB limit after a turn (2026-10-05); the peak with a heavy page open was not measured.
 - **Composio's webhook reaching the server.** The secret is set (2026-10-05); no delivery from Composio has been seen yet, so pull-request review's trigger is unproven.

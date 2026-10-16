@@ -124,7 +124,7 @@ Picture: GoDraw, page 1, "The big picture".
 | Caddy | The only door open to the internet. Handles HTTPS |
 | api | Receives requests and webhooks. Also serves the agent's tools |
 | worker | Runs the jobs |
-| Postgres | The database: users, messages, credits, the activity log. Today a container on the server. Decided on 14 October 2026: it moves to Neon, a managed Postgres in Ohio, together with the vm-manager's and LiteLLM's databases. Each query then takes about 260 ms from the Mumbai server; you chose Ohio knowing that. The move is a script still to be run (`aws-setup.md`, section 8) |
+| Postgres | The database: users, messages, credits, the activity log. Not on the server: since 14 October 2026 it is on Neon, a managed Postgres in Ohio, together with the vm-manager's and LiteLLM's databases. Each query takes about 260 ms from the Mumbai server; you chose Ohio knowing that. A move to Neon in Singapore, about 35 to 60 ms away, is prepared but not run (`aws-setup.md`, section 8). The `postgres` container is only for the laptop now |
 | Redis | The job queues, locks and rate limits |
 | vm-manager | Controls the containers |
 | LiteLLM | The gateway to AI models for Textcrew AI |

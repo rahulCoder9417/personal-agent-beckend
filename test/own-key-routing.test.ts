@@ -8,6 +8,7 @@ import {
   ensureLiteLLMKey,
   getKeyRow,
   getLiteLLMKey,
+  ownCrewModelName,
   ownModelName,
   revokeLiteLLMKey,
   syncLiteLLMKey,
@@ -107,6 +108,7 @@ describe('saving an own key puts it in use', () => {
     const id = ownModelName(u.id);
     expect(id).toMatch(/^own-[0-9a-f]{24}$/);
     expect(id).not.toContain(u.id);
+    // And a second one for Hermes's crew: the same model and key, tuned for the crew.
     expect([...llm.models.values()]).toEqual([
       {
         id,
@@ -114,13 +116,22 @@ describe('saving an own key puts it in use', () => {
         apiKey: ANT_KEY,
         params: chatTuning('anthropic', 'claude-sonnet-5-5'),
       },
+      {
+        id: ownCrewModelName(id),
+        model: 'anthropic/claude-sonnet-5-5',
+        apiKey: ANT_KEY,
+        params: chatTuning('anthropic', 'claude-sonnet-5-5', 'crew'),
+      },
     ]);
-    // The container's name and the quick-reply model both go there, with the user's key.
+    // The container's name and the quick-reply model both go there, with the user's key; the
+    // crew's name goes to the crew's copy.
     const own = { provider: 'anthropic', model: 'claude-sonnet-5-5', apiKey: ANT_KEY };
     expect(agentCall(u.id)).toEqual(own);
     expect(llm.route(u.id, 'cheap')).toEqual(own);
+    expect(llm.route(u.id, 'agent-crew')).toEqual(own);
+    expect(llm.byUser(u.id)!.aliases['agent-crew']).toBe(ownCrewModelName(id));
     // Textcrew's own models are refused, so no call can use a server provider key.
-    for (const name of ['claude', 'gpt', 'whisper'])
+    for (const name of ['claude', 'claude-crew', 'gpt', 'whisper'])
       expect(() => llm.route(u.id, name)).toThrow(/403/);
     // No AI budget while the own key pays.
     expect(llm.remainingBudget(u.id)).toBeNull();
@@ -146,7 +157,7 @@ describe('saving an own key puts it in use', () => {
     const oai = await saveOk(u.token, 'openai', { apiKey: OAI_KEY });
     expect(oai).toMatchObject({ effectiveModel: 'gpt-6.1-sol', inUse: true });
     expect(agentCall(u.id)).toEqual({ provider: 'openai', model: 'gpt-6.1-sol', apiKey: OAI_KEY });
-    expect(llm.models.size).toBe(1); // one model per user, replaced in place
+    expect(llm.models.size).toBe(2); // one model per user and its crew copy, replaced in place
     expect(await list(u.token)).toEqual([
       expect.objectContaining({ provider: 'anthropic', set: false, inUse: false }),
       expect.objectContaining({ provider: 'openai', set: true, inUse: true }),
@@ -174,6 +185,12 @@ describe('saving an own key puts it in use', () => {
         model: 'anthropic/claude-opus-5-5',
         apiKey: ANT_KEY_2,
         params: chatTuning('anthropic', 'claude-opus-5-5'),
+      },
+      {
+        id: ownCrewModelName(ownModelName(u.id)),
+        model: 'anthropic/claude-opus-5-5',
+        apiKey: ANT_KEY_2,
+        params: chatTuning('anthropic', 'claude-opus-5-5', 'crew'),
       },
     ]);
     expect(agentCall(u.id).apiKey).toBe(ANT_KEY_2);
@@ -204,7 +221,14 @@ describe('when the own key stops paying, the key goes back to the plan', () => {
     expect((await remove(u.token, 'anthropic')).status).toBe(204);
     // Pro: the fixed name means the premium model again, on Textcrew's provider key.
     expect(agentCall(u.id)).toMatchObject({ provider: 'server', model: 'claude' });
-    expect(llm.byUser(u.id)!.models).toEqual(['agent-default', 'cheap', 'claude', 'gpt']);
+    expect(llm.byUser(u.id)!.models).toEqual([
+      'agent-default',
+      'agent-crew',
+      'cheap',
+      'claude',
+      'gpt',
+      'claude-crew',
+    ]);
     expect(llm.remainingBudget(u.id)).toBeCloseTo(100 / 250, 6);
     expect(llm.models.size).toBe(0);
     expect(await getKeyRow(u.id)).toMatchObject({ ownModelId: null, ownModelFingerprint: null });
@@ -329,7 +353,7 @@ describe('when LiteLLM cannot be updated', () => {
     llm.modelDeleteFails = true;
     expect((await remove(u.token, 'anthropic')).status).toBe(204);
     expect(agentCall(u.id)).toMatchObject({ provider: 'server' });
-    expect(llm.models.size).toBe(1);
+    expect(llm.models.size).toBe(2);
     llm.modelDeleteFails = false;
     await syncUsageForUser(u.id); // the 5-minute job
     expect(llm.models.size).toBe(0);

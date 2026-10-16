@@ -16,7 +16,7 @@
 // Anthropic as `high`).
 
 /** Changes whenever what is added changes, so models saved before are saved again. */
-export const TUNING_VERSION = 't1';
+export const TUNING_VERSION = 't2';
 
 /** The breakpoints: the system message (tools and instructions), and the last message. */
 const CACHE_POINTS = [
@@ -34,17 +34,32 @@ const CLAUDE_WITH_EFFORT = /^claude-(fable-5|opus-5|sonnet-5|haiku-5|opus-4-[678
 const OPENAI_REASONING = /^(gpt-[5-9]|o[1-9])/;
 
 /**
- * The extra LiteLLM settings for a model of the user's own key: `provider` and the provider's
- * own model id (e.g. `anthropic`, `claude-sonnet-5-5`).
+ * Who calls the model: the lead in chat (`chat`, low effort: a quick answer), or Hermes's crew
+ * (`crew`: Byte, Patch and Scout, at medium effort: code is written and reviewed, where thinking
+ * pays). Hermes calls the crew's model by its own name (LITELLM_CREW_MODEL), so LiteLLM can tell
+ * the two apart; on Claude Code, Byte and Patch get their model and effort from the Bridge.
  */
-export function chatTuning(provider: string, model: string): Record<string, unknown> {
+export type TuningRole = 'chat' | 'crew';
+const EFFORT: Record<TuningRole, string> = { chat: 'low', crew: 'medium' };
+
+/**
+ * The extra LiteLLM settings for a model of the user's own key: `provider` and the provider's
+ * own model id (e.g. `anthropic`, `claude-sonnet-5-5`), and who calls it.
+ */
+export function chatTuning(
+  provider: string,
+  model: string,
+  role: TuningRole = 'chat',
+): Record<string, unknown> {
+  const effort = EFFORT[role];
   if (provider === 'anthropic')
     return {
       cache_control_injection_points: CACHE_POINTS,
-      ...(CLAUDE_WITH_EFFORT.test(model) ? { output_config: { effort: 'low' } } : {}),
+      ...(CLAUDE_WITH_EFFORT.test(model) ? { output_config: { effort } } : {}),
     };
   // OpenAI caches long prompts by itself; nothing to add for that.
-  if (provider === 'openai') return OPENAI_REASONING.test(model) ? { reasoning_effort: 'low' } : {};
+  if (provider === 'openai')
+    return OPENAI_REASONING.test(model) ? { reasoning_effort: effort } : {};
   // OpenRouter passes Anthropic's cache marks on to Claude. It translates an effort its own way,
   // which was not checked, so none is set there.
   if (provider === 'openrouter' && model.startsWith('anthropic/'))

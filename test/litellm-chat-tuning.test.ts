@@ -5,7 +5,12 @@ import { readFileSync } from 'node:fs';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { getKeyRow, ownModelName, syncLiteLLMKey } from '../src/modules/billing/litellm.ts';
+import {
+  getKeyRow,
+  ownCrewModelName,
+  ownModelName,
+  syncLiteLLMKey,
+} from '../src/modules/billing/litellm.ts';
 import { chatTuning, TUNING_VERSION } from '../src/modules/billing/model-tuning.ts';
 import { litellmKeys } from '../src/modules/billing/schema.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
@@ -38,6 +43,19 @@ describe("the server's models (infra/litellm/config.yaml)", () => {
     expect(params('claude')).not.toHaveProperty('reasoning_effort');
   });
 
+  it("Claude for Hermes's crew (agent-crew on Pro and Max): the same Claude and cache, medium effort, the same fallback", () => {
+    expect(params('claude-crew')).toEqual({
+      ...params('claude'),
+      output_config: { effort: 'medium' },
+    });
+    const fallbacks = (
+      parse(readFileSync('infra/litellm/config.yaml', 'utf8')) as {
+        router_settings: { fallbacks: Array<Record<string, string[]>> };
+      }
+    ).router_settings.fallbacks;
+    expect(fallbacks).toContainEqual({ 'claude-crew': ['cheap'] });
+  });
+
   it('GPT gets a low reasoning effort; the cheap model and Whisper are left as they were', () => {
     expect(params('gpt')).toMatchObject({ model: 'openai/gpt-5-mini', reasoning_effort: 'low' });
     for (const name of ['cheap', 'whisper']) {
@@ -59,6 +77,21 @@ describe("the model of the user's own key", () => {
     // Haiku 4.5 and older models refuse an effort.
     for (const m of ['claude-haiku-4-5', 'claude-sonnet-4-5', 'claude-3-7-sonnet'])
       expect(chatTuning('anthropic', m)).toEqual({ cache_control_injection_points: CACHE_POINTS });
+  });
+
+  it("the crew's copy: the same settings with a medium effort instead of low", () => {
+    expect(chatTuning('anthropic', 'claude-sonnet-5-5', 'crew')).toEqual({
+      cache_control_injection_points: CACHE_POINTS,
+      output_config: { effort: 'medium' },
+    });
+    expect(chatTuning('anthropic', 'claude-haiku-4-5', 'crew')).toEqual({
+      cache_control_injection_points: CACHE_POINTS,
+    });
+    expect(chatTuning('openai', 'gpt-6.1-sol', 'crew')).toEqual({ reasoning_effort: 'medium' });
+    expect(chatTuning('openai', 'gpt-4o', 'crew')).toEqual({});
+    expect(chatTuning('openrouter', 'anthropic/claude-sonnet-5.5', 'crew')).toEqual(
+      chatTuning('openrouter', 'anthropic/claude-sonnet-5.5'),
+    );
   });
 
   it('OpenAI: a low reasoning effort for reasoning models only; OpenRouter: the cache for Claude only', () => {
@@ -126,10 +159,32 @@ describe('saving the own-key model in LiteLLM', () => {
       model: 'anthropic/claude-sonnet-5-5',
       apiKey: ANT_KEY,
     });
+    llm.models.delete(ownCrewModelName(ownModelName(u.id)));
     await syncLiteLLMKey(u.id);
     expect(llm.models.get(ownModelName(u.id))?.params).toEqual(
       chatTuning('anthropic', 'claude-sonnet-5-5'),
     );
     expect((await getKeyRow(u.id))!.ownModelFingerprint).toBe(`${bare}+${TUNING_VERSION}`);
+    // The crew's copy too, which a model saved before had not.
+    expect(llm.models.get(ownCrewModelName(ownModelName(u.id)))?.params).toEqual(
+      chatTuning('anthropic', 'claude-sonnet-5-5', 'crew'),
+    );
+  });
+
+  it("a key made before the crew's name gets it at the next sync, so Hermes's crew can call it", async () => {
+    const u = await member(100, 'pro');
+    await syncLiteLLMKey(u.id);
+    const key = llm.byUser(u.id)!;
+    // As saved by the version before this one.
+    key.models = ['agent-default', 'cheap', 'claude', 'gpt'];
+    key.aliases = { 'agent-default': 'claude' };
+    await db().update(litellmKeys).set({ models: key.models }).where(eq(litellmKeys.userId, u.id));
+    expect(() => llm.route(u.id, 'agent-crew')).toThrow();
+    await syncLiteLLMKey(u.id);
+    expect(llm.route(u.id, 'agent-crew')).toMatchObject({
+      provider: 'server',
+      model: 'claude-crew',
+    });
+    expect(llm.route(u.id, 'agent-default')).toMatchObject({ provider: 'server', model: 'claude' });
   });
 });

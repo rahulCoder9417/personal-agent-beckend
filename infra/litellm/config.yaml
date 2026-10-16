@@ -1,5 +1,7 @@
-# Model names the backend uses: `cheap` (every plan) and `claude`, `gpt` (paid plans).
-# Per-user virtual keys (created by the backend) restrict which of these a user may call.
+# Model names the backend uses: `cheap` (every plan) and `claude`, `gpt` (paid plans), and
+# `claude-crew` for Hermes's crew on paid plans. Per-user virtual keys (created by the backend)
+# restrict which of these a user may call, and alias `agent-default` (the lead) and `agent-crew`
+# (Byte, Patch, Scout) to them.
 model_list:
   - model_name: cheap
     litellm_params:
@@ -19,6 +21,19 @@ model_list:
           index: -1
       output_config:
         effort: low
+  # The same Claude for Hermes's crew (Byte, Patch, Scout: Hermes calls it `agent-crew`): code is
+  # written and reviewed there, where thinking pays, so a medium effort instead of chat's low.
+  - model_name: claude-crew
+    litellm_params:
+      model: anthropic/claude-sonnet-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
+      output_config:
+        effort: medium
   - model_name: gpt
     litellm_params:
       model: openai/gpt-5-mini
@@ -36,6 +51,7 @@ router_settings:
   # Backup model when a provider is down (HLD 10.1).
   fallbacks:
     - claude: [cheap]
+    - claude-crew: [cheap]
     - gpt: [cheap]
 
 general_settings:

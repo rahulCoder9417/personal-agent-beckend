@@ -277,10 +277,29 @@ export function routesToOwnKey(row: Pick<LiteLLMKeyRow, 'models' | 'ownModelId'>
   return row.ownModelId !== null && row.models.includes(row.ownModelId);
 }
 
-/** While the own key pays: the agent's fixed name and the quick-reply model both mean it. */
+/**
+ * The second model that holds the user's own key: the same provider model, tuned for Hermes's
+ * crew (medium effort instead of chat's low, model-tuning.ts). Saved and deleted with the first.
+ */
+export const ownCrewModelName = (ownModelId: string) => `${ownModelId}-crew`;
+
+/**
+ * While the own key pays: the agent's fixed name and the quick-reply model both mean it, and the
+ * crew's name means its crew copy.
+ */
 function ownKeyAliases(modelId: string): Record<string, string> {
   const c = config();
-  return { [c.LITELLM_AGENT_MODEL]: modelId, [c.LITELLM_CHEAP_MODEL]: modelId };
+  return {
+    [c.LITELLM_AGENT_MODEL]: modelId,
+    [c.LITELLM_CHEAP_MODEL]: modelId,
+    [c.LITELLM_CREW_MODEL]: ownCrewModelName(modelId),
+  };
+}
+
+/** Deletes both models that hold the own key: the crew's copy first, then the chat one. */
+async function deleteOwnModels(ownModelId: string): Promise<void> {
+  await litellm().deleteModel(ownCrewModelName(ownModelId));
+  await litellm().deleteModel(ownModelId);
 }
 
 /** Creates the user's key if they don't have one (idempotent). It starts on the plan. */
@@ -341,7 +360,7 @@ export async function getLiteLLMKey(userId: string): Promise<string> {
 export async function revokeLiteLLMKey(userId: string): Promise<void> {
   const row = await getKeyRow(userId);
   if (!row) return;
-  if (row.ownModelId) await litellm().deleteModel(row.ownModelId);
+  if (row.ownModelId) await deleteOwnModels(row.ownModelId);
   await litellm().deleteKey(decryptSecret(row.keyEncrypted));
   await db()
     .update(litellmKeys)
@@ -380,12 +399,13 @@ async function withSyncLock<T>(userId: string, fn: () => Promise<T>): Promise<T>
  * Brings the user's LiteLLM key in line with what pays for their AI. Safe to call any time and
  * twice: LiteLLM is called only for what differs from the state last applied.
  *
- * 1. The own key pays: LiteLLM gets (or keeps) a model holding the key that pays, before the key
- *    is pointed at it.
- * 2. The key: with the own key, only the agent name and that model, both names aliased to it, and
+ * 1. The own key pays: LiteLLM gets (or keeps) a model holding the key that pays, and its crew's
+ *    copy (medium effort), before the key is pointed at them.
+ * 2. The key: with the own key, only the agent's and the crew's names and those two models, the
+ *    names aliased to them, and
  *    no AI budget; otherwise the plan's models and alias with budget = balance. At a balance of 0
  *    the budget is 0 either way (awake time is still paid in credits).
- * 3. The own key doesn't pay: the model holding it is deleted, after the key stopped using it.
+ * 3. The own key doesn't pay: the two models holding it are deleted, after the key stopped using them.
  *    If only this step fails, the key is no longer used and the next sync deletes the model.
  *
  * Pass `spendUsd` when the caller has just read the key's spend. Throws if LiteLLM can't be
@@ -415,12 +435,18 @@ async function applyKeyState(userId: string, opts: { spendUsd?: number }): Promi
   let ownModelId = row.ownModelId;
   if (own && row.ownModelFingerprint !== tunedFingerprint(own.fingerprint)) {
     const id = row.ownModelId ?? ownModelName(userId);
+    const model = `${own.provider}/${own.model}`;
+    await litellm().saveModel(
+      { id, model, apiKey: own.apiKey, params: chatTuning(own.provider, own.model) },
+      { exists: row.ownModelId !== null },
+    );
+    // The crew's copy (added in tuning t2: one saved before has none yet; saveModel copes).
     await litellm().saveModel(
       {
-        id,
-        model: `${own.provider}/${own.model}`,
+        id: ownCrewModelName(id),
+        model,
         apiKey: own.apiKey,
-        params: chatTuning(own.provider, own.model),
+        params: chatTuning(own.provider, own.model, 'crew'),
       },
       { exists: row.ownModelId !== null },
     );
@@ -434,7 +460,12 @@ async function applyKeyState(userId: string, opts: { spendUsd?: number }): Promi
   const target =
     own && ownModelId
       ? {
-          models: [config().LITELLM_AGENT_MODEL, ownModelId],
+          models: [
+            config().LITELLM_AGENT_MODEL,
+            config().LITELLM_CREW_MODEL,
+            ownModelId,
+            ownCrewModelName(ownModelId),
+          ],
           aliases: ownKeyAliases(ownModelId),
           remaining: balance <= 0 ? 0 : null,
         }
@@ -455,7 +486,7 @@ async function applyKeyState(userId: string, opts: { spendUsd?: number }): Promi
   // 3. No own key pays: delete the copy LiteLLM holds.
   if (!own && row.ownModelId) {
     try {
-      await litellm().deleteModel(row.ownModelId);
+      await deleteOwnModels(row.ownModelId);
       await setRow({ ownModelId: null, ownModelFingerprint: null });
     } catch (err) {
       logger().warn(

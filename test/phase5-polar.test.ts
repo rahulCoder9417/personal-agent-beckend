@@ -128,8 +128,18 @@ describe('Polar events (HLD 7.6)', () => {
     const { u, sub } = await subscribed();
     expect((await getUser(u.id))!.plan).toBe('pro');
     expect(await getBalance(u.id)).toBe(1500);
-    expect(llm.byUser(u.id)!.models).toEqual(['agent-default', 'cheap', 'claude', 'gpt']);
-    expect(llm.byUser(u.id)!.aliases).toEqual({ 'agent-default': 'claude' });
+    expect(llm.byUser(u.id)!.models).toEqual([
+      'agent-default',
+      'agent-crew',
+      'cheap',
+      'claude',
+      'gpt',
+      'claude-crew',
+    ]);
+    expect(llm.byUser(u.id)!.aliases).toEqual({
+      'agent-default': 'claude',
+      'agent-crew': 'claude-crew',
+    });
     const monthly = (await grantsOf(u.id)).find((g) => g.source === 'monthly' && g.amount > 0)!;
     // Every credit lasts 90 days from the grant, not until the period ends.
     expect(monthly.expiresAt!.getTime()).toBeGreaterThan(Date.now() + 89.9 * DAY);
@@ -221,8 +231,8 @@ describe('Polar events (HLD 7.6)', () => {
     expect(await getBalance(u.id)).toBe(2300);
     // …until 90 days after they were granted.
     expect(await getBalance(u.id, new Date(Date.now() + 91 * DAY))).toBe(0);
-    expect(llm.byUser(u.id)!.models).toEqual(['agent-default', 'cheap']);
-    expect(llm.byUser(u.id)!.aliases).toEqual({ 'agent-default': 'cheap' });
+    expect(llm.byUser(u.id)!.models).toEqual(['agent-default', 'agent-crew', 'cheap']);
+    expect(llm.byUser(u.id)!.aliases).toEqual({ 'agent-default': 'cheap', 'agent-crew': 'cheap' });
     // Nothing more to end; a late revoked/updated changes nothing.
     expect(await endLapsedSubscriptions(new Date(sub.end.getTime() + 2000))).toBe(0);
     expect(

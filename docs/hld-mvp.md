@@ -394,6 +394,12 @@ Free: reading and searching in apps, reading a web page, and the web search buil
 - Until that day, "Keep my plan" undoes the cancel. Polar is asked to renew the plan again. Nothing is charged at that moment, and no credits are given. The next renewal charges and gives credits as usual.
 - Paying for the same plan again while it still runs is refused, so nobody pays for a second month beside the first.
 
+### Invoices, the card, and a failed payment
+
+- Pricing has a button to Polar's own billing page: **Invoices and card**. There the user changes the card and downloads invoices and receipts.
+- When a monthly payment fails, Polar tries again over 21 days. The plan stays, but the month's credits come only once a payment goes through. The button then says **Update card**, and Polar tries a new card at once. If every try fails, the plan ends and the user is on Free.
+- A paid plan never starts with a free trial, even if one is set on a product in Polar by mistake.
+
 ### Auto top-up (switched off on the server for now)
 
 Polar can charge a saved card without the user being there, for a one-time product such as the top-up. It calls these "off-session charges". They are in preview, need a paid Polar plan, and Polar must switch them on for our account. So auto top-up is built but hidden, behind the server setting `AUTO_TOPUP_ENABLED` (off by default).
@@ -508,7 +514,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - The databases on Neon (14 October). The backend, the vm-manager and LiteLLM were each run against scratch Neon databases from the laptop, and the move script copied a local database into Neon with matching row counts. The server still uses its own `postgres` until the move script is run there.
 - Textcrew AI on the Hermes engine. There is no working model key.
 - The user's own API key. Every model call goes to the user's provider with their key, through LiteLLM on our server. There is no key with balance to test it.
-- Payments through Polar.
+- Payments through Polar. Only in tests and Polar's sandbox design so far; no real payment has gone through. Ready for real money on 16 October (on the branches `feat/polar-production` in the backend, `feat/polar-portal` in the web app and `feat/polar-review` on the landing page, not on `main` yet): the switch from Polar's sandbox to real money is settings only, a read-only check (`polar-check`) compares Polar's products, discount and webhook with our plans, Pricing has **Invoices and card** (Polar's billing page), and a paused subscription is handled. Polar's real account has one product so far, "Text crew Pro Plan" at $6 a month, which does not match our plans; no token and no webhook exist there yet. `backend-report.md` section 28.
 - Pull-request review, and Byte pushing code through our git gateway.
 - Crew jobs: a brief for Patch or Byte from chat (the web app's Crew screen and its form were removed on 16 October; the crew is explained in the web app's Help, and Tex sends every change to a repository to Byte and every pull-request review to Patch), the report in its fixed shape, the list of GitHub repos to pick from, the container stopping every program of the job and deleting its folder, and the container sleeping right after. Built on 13 October. Checked with the automated tests (the clean-up with real programs on Linux, not inside gVisor) and the web app's demo mode. Nothing has run against real GitHub, Composio or a container.
 - A memory saved on one engine and used on the other.
@@ -561,6 +567,11 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - **Old conversations:** keep Claude Code's 30-day clean-up of saved sessions (an older conversation then starts afresh when opened), or keep sessions for as long as the conversation exists (more disk per user).
 - **Codex and other engines:** see `engines-proposal.md`, section 10. A ChatGPT plan cannot be used yet; OpenAI must approve first.
 
+- **Polar, before real money** (16 October). Details and steps in "Also waiting on you":
+  - **Refund policy** (the terms page has a blank for it; Polar's review looks for one): (a) no refunds except where the law requires, cancel any time; (b) a refund on request within 14 days of a payment, with the credits it added taken back (credits already spent stay as a debt); (c) as (b), but only while most of that payment's credits are unused. Recommended: (b), the simplest to explain, and Polar may refund within 60 days anyway to stop a chargeback.
+  - **The struck-out "regular" prices** on the website ($30 and $50 beside $12 and $30) were never charged. Payment reviewers and consumer rules treat that as a possible misleading discount. (a) Remove them, (b) say "launch price" without a struck-out number, (c) keep them. Recommended: (a) or (b).
+  - **Moving between Pro and Max.** Polar's account has "Allow multiple subscriptions" off and "Enable subscription plan changes" on. Our app says: cancel the plan, then buy the other one, which means two subscriptions for a few days, and Polar may refuse that checkout. (a) Switch "Allow multiple subscriptions" on (our backend already allows only one plan that renews) and plan changes off, so the app's way is the only way; (b) keep plan changes on in Polar's billing page and send people there to switch (a change applies at once, the new plan's credits come with the next month); (c) leave both as they are and test. Recommended: (a).
+
 ### Smaller open questions
 
 - **Textcrew AI:** which models to offer, and whether 2.5 times cost is the right price.
@@ -592,7 +603,16 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 - A repo to test pull-request review on.
 - How Free credits should run out sooner (section 7).
 - New keys in place of the four that were pasted into chat.
-- For later: a model key with balance, the Polar account, the legal pages.
+- For later: a model key with balance, the legal pages.
+- **Polar, for real money** (prepared on 16 October; Polar's own steps are yours, because they make keys or need your identity). In Polar's dashboard (`polar.sh/dashboard/text-crew`), not the sandbox:
+  1. **Products:** Pro at $12 a month and Max at $30 a month (monthly subscriptions, no trial), and the top-up at $10 once. The existing "Text crew Pro Plan" is $6 a month; change its price to $12 (or archive it and make a new one). The 50% waitlist month is a discount, not a price.
+  2. **Discount:** 50% off, duration "once", no code, on Pro and Max only.
+  3. **Webhook:** Settings → Webhooks → Add Endpoint: `https://api.textcrew.in/webhooks/polar`, format Raw, API version 2026-10, these 11 events: `order.paid`, `subscription.active`, `subscription.updated`, `subscription.canceled`, `subscription.uncanceled`, `subscription.past_due`, `subscription.revoked`, `subscription.paused`, `subscription.resumed`, `refund.created`, `refund.updated`. Let Polar generate the secret.
+  4. **Access token:** Settings → Developers → Create token, with the scopes in `backend-report.md` section 28, "Moving from Polar's sandbox to real money".
+  5. Put the token, the secret, the three product ids, the discount id and `POLAR_SERVER=production` in the laptop's `.env.deploy`. Claude's script copies them to the server without printing them, restarts the api and the worker, and runs the check. Only once the backend branch is deployed.
+  6. **Account review** (Finance → Account): "Set up checkout" turns green once the token and the webhook exist. Then replace "Describe what you sell" with the text Claude prepared (the old one does not name Textcrew or its prices), and press Submit for review. Identity, payout account, website and support email are already done there. Polar may ask for a 100% discount code by email so a reviewer can go from Free to paid; make one with a limit of one use.
+  7. Before submitting, publish the terms page with your blanks filled (legal name, postal address, refund policy, governing law and courts), check that `support@textcrew.in` receives mail, and merge the landing page's `feat/polar-review` (contact email, payments on Privacy, tax and cancelling on Pricing).
+  8. Test with a 100% discount code, not a real card: Polar treats real-card test purchases as card testing.
 
 ---
 
@@ -711,7 +731,7 @@ The VPS that was planned:
 
 ### Not part of the beta, needed before a public launch
 
-- Payments through Polar.
+- Payments through Polar: the steps are in section 12, "Also waiting on you".
 - A model key with balance, for Textcrew AI.
 - Backups outside the server, with a tested restore.
 - An alert channel.

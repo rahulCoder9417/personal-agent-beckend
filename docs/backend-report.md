@@ -1425,7 +1425,7 @@ The crew is one lead agent and three specialists. The user texts the lead, and t
 
 A crew job is a piece of work the user writes down for Patch (a review) or Byte (a change), the way one would brief a colleague. It runs as one turn of the agent and ends with a report. Patch and Byte work in a folder of their own, and when the job is over, everything they started is stopped and the folder is deleted.
 
-The user gives one on the Crew screen of the web app ("Give Patch a review", "Give Byte a job"), or in chat: "Patch, review acme/web PR 42, run pnpm test".
+The user gives one in chat: "Patch, review acme/web PR 42, run pnpm test". Until 16 October the web app also had a form for it, on a Crew screen ("Give Patch a review", "Give Byte a job"). The form and the screen are gone: the crew is explained in the web app's Help, and code changes and reviews are asked for in chat. The api below still takes a brief from an app (`POST /v1/crew-jobs`), and still lists the jobs and the repositories, but no app uses them now.
 
 **The brief**
 
@@ -1475,7 +1475,7 @@ Approving, requesting changes, merging, closing and pushing to the default branc
 
 **The cost.** A job costs what a turn costs. A review posted on the pull request, an issue and a pull request Byte opens are app actions that change something: 1 credit each. A job that fails on our side is not charged, like any turn.
 
-**Example.** Rahul gives Patch a review of `acme/web` pull request 42, ticks bugs and security, types `pnpm install && pnpm test`, and ticks "post it on the pull request". The Crew screen shows the job as waiting, then working. Four minutes later it is done. The report is in a web conversation called "Review acme/web#42", on the pull request as one review, and on the Crew screen. The container went to sleep right after.
+**Example.** Rahul writes in web chat: "Patch, review acme/web PR 42, look hard at bugs and security, run pnpm install && pnpm test, and post it on the PR." Tex asks for his OK to post the review, he approves, and Tex starts the job and says it is queued. The web chat shows Patch at work. Four minutes later the report is in the same chat and on the pull request as one review. The container went to sleep right after.
 
 ### What can go wrong
 
@@ -2785,6 +2785,8 @@ The crew is defined once, inside the Bridge, and given to both engines. Tex is t
 On Claude Code the tool lists are locks: a tool that is not on a member's list cannot be called. Tex's own calls to a web tool are refused by a small check that runs before each call. On Hermes the tool lists are only instructions, because Hermes cannot give each member its own tools.
 
 Example: the user asks to fix a typo in a repository and have it checked. Tex hands the fix to Byte, who opens a pull request. Tex then hands the pull request to Patch, who posts one review. Tex writes the answer.
+
+The lead is told to send every change to a repository to Byte, however small (a typo in a README too), and every review of a pull request to Patch: the user asks for both in chat, since the web app has no form for them. Review of every new pull request in a repository is switched on only by the user, in the web app under Automations, Pull-request review (section 19), so the lead sends the user there.
 
 ### Crew jobs in the container
 

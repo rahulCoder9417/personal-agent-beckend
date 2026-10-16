@@ -19,9 +19,11 @@ import {
 import { handleCrewJob, offerCrewRerun } from '../src/modules/automations/crew-jobs.ts';
 import { automations, crewJobs } from '../src/modules/automations/schema.ts';
 import { setTelegramApi } from '../src/modules/channels/adapters/telegram.ts';
+import { findAutomationsChat, startConversation } from '../src/modules/channels/conversations.ts';
+import { saveInbound } from '../src/modules/channels/messages.ts';
 import { isQuietTime } from '../src/modules/channels/notify.ts';
 import { queueOutbound } from '../src/modules/channels/outbound.ts';
-import { messages } from '../src/modules/channels/schema.ts';
+import { conversations, messages } from '../src/modules/channels/schema.ts';
 import { closeQueues, queue } from '../src/modules/events/queues.ts';
 import { connections } from '../src/modules/integrations/tables.ts';
 import { approvalEndNote } from '../src/modules/orchestrator/approval-text.ts';
@@ -32,7 +34,13 @@ import { newId } from '../src/shared/ids.ts';
 import { wireModules } from '../src/wiring.ts';
 import { processors } from '../src/worker/processors.ts';
 import { startWorkers } from '../src/worker/runner.ts';
-import { installFakeComposio, installFakeVm, telegramButton, type Delivery } from './fakes.ts';
+import {
+  installFakeComposio,
+  installFakeVm,
+  telegramButton,
+  telegramUpdate,
+  type Delivery,
+} from './fakes.ts';
 import { call, chatUser, expectContract, waitFor } from './helpers.ts';
 
 /** Every call to the Telegram Bot API, with its whole body. */
@@ -117,6 +125,38 @@ async function setNotifications(u: TestUser, notifications: Record<string, unkno
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 600));
+
+/** The conversations of the user's Telegram chat (none: a copy started none there). */
+const telegramConversations = (u: TestUser) =>
+  db()
+    .select()
+    .from(conversations)
+    .where(
+      and(eq(conversations.userId, u.id), eq(conversations.sessionKey, `telegram:${u.chatId}`)),
+    )
+    .orderBy(conversations.epoch);
+
+type ListedConversation = { id: string; channel: string; kind: string; title: string };
+/** The web app's chat list. */
+const listed = async (u: TestUser) =>
+  (
+    await expectContract<{ items: ListedConversation[] }>(
+      'listConversations',
+      await call('/v1/conversations', { token: u.token }),
+      200,
+    )
+  ).items;
+
+type ListedMessage = { id: string; channel: string; text: string; approvalId: string | null };
+/** What the web app shows of one conversation, newest first. */
+const shownIn = async (u: TestUser, conversationId: string) =>
+  (
+    await expectContract<{ items: ListedMessage[] }>(
+      'listMessages',
+      await call(`/v1/messages?conversationId=${conversationId}`, { token: u.token }),
+      200,
+    )
+  ).items;
 
 // --- the setting -----------------------------------------------------------------------------
 
@@ -305,7 +345,7 @@ describe('crew jobs: a notice on Telegram when one asked in the web app ends', (
       '✅ Byte finished: Fix login in acme/web. Done. PR #43 opened. Tests passed.\n' +
         `Report: http://web.test/?conversation=${job.conversationId}`,
     );
-    // Kept in the Telegram chat's conversation for display, outside its context, once per job.
+    // Saved once per job, marked as a copy.
     const copies = await db()
       .select()
       .from(messages)
@@ -321,6 +361,11 @@ describe('crew jobs: a notice on Telegram when one asked in the web app ends', (
     await settle();
     expect(sentTo(u.chatId)).toHaveLength(1);
     expect(row.sessionKey).toBe(`telegram:${u.chatId}`);
+    // Kept beside the report, in the web conversation it links to: no Telegram conversation, and
+    // the web app shows the report only.
+    expect(row.conversationId).toBe(job.conversationId);
+    expect(await telegramConversations(u)).toEqual([]);
+    expect((await shownIn(u, job.conversationId!)).some((m) => m.id === row.id)).toBe(false);
   });
 
   it('nothing on Telegram when the switch is off, or Telegram is not linked', async () => {
@@ -443,6 +488,12 @@ describe('automation runs and pull-request reviews', () => {
       .from(messages)
       .where(and(eq(messages.userId, on.id), eq(messages.copyOf, reply.id)));
     expect(kept?.sessionKey).toBe(`telegram:${on.chatId}`);
+    // Kept beside the answer in the Automations chat, which shows the answer once; the copy starts
+    // no Telegram conversation, so the chat list gets no "New chat" for Telegram.
+    expect(kept?.conversationId).toBe(reply.conversationId);
+    expect(await telegramConversations(on)).toEqual([]);
+    expect((await listed(on)).map((c) => c.channel)).not.toContain('telegram');
+    expect((await shownIn(on, reply.conversationId)).map((m) => m.text)).toEqual(['ran']);
   });
 
   it('a pull-request review copies its verdict while "reviews" is on (it is at first)', async () => {
@@ -784,6 +835,90 @@ describe('approvals on Telegram: an automation’s, not the web app’s', () => 
     // (Other tests' late messages may still arrive meanwhile: only this user's would name it.)
     expect(tg.filter((c) => JSON.stringify(c.body).includes('invoice'))).toEqual([]);
     expect(await telegramRows(u.id)).toEqual([]);
+  });
+
+  it('an automation’s question on Telegram starts no conversation there, also once answered by a button', async () => {
+    const u = await person();
+    asking((d) => (d.kind === DeliverKind.AUTOMATION ? SUMMARY : null));
+    await fireAutomation(u);
+    const [a] = await waitApprovals(u.id, 1);
+    await waitFor(async () => (sentTo(u.chatId).length ? true : null));
+
+    // The copy is kept beside the question, in the Automations chat; Telegram has no conversation.
+    const chat = (await findAutomationsChat(u.id))!;
+    const [copy] = await telegramRows(u.id);
+    expect(copy).toMatchObject({ approvalId: a!.id, conversationId: chat.id, direction: 'out' });
+    expect(await telegramConversations(u)).toEqual([]);
+    // The web app: no Telegram conversation in the list, and the question once in the
+    // Automations chat.
+    expect((await listed(u)).map((c) => c.channel)).not.toContain('telegram');
+    const shown = (await shownIn(u, chat.id)).filter((m) => m.approvalId === a!.id);
+    expect(shown.map((m) => m.channel)).toEqual(['web']);
+
+    // Approved with the copy's button: the run goes on in the Automations chat.
+    await tgPost(telegramButton(Number(u.chatId), `apr:${a!.id}:yes`));
+    await waitFor(async () => (editsIn(u.chatId).length ? true : null));
+    const [turn] = await waitFor(async () => (answerTurns(u.id).length ? answerTurns(u.id) : null));
+    expect(turn!.sessionKey).toBe('web');
+    // A late tap: told so on Telegram, and still no conversation there.
+    await tgPost(telegramButton(Number(u.chatId), `apr:${a!.id}:no`));
+    await waitFor(async () =>
+      sentTo(u.chatId).find((c) => String(c.body.text).includes('already answered')),
+    );
+    await settle();
+    expect(await telegramConversations(u)).toEqual([]);
+    expect((await listed(u)).map((c) => c.channel)).not.toContain('telegram');
+    expect(await telegramRows(u.id)).toHaveLength(1);
+
+    // A message the user types on Telegram goes to the Telegram chat's conversation, as before.
+    await tgPost(telegramUpdate(Number(u.chatId), 'what else is new?'));
+    const [own] = await waitFor(async () => {
+      const rows = await telegramConversations(u);
+      return rows.length ? rows : null;
+    });
+    expect(own).toMatchObject({ epoch: 0, active: true, kind: 'chat' });
+    await waitFor(async () =>
+      (await shownIn(u, own!.id)).some((m) => m.text === 'ok') ? true : null,
+    );
+    expect((await shownIn(u, own!.id)).map((m) => m.text)).toEqual(['ok', 'what else is new?']);
+    const telegramListed = (await listed(u)).filter((c) => c.channel === 'telegram');
+    expect(telegramListed.map((c) => [c.id, c.title])).toEqual([[own!.id, 'what else is new?']]);
+  });
+
+  it('the chat list leaves out a Telegram conversation with nothing said in it, or only old copies', async () => {
+    const u = await person();
+    const sessionKey = `telegram:${u.chatId}`;
+    // "/new" on Telegram: an empty conversation.
+    const { conversation: empty } = await startConversation(u.id, sessionKey);
+    // Before this fix, a copy was saved in the Telegram chat's conversation.
+    await db()
+      .insert(messages)
+      .values({
+        id: newId('msg'),
+        userId: u.id,
+        conversationId: empty.id,
+        channel: 'telegram',
+        direction: 'out',
+        text: 'an old copy',
+        status: 'sent',
+        sessionKey,
+        copyOf: `msg_${randomUUID().replace(/-/g, '')}`,
+      });
+    const ids = async () => (await listed(u)).map((c) => c.id);
+    expect(await ids()).not.toContain(empty.id);
+    // An empty web conversation (the new chat the user is about to write in) is still listed.
+    const { conversation: web } = await startConversation(u.id, 'web');
+    expect(await ids()).toContain(web.id);
+    // The user writes on Telegram: the conversation is listed, without the old copy.
+    await saveInbound({
+      userId: u.id,
+      channel: 'telegram',
+      text: 'hello',
+      eventId: `evt_${randomUUID()}`,
+      sessionKey,
+    });
+    expect(await ids()).toContain(empty.id);
+    expect((await shownIn(u, empty.id)).map((m) => m.text)).toEqual(['hello']);
   });
 
   it('says how each approval ended', () => {

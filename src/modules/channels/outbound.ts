@@ -6,8 +6,20 @@ import { newId } from '../../shared/ids.ts';
 import { logger } from '../../shared/logger.ts';
 import { addJob } from '../events/queues.ts';
 import { sendToChat } from './adapters/index.ts';
-import { conversationFor, noteMessage, type ConversationRow } from './conversations.ts';
-import { getMessageById, setMessageStatus, toApiMessage, type MessageRow } from './messages.ts';
+import {
+  activeConversation,
+  conversationFor,
+  getConversation,
+  noteMessage,
+  type ConversationRow,
+} from './conversations.ts';
+import {
+  getMessage,
+  getMessageById,
+  setMessageStatus,
+  toApiMessage,
+  type MessageRow,
+} from './messages.ts';
 import { messages } from './schema.ts';
 import { publish } from './stream.ts';
 import { inQuietHours } from './notify.ts';
@@ -47,9 +59,14 @@ export interface OutboundInput {
   /** The turn it is written in (its delivery id): saved with it, so the turn's reply is found. */
   turnId?: string | null;
   /**
-   * It is a copy of that message, which is kept in another conversation. Saved and sent once:
-   * asked again, the copy already made is returned and nothing is sent twice. A copy never
-   * becomes part of the agent's context in its conversation.
+   * It is a copy of that message (its id), or a notice named by that key, sent to a chat app
+   * besides the web app. Saved and sent once: asked again, the copy already made is returned and
+   * nothing is sent twice. A copy is kept beside what it copies, not in a conversation of the
+   * chat app: in the copied message's conversation (the Automations chat, for an automation's),
+   * else in `conversationId` (a notice's, e.g. the crew job's), else in web chat's active one. It
+   * starts no conversation in the chat app, moves no conversation up the list, makes none
+   * unread, is never on the live stream nor in a message list, and never becomes part of the
+   * agent's context.
    */
   copyOf?: string;
 }
@@ -69,10 +86,12 @@ const sendJob = (row: MessageRow, input: Pick<OutboundInput, 'buttons' | 'templa
 export async function queueOutbound(input: OutboundInput): Promise<MessageRow> {
   const parsed = parseSessionKey(input.sessionKey);
   if (!parsed) throw new Error(`bad session key ${input.sessionKey}`);
-  const conversation = await conversationFor(input.userId, input.sessionKey, input.conversationId, {
-    automations: input.inAutomationsChat === true,
-    ...(input.knownConversation !== undefined ? { known: input.knownConversation } : {}),
-  });
+  const conversation = input.copyOf
+    ? await copyHome(input.userId, input.copyOf, input.conversationId)
+    : await conversationFor(input.userId, input.sessionKey, input.conversationId, {
+        automations: input.inAutomationsChat === true,
+        ...(input.knownConversation !== undefined ? { known: input.knownConversation } : {}),
+      });
   const [row] = await db()
     .insert(messages)
     .values({
@@ -101,6 +120,11 @@ export async function queueOutbound(input: OutboundInput): Promise<MessageRow> {
     if (made?.status === 'queued') await sendJob(made, input);
     return made!;
   }
+  // A copy is only sent: the web app shows the message it copies, so nothing more is noted.
+  if (row.copyOf) {
+    await sendJob(row, input);
+    return row;
+  }
   await publish(input.userId, 'message.created', toApiMessage(row));
   // The send is queued first: it is what the user waits for. The conversation's last-message time
   // (the order of the chat list) comes after it and never fails the message, which is saved and on
@@ -114,6 +138,22 @@ export async function queueOutbound(input: OutboundInput): Promise<MessageRow> {
     ),
   );
   return row;
+}
+
+/**
+ * The conversation a copy is kept in (see `copyOf`): the copied message's, else the one named
+ * (when it is this user's), else web chat's active one. Never a conversation of the chat app the
+ * copy goes to, so a copy never starts one there.
+ */
+async function copyHome(
+  userId: string,
+  copyOf: string,
+  conversationId: string | null | undefined,
+): Promise<ConversationRow> {
+  const copied = await getMessage(userId, copyOf);
+  const id = copied?.conversationId ?? conversationId;
+  const named = id ? await getConversation(userId, id) : undefined;
+  return named ?? activeConversation(userId, 'web');
 }
 
 /** Sends to a chat that isn't linked to anyone (link instructions). No message row. */

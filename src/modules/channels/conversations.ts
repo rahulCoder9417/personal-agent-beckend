@@ -523,12 +523,23 @@ function parseCursor(cursor: string): { at: Date; id: string } {
   return { at: new Date(Number(m[1])), id: m[2]! };
 }
 
+/**
+ * A conversation the list shows: every web one (an empty one is the new chat the user is about to
+ * write in), and one of a chat app once something was said in it. A Telegram conversation that
+ * holds nothing, or only copies of what is kept in the web app (saved there before 16 October),
+ * is left out, so it never shows as an empty "New chat".
+ */
+const LISTED = sql`(${conversations.channel} = 'web' or exists (
+  select 1 from ${messages}
+  where ${messages.conversationId} = ${conversations.id} and ${messages.copyOf} is null
+))`;
+
 /** The user's conversations, the one with the newest message first. */
 export async function listConversations(
   userId: string,
   opts: { channel?: Channel; kind?: ConversationKind; cursor?: string; limit: number },
 ) {
-  const where = [eq(conversations.userId, userId)];
+  const where = [eq(conversations.userId, userId), LISTED];
   if (opts.channel) where.push(eq(conversations.channel, opts.channel));
   if (opts.kind) where.push(eq(conversations.kind, opts.kind));
   if (opts.cursor) {

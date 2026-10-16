@@ -133,10 +133,12 @@ export const messages = pgTable(
     /** Where outbound messages go, e.g. telegram chat id. */
     sessionKey: text(),
     /**
-     * A copy, sent to a chat app, of a message kept in another conversation: that message's id.
-     * An automation made in a Telegram chat answers in the Automations chat, and its answer is
-     * also sent to the Telegram chat this way. A copy is shown with its chat's messages, but it is
-     * never part of the agent's context there (the recap, the router). One copy per message.
+     * A copy, sent to a chat app, of a message kept in the web app: that message's id (or a
+     * notice's own key). An automation's answer or question is also sent to Telegram this way.
+     * Since 16 October a copy is kept in the copied message's conversation (`sessionKey` still
+     * names the chat app it went to), so it never starts or fills a conversation of the chat app;
+     * older ones sit in a Telegram conversation. A copy is never listed, never on the live stream
+     * and never part of the agent's context (the recap, the router). One copy per message.
      */
     copyOf: text(),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),

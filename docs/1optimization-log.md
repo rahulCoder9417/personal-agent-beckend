@@ -48,6 +48,33 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 16 October 2026: the crew is asked for in chat; the web app's Crew page and crew jobs screen are gone
+
+- **Where it is:** on `main` in the vm-manager (the Bridge passage) and live in the web app since 16 October. The Bridge part reaches containers with the next deploy.
+- **Why:** you wanted the crew simpler. The web app had a Crew page (a card per member) with a form for crew jobs ("Give Patch a review", "Give Byte a job") and a list of them. Byte and Patch are now used only from the chat: asking Tex to make a code change means Byte, and a pull-request review means Patch.
+- **What the user notices:**
+  - **No Crew page, no jobs form, no jobs list.** "Crew" is gone from the sidebar, from More and from the phone's tabs. The old address `/crew` leads to the crew's part of Help (`/help#crew`).
+  - **Help explains the crew** in a part of its own: who is on it here (from the crew list, with "Coming soon" on one not switched on), what each one does, and how to ask in the chat, for example "Fix the typo in the README on my repo acme/website" for Byte and "Review pull request 42 in acme/website" for Patch.
+  - **Pull-request review per repo stays** on Automations → Pull-request review, because only the user can switch it on and no agent tool can. That screen now also says that one review, once, is asked of Tex in the chat.
+  - **In the chat,** Tex now hands even a one-line change to a repository to Byte, instead of doing it itself as a "small edit". Asked to review every pull request in a repo, Tex sends the user to Automations → Pull-request review instead of making an automation of its own.
+- **Backend:** no code changed. The crew jobs API (`POST` and `GET /v1/crew-jobs`, `GET /v1/github/repos`) stays; no app calls it now. Tex still starts the same jobs from chat with `start_crew_job`.
+- **vm-manager:** the lead's instructions in the Bridge have one more part: a change to the code or files of a repository goes to Byte however small it is, even a typo in a README; every review of a pull request goes to Patch; the user asks for both in chat; and review of every new pull request in a repository is switched on only by the user, in the web app under Automations, Pull-request review (its address is given), so the lead sends the user there.
+- **Cost and speed:** the instructions are about 90 words longer on every turn, a few more input tokens. The web app's sidebar asks for one call fewer on a wide screen (the crew list). Not measured.
+- **Contracts:** none. `openapi.yaml` and `vm.proto` did not change.
+- **Database:** none.
+- **How it was checked:**
+  - vm-manager: a new Bridge test checks the new part of the lead's instructions, its address, and that it comes after "a small edit" so it narrows it. All 240 Bridge tests pass (1 skipped, as before).
+  - Web app: new tests check that there is no `/crew` page, no address to it in the code except the redirect, nothing left of the jobs form or list, that `/crew` redirects to Help's crew section, that the sidebar, More, the phone's tabs and Pull-request review have no link to `/crew`, and that Help draws the crew section and its line-up. Lint, the type check and the build pass, and 795 of 795 tests pass. The built app was started and `/crew` answered 307 to `/help#crew`.
+  - Nothing has run on the test server. The agent image must be rebuilt for the new instructions to reach containers.
+- **Still open (what chat can't do yet that the jobs screen did; your decision):**
+  - **No list of jobs.** The screen listed every job with its state (Waiting, Working, Done, Failed) and kept each report. From chat a job shows only as Tex saying it is queued, the specialist's lines while it works (web chat only, and gone after a reload), and the report in the chat. A failed job is said in the chat.
+  - **No repo picker.** The form picked from the user's GitHub repos. In chat the user names the repo, or Tex looks it up with GitHub's own actions.
+  - **Posting a review on the pull request** took one tick on the form, which was the yes. From chat it needs an approval card first: one more tap.
+  - **Cancelling a job that waits** was never in the web app, and is still only for support.
+  - **Turning on review per repo** has no chat route, by design. It stays on its own screen.
+- **Docs updated:** `hld-mvp.md` section 2 ("Give the crew a job"), section 5.6 (the brief comes from chat; the report goes to that chat; the tick is the API's), section 12 (crew jobs not yet run for real; the repo list; a new open question on crew jobs without a screen); `backend-report.md` section 20 (crew jobs are given in chat; the example) and "The crew, as defined in the container" (the new part of the lead's instructions); the vm-manager's README (the lead's instructions).
+- **Commits:** vm-manager `f447c58`; web app `ef166f3` (the screens, Help, the redirect, the tests) and `5210f12` (its README); backend: the docs commit that adds this entry.
+
 ### 16 October 2026: a blue dot on unread conversations
 
 - **Where it is:** on `main` (backend, with migration 0025) and live in the web app since 16 October. The backend part is not on the test server yet.

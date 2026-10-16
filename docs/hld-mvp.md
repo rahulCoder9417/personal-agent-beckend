@@ -12,6 +12,7 @@ Six files make up the docs:
 | `domain-setup.md` | The domain `textcrew.in`: where it was bought, who answers DNS, each name, and how to add or move one |
 | `engines-proposal.md` | A proposal, not built: adding Codex and other bring-your-own engines, with OpenAI's rules and the decisions to make |
 | `automations-flow-proposal.md` | A proposal: automations shown and made on a canvas (React Flow), and drafts Tex makes from the chat, with the decisions to make. You chose option A, with C to follow. Phases 1 and 2 are built (section 5.4) |
+| `automations-steps-proposal.md` | A proposal, not built yet: automations with up to 6 steps in one run (phase 4), with the decisions to make |
 | `optimization-log.md` | Every change made to the backend and the vm-manager while we optimize the product, by feature, in plain words |
 
 **The pictures** are in GoDraw, in the canvas named **"Textcrew MVP: high-level design"**. It has five pages. Each section below says which page shows it.

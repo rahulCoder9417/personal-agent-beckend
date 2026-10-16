@@ -48,6 +48,20 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 16 October 2026: automations on a canvas, phase 1 (read-only)
+
+- **Where it is:** on the branch `feat/automations-canvas` in the backend and the web app, not on `main` yet. Not on the test server.
+- **Why:** you approved `automations-flow-proposal.md` (option A, with C to follow). Phase 1 shows today's automations as a flow before anything can be built by hand.
+- **What the user notices:** each automation card on the Automations page has a small strip of its five steps and opens a page of its own. That page draws the automation as five boxes joined by arrows: when it runs, what Tex does, the apps, "asks you first" and where the results go (the Automations chat, and "Copy to Telegram" for one made there). Clicking a box, or Tab and Enter, opens its details beside the canvas. Phones, and anyone who picks "List view", get the same boxes as a list. Nothing can be changed on the canvas yet; pausing, resuming and deleting work as on the card.
+- **Backend:** the api reads one automation (`GET /v1/automations/{id}`), only the user's own. Each automation now also says where the copy of each answer goes (`copyTo`: Telegram, or none) and its trigger's settings, for example the repository a pull-request review watches. Both were already in the table; the api did not give them out.
+- **Cost and speed:** none on the backend. The web app loads the drawing library (React Flow 12.12.0, about 59 KB compressed) only on an automation's own page.
+- **Contracts:** `openapi.yaml`: the new `GET /v1/automations/{automationId}`, and `copyTo` and `trigger.config` on `Automation`. `vm.proto`: none.
+- **Database:** none.
+- **How it was checked:** a new test file (every kind read back with where its copy goes and its settings, an empty `config` for a trigger without settings, another user's automation and an unknown id answer 404, a finished one-time reminder is gone from the list but found by its id). Lint, types and all 958 backend tests pass. The web app's checks are in its README.
+- **Still open:** phases 2 (drafts from the chat) follows in the same piece of work; phases 3 and 4 come after.
+- **Docs updated:** `hld-mvp.md` sections 5.4 and 12, and the docs table; `backend-report.md` sections 18 ("What the web app draws: the canvas") and 41.
+- **Commits:** backend `954f60f`, `48851e9`.
+
 ### 16 October 2026: "Tex is working…" no longer stays under a finished answer
 
 - **Where it is:** on `main` (backend) and live in the web app since 16 October. The backend log lines reach the server with the next deploy.

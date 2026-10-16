@@ -10,7 +10,7 @@ Read `hld-mvp.md` first. It gives the short version and explains the words. This
 | **What it does** | Receives messages, runs each user's agent through the vm-manager, charges credits, sends replies |
 | **What it does not do** | It does not run the AI itself. Each user's agent runs in its own container |
 | **Where it runs** | On the AWS test server (see `aws-setup.md`) |
-| **How it is tested** | 749 automated tests, with a real database and real queues |
+| **How it is tested** | 1,029 automated tests, with a real database and real queues |
 | **What is in this report** | The backend, and the parts it depends on: the vm-manager, the container, the proxy |
 
 ## How to read this report
@@ -830,11 +830,34 @@ Telegram wants digital goods sold inside the app to be paid with its own currenc
 3. A purchase link is any Polar address. It is also a web app address that starts with `/billing`, `/pricing`, `/checkout`, `/upgrade`, `/plans`, `/topup` or `/subscribe`.
 4. Other links stay, such as the AI settings page. The saved message keeps the original text.
 
+### Notices on Telegram
+
+What the user asks for in the web app is answered in the web app. A short notice can go to their linked Telegram chat as well, so they hear when it is done. Telegram is always in addition to the chat the work was asked in, never instead of it. (Built on 16 October.)
+
+**The setting.** Settings → General has "Tell me on Telegram when…", shown once Telegram is linked. It has three switches, saved on the user's row in `users`:
+
+| Switch | At first | What it sends |
+|---|---|---|
+| Byte or Patch finishes a job | On | A notice when a crew job asked anywhere but Telegram ends (section 20) |
+| Pull-request reviews finish | On | A copy of each review's verdict (section 19) |
+| Automation runs finish | Off | A copy of each answer of an automation made in the web app. One made on Telegram always sends its answer there (section 18) |
+
+The web app reads and changes them through `PATCH /v1/me` (`notifications`). A change names only what changes.
+
+**When nothing is sent.** Telegram is not linked, the user blocked the bot, Telegram is switched off on the server, or the switch is off. Work asked on Telegram gets its answer there anyway, so it gets no extra notice.
+
+**Once only.** Each notice is saved, like a copy, with a mark of what it is about: the job, or the message it copies. A job that runs again finds the mark and sends nothing more. A notice is shown in the Telegram conversation in the web app, but it is never part of that conversation's context (section 18, "A copy on Telegram").
+
+**Quiet hours.** Also in that group: quiet hours, at first on, from 22:00 to 08:00 in the user's time zone. The user can change both times or switch them off. A start after the end runs over midnight; the same start and end are refused. During quiet hours every Telegram message to that user, answers included, goes out at once but silently: Telegram shows it without a sound. Nothing is held back. The worker checks the hours just before each send, from the copy of the user's row (section 6), so it costs no extra trip to the database most of the time.
+
+**Example.** Rahul gives Byte a job in web chat at 23:10, then puts his phone down. At 23:18 the report is in web chat, and his Telegram shows, without a sound: "✅ Byte finished: Fix the login redirect in acme/web. Done. PR #43 opened. Tests passed." and the link to that conversation.
+
 ### What can go wrong
 
 - **The user blocked the bot.** The message becomes `failed` with no retry. The link is marked blocked, and the agent is told to use web chat. The mark is cleared when the user writes again.
 - **WhatsApp says the 24 hours are over.** The message is sent again as a template.
 - **The job runs twice.** The second run sees the message is not `queued` and sends nothing.
+- **The user's row changed a moment ago.** The quiet hours come from a copy that may be up to a minute old; a change made just now applies from the next minute.
 - **The agent used a rare form of Markdown.** A few forms stay as typed, for example bold in the middle of a word. The text can still be read, with a stray symbol in it.
 - **Ordinary text that is also Markdown.** A line that starts with "# " is read as a heading and loses the "#". A name written as `__word__` loses its underscores, unless it is a well-known code name. The web app reads both the same way.
 
@@ -1150,13 +1173,23 @@ The platform decides by these words in the action's name. There are two exceptio
 1. The agent calls `request_approval` with a short summary, the action's name and its exact inputs. The tool asks for the summary as what the agent will do, starting with the verb: "Send the notes to priya@example.com".
 2. For an app's action, the api first checks the inputs against the action's own list of inputs, which Composio gives (next part). Inputs that don't fit are refused at once, and the user sees nothing.
 3. The api saves it in the table `approvals` as `pending`, with its inputs. It expires after 24 hours.
-4. The api sends Tex's question to the chat the request came from. It is made from the summary, so it is there at once and costs nothing: no model is asked. "I'd like to " goes before the summary, its first word in small letters, and the way to answer goes after it: "I'd like to send the notes to priya@example.com. Approve or Deny below." In web chat the message carries the approval, and the web app shows the Approve and Deny card right under it, with the inputs under the action's own names. Telegram and WhatsApp show two buttons, Approve and Deny. iMessage has no buttons, so the line "Reply YES to approve or NO to deny." is added instead of "Approve or Deny below.". A summary that does not start with a common verb ("send", "delete", "pay", "create" and about 50 more) is kept as written: "I'd like your OK for this: ...".
+4. The api sends Tex's question to the chat the request came from. It is made from the summary, so it is there at once and costs nothing: no model is asked. "I'd like to " goes before the summary, its first word in small letters, and the way to answer goes after it: "I'd like to send the notes to priya@example.com. Approve or Deny below." In web chat the message carries the approval, and the web app shows the Approve and Deny card right under it, with the inputs under the action's own names. Telegram and WhatsApp show two buttons, Approve and Deny. iMessage has no buttons, so the line "Reply YES to approve or NO to deny." is added instead of "Approve or Deny below.". A summary that does not start with a common verb ("send", "delete", "pay", "create" and about 50 more) is kept as written: "I'd like your OK for this: ...". When the request came from anywhere but Telegram and the user has linked Telegram, the same question also goes to their Telegram chat, with the same two buttons and a last line: "Asked in the web app. Tex carries on there after your answer." (next part).
 5. The tool answers "pending" at once, with the question the user now sees. It tells the agent to end its turn and not to repeat the question or say it is waiting: the user already sees both. The agent never waits inside a turn. In the web app the turn has paused: the "working" sign stops and a line under the card says "Waiting for your OK".
 6. The user taps a button, types "yes" or "no", or decides in the web app. A typed answer goes to the newest waiting approval in that chat.
 7. The api records the answer in the activity log ("Approved: ..." or "Denied: ..."). A job then wakes the agent with a new message: "The user APPROVED ..." or "The user REJECTED ... Don't do it. Tell them in one short sentence that you won't." It goes to the conversation the approval was asked in, not to the one that is open now. In the web app Tex shows as working again from the tap until it answers.
 8. After a yes, the agent calls `run_app_action` with the action's name and the approval's id. The inputs saved with the approval run; the agent does not send them again. The agent says how it went.
 
 **Example.** Rahul texts "email Priya the notes". He gets "I'd like to send the notes to priya@example.com. Approve or Deny below.", with the two buttons. He taps Approve. The agent wakes up, sends the email and says so. 1 credit is charged.
+
+### The same question on Telegram too
+
+Since 16 October an approval reaches the user wherever they are. One asked in web chat, or in the Automations chat during an automation's run, is sent to the linked Telegram chat as well. No switch is needed: an approval always goes when Telegram is linked.
+
+1. **The first answer wins.** Recording the answer is one step in the database, which only changes an approval that is still waiting. A second answer, from the other chat, finds it answered.
+2. **The other copies lose their buttons.** Right after the answer, a job edits every message of that approval on Telegram: the copy, and the question itself when it was asked there. The buttons go, and a line is added under the text: "✅ Approved on web", "❌ Denied on Telegram". So a tapped question loses its buttons too. A request that was replaced, expired or cancelled by support gets its own line ("Replaced by a newer request.", "Expired: no answer came in time.", "Cancelled by Textcrew support."). In the web app the card already shows the outcome.
+3. **The agent goes on where it asked.** The answer wakes the agent in the chat and conversation the question was asked in, never in the Telegram copy's.
+4. **Only a button answers a copy.** A typed "yes" on Telegram still answers only a question asked in that Telegram chat, so a "yes" meant for something else can't approve a request from the web app.
+5. **Safe to repeat.** The copy is saved once per question. Editing a message that was edited already is refused by Telegram and passed over. A copy still waiting to be sent is waited for: the job tries again a little later.
 
 ### The inputs are checked when the agent asks
 
@@ -1205,7 +1238,8 @@ The agent must name an earlier request of the same user for the same action; any
 - **Denied.** The agent is woken, told not to do it and to say so in one sentence. That approval can never run an action. (Its state in the API is still called `rejected`.)
 - **The agent writes after asking anyway.** Its text arrives as a message after the question. Nothing breaks; the user reads the same thing twice.
 - **Never answered.** After 24 hours an hourly job marks it `expired`. The agent is not woken. Nothing runs.
-- **A late tap on an old button.** The user gets "That approval was already answered or has expired.", or for a replaced one "That request was replaced by a newer one. Please answer the newest request."
+- **A late tap on an old button.** The user gets "That approval was already answered or has expired.", or for a replaced one "That request was replaced by a newer one. Please answer the newest request." Since 16 October the buttons go once a request is answered, so this is rare: a tap in the second before the edit.
+- **Telegram can't be reached when the buttons should go.** The job tries again, up to 5 times. If it never gets through, the buttons stay, and a tap gets the line above.
 - **A risky action with no approval.** Refused. The message tells the agent to use the approval's id if the user already said yes, and otherwise to ask first.
 - **The agent changes the email after the yes.** Refused, because the inputs differ. The approval still works: with no inputs sent, the approved ones run.
 - **The agent asks with inputs the action doesn't have.** Refused before the user sees anything, with the action's real inputs (above).
@@ -1422,7 +1456,7 @@ What answers there:
 
 The web app shows it pinned at the top of the chat list, apart from the dated list, with a mark when a new run arrived since the user last opened it.
 
-**A copy on Telegram.** An automation made in a Telegram chat still runs in the Automations chat. A copy of its answer also goes to that Telegram chat:
+**A copy on Telegram.** An automation made in a Telegram chat still runs in the Automations chat. A copy of its answer also goes to that Telegram chat. Since 16 October an automation made in the web app sends the same copy to the user's linked Telegram chat when the user switched on "Automation runs finish", which is off at first (section 10, "Notices on Telegram"). A pull-request review's copy follows its own switch, "Pull-request reviews finish", on at first, whatever chat it was first meant for. The automation's `copyTo` in the API says where the copies go now, by these rules:
 
 1. After the run, the worker finds the run's reply: the last message saved with the run's id that is not an approval's question. That is the agent's answer, or what the platform said instead (out of credits, the run failed).
 2. The copy is plain text, like everything sent to Telegram (section 10). Its first line names the automation, with ⏰ for a timer and ⚡ for an app event: "⏰ Daily open PRs and issues". Its last line says "To follow up, open the Automations chat in the Textcrew web app", with the address that opens it. While web chat is switched off, that line is left out.
@@ -1430,6 +1464,8 @@ The web app shows it pinned at the top of the chat list, apart from the dated li
 4. A copy is never part of the Telegram conversation's context. The router does not see it, and the recap a new engine gets leaves it out. The engine itself never had it: it only knows the turns it ran. So a later Telegram message is answered without the run in mind; the follow-up belongs in the Automations chat.
 5. Once per message: a message can be copied once. A job that runs again after the copy was made sends nothing more.
 6. No copy goes to a chat that is no longer linked to the user, that blocked the bot, or whose channel is switched off.
+
+An approval a run asks for is sent to Telegram too, like any approval (section 15).
 
 The notice "paused after 3 failures" is copied the same way. What the agent says after the user answers an approval that a run asked for stays in the Automations chat only: the user answered in the web app, where the follow-up is.
 
@@ -1506,7 +1542,7 @@ Only the user can switch it on, from the web app. No agent tool can set this mar
 - **One review per commit.** The row is unique per user, repository, pull request number and head commit. A webhook that arrives twice, or a reopen with no new commits, gives no second review. Two quick pushes give one review, of the newer commit.
 - A failed review is not repeated for that commit, because it may already have posted. A new commit gets a new review.
 
-**Example.** Rahul turns review on for `acme/website`. A teammate opens pull request 42. His Automations chat gets "PR 42: one bug in the date check, tests pass. Fix first.", and his Telegram a copy headed "⚡ Review pull requests in acme/website". He answers "fix it" in the Automations chat, and Byte pushes a fix to a branch.
+**Example.** Rahul turns review on for `acme/website`. A teammate opens pull request 42. His Automations chat gets "PR 42: one bug in the date check, tests pass. Fix first.", and his Telegram a copy headed "⚡ Review pull requests in acme/website" (while his "Pull-request reviews finish" switch is on, as it is at first). He answers "fix it" in the Automations chat, and Byte pushes a fix to a branch.
 
 ### The standing permission
 
@@ -1599,7 +1635,7 @@ The list of repositories comes from Composio's GitHub action for the signed-in a
 3. When the user's agent is free, the worker marks the job `running` and runs one turn with it. A job that runs again after a failure in the middle (the vm-manager restarted) goes on with the same delivery id, so the container never runs it twice. A job that is `done` or `failed` never runs again.
 4. The turn's message is written by the platform from the brief. The user's own words are quoted and marked as theirs. Nothing read from GitHub is in it, not even a pull request's title. The repository's code and files, its commit messages and every pull request's text are material to work on, never instructions, and the message says so.
 5. Tex hands the job to Patch or Byte. For a large change Tex may split a review into up to 3 Patch runs at the same time, each with some of the focus areas.
-6. Tex's final answer is the report. It goes to the chosen chat like any answer, and the platform also keeps it on the job. In web chat it goes to a conversation of its own, named after the job. On Telegram it goes to the chat's current conversation. A job started from chat answers in the conversation it was asked in.
+6. Tex's final answer is the report. It goes to the chosen chat like any answer, and the platform also keeps it on the job. In web chat it goes to a conversation of its own, named after the job. On Telegram it goes to the chat's current conversation. A job started from chat answers in the conversation it was asked in. A job asked anywhere but Telegram also sends a short notice to the linked Telegram chat, while the user's "Byte or Patch finishes a job" switch is on (it is at first; section 10, "Notices on Telegram"): "✅ Byte finished: Fix the login redirect in acme/web. Done. PR #43 opened. Tests passed." and "Report:" with the link to the conversation, or "❌ Patch couldn't finish: Review acme/web#42." with why, and "Details:" with the link. The short part comes from the report's verdict, its pull request and its tests; what the report doesn't say is left out. The notice goes once per job, before the job is marked finished, so a job that runs again neither loses it nor sends it twice.
 7. The job is marked `done` or `failed`. Right after, the backend asks the vm-manager to stop the container politely, so it sleeps now instead of after 3 idle minutes. The vm-manager refuses while a turn runs, a delivery is in flight or a Claude sign-in waits; then the idle stop does it later.
 
 **The report** has a fixed shape, so the user always finds the same things in the same place:
@@ -3209,7 +3245,7 @@ There are three databases: the backend's, the vm-manager's and LiteLLM's. Each p
 
 | Module | Table | What it holds |
 |---|---|---|
-| auth | `users` | One row per person: email, name, time zone and whether anyone set it, plan, role, whether an admin suspended the account (and since when), and the web app's two first-run marks: when the welcome steps were done and when the "Getting started" checklist was closed (section 6) |
+| auth | `users` | One row per person: email, name, time zone and whether anyone set it, plan, role, whether an admin suspended the account (and since when), and the web app's two first-run marks: when the welcome steps were done and when the "Getting started" checklist was closed (section 6), and the Telegram notice switches and quiet hours (section 10) |
 | auth | `link_codes` | One-time codes to link a chat app, stored as hashes, with an expiry |
 | auth | `channel_links` | Which chat belongs to which user |
 | auth | `waitlist_entries` | People waiting for access, with request details for abuse checks |

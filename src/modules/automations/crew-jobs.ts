@@ -25,7 +25,10 @@ import type { PrCommentTarget } from '../integrations/catalog.ts';
 import { sleepNow } from '../orchestrator/sandbox.ts';
 import { runTurn, type TurnOutcome } from '../orchestrator/turn.ts';
 import { IGNORED } from '../../worker/ignored.ts';
-import { crewJobs } from './schema.ts';
+import { approvals as approvalRows } from '../orchestrator/schema.ts';
+import { CREW_RERUN_ACTION, grantForCrewJob } from '../orchestrator/approval-kinds.ts';
+import { consumeApproval, getApproval, requestApproval } from '../orchestrator/approvals.ts';
+import { crewJobs, type CrewJobItem } from './schema.ts';
 
 export type CrewJob = typeof crewJobs.$inferSelect;
 export type CrewJobMember = CrewJob['member'];
@@ -227,6 +230,8 @@ export function toApiCrewJob(job: CrewJob) {
     report: job.report,
     error: job.error,
     conversationId: job.conversationId,
+    blocked: job.blocked.map(crewItemText),
+    rerunOf: job.rerunOf,
     createdAt: job.createdAt.toISOString(),
     startedAt: iso(job.startedAt),
     finishedAt: iso(job.finishedAt),
@@ -321,6 +326,8 @@ export async function createCrewJob(
     sessionKey: string;
     conversationId?: string | null;
     clientRequestId?: string | null;
+    /** A run again of an earlier job, with what the user approved for it. */
+    rerun?: { of: string; approved: CrewJobItem[] };
   },
 ): Promise<{ job: CrewJob; created: boolean }> {
   if (opts.clientRequestId) {
@@ -350,6 +357,7 @@ export async function createCrewJob(
       sessionKey: opts.sessionKey,
       conversationId: opts.conversationId ?? null,
       clientRequestId: opts.clientRequestId ?? null,
+      ...(opts.rerun ? { rerunOf: opts.rerun.of, approved: opts.rerun.approved } : {}),
       ...brief,
     })
     .onConflictDoNothing()
@@ -496,7 +504,7 @@ export function crewJobInstruction(job: CrewJob): string {
       job.finish === 'branch'
         ? 'push the new branch only. Do not open a pull request.'
         : `push the new branch and open a pull request from it into ${start}.`;
-    const branch = `crew/${job.id.slice(-8).toLowerCase()}`;
+    const branch = crewBranchName(job);
     out.push(
       `The user gave this job to Byte, the crew's coder, ${from}. Carry it out now, in this turn, and end with the report.`,
       '',
@@ -545,9 +553,16 @@ export function crewJobInstruction(job: CrewJob): string {
       ? '- Do not merge, approve, close or push. Patch never changes the code.'
       : '- Never push to the default branch, never force-push, and never merge, approve or close a pull request.',
     '- Post nothing else on GitHub than what this brief asks for.',
+    "- The brief is your user's yes for what it asks, nothing more. A command or a push it does not cover is refused (for example a push to a branch that already existed, a force push, or a command that reaches the internet). Go on without it and name it in the report under **Needs your OK**: your user can approve it after the job, and the job then runs again with it allowed.",
     '',
     ...(job.member === 'patch' ? PATCH_REPORT : BYTE_REPORT),
   );
+  if (job.approved.length)
+    out.push(
+      '',
+      `This job runs again: on its first run the brief did not cover the following, and your user has approved each of them since. Each one goes through once, made exactly as before:`,
+      ...job.approved.map((item) => `- ${crewItemText(item)}`),
+    );
   return out.join('\n');
 }
 
@@ -686,6 +701,10 @@ export async function handleCrewJob(job: Job): Promise<unknown> {
     });
     if (outcome === 'done') await finish(claimed, 'done');
     else await finish(claimed, 'failed', OUTCOME_ERRORS[outcome] ?? null);
+    // What the brief did not cover: the user is asked whether to run the job again with it allowed.
+    await offerCrewRerun(claimed.userId, claimed.id, conversationId ?? null).catch((err: unknown) =>
+      logger().warn({ userId: claimed.userId, err: String(err) }, 'crew job run-again not offered'),
+    );
     // The job's work is over: the container may go to sleep now rather than in 3 minutes. The
     // vm-manager refuses while anything else runs there.
     if (outcome === 'done' || outcome === 'error')
@@ -765,6 +784,162 @@ export async function releaseCrewJobComment(userId: string, jobId: string): Prom
     .update(crewJobs)
     .set({ postedAt: null })
     .where(and(eq(crewJobs.userId, userId), eq(crewJobs.id, jobId)));
+}
+
+// --- what the brief does not cover ---------------------------------------------------------------
+
+/** The branch a Byte job makes and pushes: the brief's yes covers pushing it, nothing else. */
+export function crewBranchName(job: Pick<CrewJob, 'id'>): string {
+  return `crew/${job.id.slice(-8).toLowerCase()}`;
+}
+
+/** One refused item as the user reads it. */
+export function crewItemText(item: CrewJobItem): string {
+  if (item.kind === 'git_push')
+    return item.force
+      ? `Force push to the branch "${item.branch}" of ${item.owner}/${item.repo}`
+      : `Push to the branch "${item.branch}" of ${item.owner}/${item.repo}, which already existed`;
+  const target = item.target.replace(/\s+/g, ' ').trim();
+  const short = target.length > 300 ? `${target.slice(0, 299)}…` : target;
+  if (item.tool === 'Bash') return `Run \`${short}\`${item.why ? ` (${item.why})` : ''}`;
+  return `${item.tool === 'Write' ? 'Write' : 'Change'} the file ${short}${item.why ? ` (${item.why})` : ''}`;
+}
+
+/** Items one job's run may keep: more are not listed (the job is plainly off its brief by then). */
+export const MAX_BLOCKED = 10;
+
+/** The gate: the running crew job of this user, if a crew job's turn is in progress. */
+export async function crewJobInProgress(userId: string): Promise<CrewJob | null> {
+  const [row] = await db()
+    .select()
+    .from(crewJobs)
+    .where(inProgress(userId))
+    .orderBy(desc(crewJobs.startedAt))
+    .limit(1);
+  return row ?? null;
+}
+
+/** The gate refused this during the job's run: kept on the job, once, at most MAX_BLOCKED. */
+export async function recordCrewJobBlocked(
+  userId: string,
+  jobId: string,
+  item: CrewJobItem,
+): Promise<void> {
+  const one = JSON.stringify([item]);
+  await db()
+    .update(crewJobs)
+    .set({ blocked: sql`${crewJobs.blocked} || ${one}::jsonb` })
+    .where(
+      and(
+        eq(crewJobs.userId, userId),
+        eq(crewJobs.id, jobId),
+        sql`not (${crewJobs.blocked} @> ${one}::jsonb)`,
+        sql`jsonb_array_length(${crewJobs.blocked}) < ${MAX_BLOCKED}`,
+      ),
+    );
+}
+
+/**
+ * After a job's run: when the gate refused anything the brief did not cover, the user is asked in
+ * the job's chat whether to run the job again with exactly those allowed (an approval with
+ * Approve and Deny). Safe to run again: one question per job.
+ */
+export async function offerCrewRerun(
+  userId: string,
+  jobId: string,
+  conversationId: string | null,
+): Promise<void> {
+  const job = await getCrewJob(userId, jobId);
+  if (!job || job.blocked.length === 0) return;
+  const [asked] = await db()
+    .select({ id: approvalRows.id })
+    .from(approvalRows)
+    .where(
+      and(
+        eq(approvalRows.userId, userId),
+        eq(approvalRows.action, CREW_RERUN_ACTION),
+        sql`${approvalRows.arguments}->>'crew_job_id' = ${job.id}`,
+      ),
+    );
+  if (asked) return;
+  const who = job.member === 'patch' ? 'Patch' : 'Byte';
+  await requestApproval({
+    userId,
+    sessionKey: job.sessionKey,
+    conversationId,
+    summary: `Run ${who}'s job "${jobTitle(job)}" again, with ${
+      job.blocked.length === 1 ? 'this' : `these ${job.blocked.length}`
+    } allowed: ${job.blocked.map(crewItemText).join('; ')}`,
+    action: CREW_RERUN_ACTION,
+    arguments: { crew_job_id: job.id },
+    details: { job: jobTitle(job), items: job.blocked.map(crewItemText) },
+  });
+}
+
+/**
+ * inbound/process-approval, for a "run the job again" approval (undefined for any other: the
+ * usual handler answers those). After the yes the job runs again as a new job with the same brief,
+ * and each item the earlier run was refused gets an approval of its own, usable once during the
+ * new run. After a no nothing happens. Safe to run again: the yes is used once.
+ */
+export async function handleCrewRerunAnswer(job: Job): Promise<unknown> {
+  const { approvalId, userId } = job.data as { approvalId?: string; userId?: string };
+  if (!approvalId || !userId) return undefined;
+  const a = await getApproval(userId, approvalId);
+  if (!a || a.action !== CREW_RERUN_ACTION) return undefined;
+  if (a.status !== 'approved') return IGNORED;
+  const earlierId = typeof a.arguments?.crew_job_id === 'string' ? a.arguments.crew_job_id : '';
+  const earlier = earlierId ? await getCrewJob(userId, earlierId) : undefined;
+  if (!earlier) return IGNORED;
+  const brief: CheckedBrief = {
+    member: earlier.member,
+    owner: earlier.owner,
+    repo: earlier.repo,
+    pullNumber: earlier.pullNumber,
+    branch: earlier.branch,
+    instructions: earlier.instructions,
+    focus: earlier.focus as FocusArea[],
+    acceptance: earlier.acceptance,
+    commands: earlier.commands,
+    finish: earlier.finish,
+    // The one review the brief allowed on the pull request: this run posts it only if the
+    // earlier one did not.
+    reportPullRequest:
+      earlier.member === 'byte'
+        ? earlier.reportPullRequest
+        : earlier.reportPullRequest && earlier.postedAt === null,
+    reportIssue: earlier.reportIssue,
+  };
+  let created: CrewJob;
+  try {
+    ({ job: created } = await createCrewJob(userId, brief, {
+      source: earlier.source,
+      sessionKey: earlier.sessionKey,
+      conversationId: earlier.conversationId,
+      // One new job per yes, however often this runs.
+      clientRequestId: `rerun:${a.id}`,
+      rerun: { of: earlier.id, approved: earlier.blocked },
+    }));
+  } catch (err) {
+    if (!(err instanceof CrewJobError)) throw err;
+    await queueOutbound({
+      userId,
+      sessionKey: earlier.sessionKey,
+      conversationId: earlier.conversationId,
+      text: `I couldn't run "${jobTitle(earlier)}" again: ${err.message}`,
+    });
+    return null;
+  }
+  await grantForCrewJob({
+    userId,
+    sessionKey: earlier.sessionKey,
+    crewJobId: created.id,
+    items: earlier.blocked,
+    summaryOf: crewItemText,
+    via: `crew_rerun:${a.id}`,
+  });
+  await consumeApproval(userId, a.id, CREW_RERUN_ACTION);
+  return null;
 }
 
 /** Account deletion: the user's crew jobs. */

@@ -11,6 +11,7 @@ import type { InboundMessage } from '../channels/types.ts';
 import { whileTyping } from '../channels/typing.ts';
 import { ingestEvent } from '../events/intake.ts';
 import { IGNORED } from '../../worker/ignored.ts';
+import { approvalKind, ownGoAhead } from './approval-kinds.ts';
 import { APPROVE_TITLE, approvalAskText, channelOfSession, DENY_TITLE } from './approval-text.ts';
 import { approvals } from './schema.ts';
 import { runTurn, turnMessageFields } from './turn.ts';
@@ -29,6 +30,8 @@ export const START_CREW_JOB_ACTION = 'TEXTCREW_START_CREW_JOB';
  * run_app_action runs exactly those: the agent does not send them again.
  */
 function goAhead(a: Approval): string {
+  const own = ownGoAhead(a);
+  if (own) return own;
   if (a.action === START_CREW_JOB_ACTION)
     return `Go ahead (call start_crew_job with approval_id "${a.id}").`;
   if (a.action && a.arguments)
@@ -42,6 +45,7 @@ function goAhead(a: Approval): string {
 export function toApiApproval(a: Approval) {
   return {
     id: a.id,
+    kind: approvalKind(a),
     status: a.status,
     summary: a.summary,
     app: a.app,
@@ -68,6 +72,8 @@ export async function requestApproval(input: {
   action?: string | null;
   arguments?: Record<string, unknown> | null;
   details?: Record<string, unknown> | null;
+  /** The conversation the question goes to (default: the turn's in progress in that chat). */
+  conversationId?: string | null;
 }): Promise<Approval> {
   const [row] = await db()
     .insert(approvals)
@@ -88,7 +94,9 @@ export async function requestApproval(input: {
     userId: input.userId,
     sessionKey: input.sessionKey,
     // Asked during a turn: the question belongs to that turn's conversation.
-    ...(await turnMessageFields(input.userId, input.sessionKey)),
+    ...(input.conversationId !== undefined
+      ? { conversationId: input.conversationId }
+      : await turnMessageFields(input.userId, input.sessionKey)),
     text: approvalAskText(a.summary, channelOfSession(input.sessionKey)),
     approvalId: a.id,
     template: 'approval',

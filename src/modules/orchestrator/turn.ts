@@ -258,6 +258,28 @@ export async function currentTurn(userId: string, sessionKey: string): Promise<C
   }
 }
 
+/**
+ * The user's turn in progress, in whichever chat: its chat and what it is. Null: no turn in
+ * progress, or not known. A container's call that needs the user's OK is asked in this chat.
+ */
+export async function turnInProgress(
+  userId: string,
+): Promise<{ sessionKey: string; kind: TurnKind | null } | null> {
+  try {
+    const raw = await redis().get(turnConversationKey(userId));
+    if (!raw) return null;
+    const record = JSON.parse(raw) as { sessionKey?: unknown; kind?: unknown };
+    if (typeof record.sessionKey !== 'string' || !record.sessionKey) return null;
+    return {
+      sessionKey: record.sessionKey,
+      kind: typeof record.kind === 'string' ? (record.kind as TurnKind) : null,
+    };
+  } catch (err) {
+    logger().warn({ userId, err: String(err) }, 'turn in progress not readable');
+    return null;
+  }
+}
+
 /** The kinds of turn that are an automation's run: a timer's, and an app event's. */
 const AUTOMATION_RUNS: ReadonlySet<string> = new Set<TurnKind>(['automation', 'app_event']);
 

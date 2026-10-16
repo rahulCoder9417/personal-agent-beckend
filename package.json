@@ -24,7 +24,8 @@
     "openapi:sync": "node scripts/openapi-sync.mjs",
     "proto:gen": "buf generate ../vm-manager/proto --template buf.gen.yaml",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx scripts/migrate.ts"
+    "db:migrate": "tsx scripts/migrate.ts",
+    "polar:check": "tsx scripts/polar-check.ts"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.15.0",

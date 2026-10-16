@@ -1,5 +1,6 @@
 import {
   cancelSubscription,
+  openBillingPortal,
   resumeSubscription,
   startCheckout,
 } from '../../modules/billing/polar.ts';
@@ -32,6 +33,9 @@ export const billingRoutes = [
     );
     return c.json({ checkoutUrl, discountApplied }, 200);
   }),
+
+  // Polar's customer portal: card, invoices, receipts. Changes there come back as webhooks.
+  route('openBillingPortal', async (c) => c.json(await openBillingPortal(c.get('user')), 200)),
 
   route('cancelSubscription', async (c) => {
     const user = c.get('user');

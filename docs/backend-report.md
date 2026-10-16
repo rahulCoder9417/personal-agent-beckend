@@ -2298,7 +2298,9 @@ The ways to move:
 
 Polar is the payment company. It shows the payment page, charges the card, runs the monthly subscription and tells the backend what happened. This section follows a payment from the click to the credits.
 
-The backend needs these settings: `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET`, `POLAR_SERVER`, one product id each for Pro, Max and the top-up, and `POLAR_WAITLIST_DISCOUNT_ID`. `POLAR_SERVER` is "sandbox" by default, which is Polar's test system. Without the product ids a checkout fails. Without the webhook secret every webhook is refused. `AUTO_TOPUP_ENABLED` switches auto top-up on (off by default, see "Auto top-up" below).
+The backend needs these settings: `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET`, `POLAR_SERVER`, one product id each for Pro, Max and the top-up, and `POLAR_WAITLIST_DISCOUNT_ID`. `POLAR_SERVER` is "sandbox" by default, which is Polar's test system. Without the token, a checkout and the billing page answer "payments are not set up yet" (503) and nothing is started. Without the product ids a checkout fails. Without the webhook secret every webhook is refused. `AUTO_TOPUP_ENABLED` switches auto top-up on (off by default, see "Auto top-up" below).
+
+Every call to Polar names the API version we are written against, `2026-10`, so a newer Polar version cannot change what we get back. The webhook endpoint in Polar's dashboard must be set to the same version.
 
 ### Checkout
 
@@ -2306,7 +2308,7 @@ The backend needs these settings: `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET`, 
 2. The web app asks the api for a checkout (`/v1/billing/checkout`). The api is the process that answers the web app.
 3. The api checks the rules. Free needs no checkout. A user whose plan is set to renew cannot buy a plan, and is told to cancel first. A top-up needs a paid plan, and a Free user is told to upgrade or redeem a coupon.
 4. For a plan, the api checks the waitlist offer (below).
-5. The api asks Polar for a checkout. It sends the product, our user id, the user's email and name, and the discount if there is one. Typing a discount code on Polar's page is switched off.
+5. The api asks Polar for a checkout. It sends the product, our user id, the user's email and name, and the discount if there is one. Typing a discount code on Polar's page is switched off. Free trials are switched off too, so a trial set on a product by mistake in Polar's dashboard can never start a plan, and its credits, without a payment. Polar's page gets a back link to Pricing.
 6. Polar answers with the address of its payment page. The web app sends the user there.
 7. The user pays. Polar sends them back to the web app's billing page.
 
@@ -2320,7 +2322,7 @@ At this point nothing has changed in our database. Only Polar's webhook changes 
 2. The api checks the signature with the webhook secret. A wrong signature is refused.
 3. The api saves the event in the events table. Polar's webhook id is the unique key.
 4. The api adds a job to the system queue and answers 200. It does no other work.
-5. The worker runs the job. It finds the user from our user id, which Polar sends back, and acts by the type of event.
+5. The worker runs the job. It finds the user from our user id, which Polar sends back, and acts by the type of event. Polar sends our user id in two places: as the customer's "external id" and in the checkout's own notes (metadata). A live account wins over a deleted one. This matters for someone who deleted their account and signed up again with the same email: Polar can link the new payment to their old customer, whose external id is the deleted account, while the notes name the new one.
 
 | Event | What the backend does |
 |---|---|
@@ -2332,6 +2334,8 @@ At this point nothing has changed in our database. Only Polar's webhook changes 
 | `subscription.uncanceled` | Marks the plan as active again |
 | `subscription.past_due` | Marks the payment as late. The plan stays |
 | `subscription.revoked` | Ends the plan now. The user goes to Free |
+| `subscription.paused` | Ends the plan now, as revoked does. The user goes to Free. Credits keep their 90 days |
+| `subscription.resumed` | Nothing by itself. A resume starts a new month with a payment, and that payment's `order.paid` brings the plan back with the month's credits |
 | `refund.created`, `refund.updated` | Once the refund has succeeded, takes credits back |
 | Any other event | Saved and ignored |
 
@@ -2354,6 +2358,22 @@ Credits already granted keep their 90 days. Deleting an account also cancels the
 3. It marks the plan as active at once, as Cancel marks it cancelled at once. Polar's `subscription.uncanceled` then says the same.
 
 Nothing is charged at that moment and no credits are given. The next renewal charges and gives the month's credits as usual. While a cancelled plan still runs, a checkout for the same plan is refused, so nobody pays for a second month beside the first.
+
+### The billing page (Polar's customer portal)
+
+Polar has a page of its own where a customer changes their card and downloads invoices and receipts. In the web app, Pricing has a button for it: **Invoices and card**, or **Update card** after a failed payment.
+
+1. The web app asks the api for a link (`/v1/billing/portal`).
+2. The api asks Polar for a signed-in link for this user, found by our user id. The link has a back button to the web app.
+3. The web app sends the browser there.
+
+Someone who never bought anything has no customer at Polar, and is told so (409). If Polar does not answer, the user is told to try again (503). Whatever the user changes on Polar's page reaches the backend only through Polar's webhooks, as for every other change. A new card after a failed payment makes Polar try the payment again at once.
+
+Polar's portal settings decide what else the customer may do there (Polar dashboard → Settings → Customer portal). Pausing is switched off in our account. If it were switched on, a pause would end the plan at once and a paid resume would bring it back (the table above).
+
+### Failed payments
+
+When a renewal payment fails, the subscription becomes "past due". Polar emails the customer and tries again after 2, 7, 14 and 21 days. The plan stays during that time, but no month's credits are given until a payment goes through. If every try fails, Polar ends the subscription (`subscription.revoked`) and the user goes to Free.
 
 ### Auto top-up
 
@@ -2412,7 +2432,7 @@ A refund is made in Polar. The backend acts when the refund has succeeded.
 
 Example: a user bought a top-up of 800 credits for $10. $5 is refunded. 400 credits are taken back. A full refund takes back 800. Amounts are compared without tax and after discounts. A refund does not change the plan.
 
-A chargeback is a payment the cardholder disputes with their bank. Polar sends no event for a dispute. Often Polar refunds a disputed payment itself and marks that refund as dispute prevention. Then the backend takes back all credits bought with that order and flags the account. The flag is a mark on the user's record. Nothing else reads it yet. A dispute that Polar does not refund shows only in Polar's dashboard. Then an admin takes the credits back by hand.
+A chargeback is a payment the cardholder disputes with their bank. Polar sends no event for a dispute. Often Polar refunds a disputed payment itself and marks that refund as dispute prevention. Polar may do this within 60 days of a payment, whatever our refund policy says. It then also ends the subscription, and its `subscription.revoked` moves the user to Free. Then the backend takes back all credits bought with that order and flags the account. The flag is a mark on the user's record. Nothing else reads it yet. A dispute that Polar does not refund shows only in Polar's dashboard. Then an admin takes the credits back by hand.
 
 ### The waitlist offer
 
@@ -2440,6 +2460,23 @@ The offer is marked as used when the subscription becomes active, not at checkou
 - **The job fails.** It is retried, 5 tries in all. Then it shows on the failed jobs board.
 - **Polar does not answer at checkout, at cancel or at "Keep my plan".** The user gets an error. Nothing was changed.
 - **The user or the product cannot be matched.** The event is logged as a warning and ignored.
+
+### Moving from Polar's sandbox to real money
+
+Polar's sandbox and its real system are two separate worlds. Each has its own access token, its own products and discount, and its own webhook endpoint with its own secret. So the switch is a set of settings, all changed together: `POLAR_SERVER=production`, and the six other `POLAR_*` lines with the real system's values. No code changes.
+
+The access token needs these permissions (Polar calls them scopes): `checkouts:write`, `customer_sessions:write`, `subscriptions:write`, `orders:read`, `orders:write`, `customers:read`, `products:read`, `discounts:read` and `webhooks:read`.
+
+Before taking payments, a read-only check compares Polar's setup with our plans: `node --import tsx scripts/polar-check.ts` inside the api container (`pnpm polar:check` on the laptop). It prints one line per item, OK or what to fix, and never prints a secret:
+
+| Line | What it checks |
+|---|---|
+| Server | Which Polar system is in use, and the API version |
+| Access token | That it is set (every line below also proves it works) |
+| Pro product, Max product | A monthly subscription, not archived, no free trial, one fixed price in US dollars that matches our plan ($12, $30) |
+| Top-up product | A one-time purchase of $10 |
+| Waitlist discount | 50% off, once, no code anyone could type, on Pro and Max and not on the top-up. Not set means the waitlist offer is off |
+| Webhook endpoint | One endpoint for `<PUBLIC_API_URL>/webhooks/polar`, switched on, format "raw", API version `2026-10`, with every event in the table above |
 
 ## 29. Coupon codes
 

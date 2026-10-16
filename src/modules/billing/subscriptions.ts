@@ -82,6 +82,8 @@ export async function upsertSubscriptionInTx(
     status: SubscriptionStatus;
     periodStart?: Date | null;
     periodEnd?: Date | null;
+    /** Only `null`, to bring back a paused subscription that was resumed and paid. */
+    endedAt?: null;
   },
 ): Promise<Subscription> {
   const now = new Date();
@@ -91,6 +93,7 @@ export async function upsertSubscriptionInTx(
     updatedAt: now,
     ...(input.periodStart !== undefined ? { periodStart: input.periodStart } : {}),
     ...(input.periodEnd !== undefined ? { periodEnd: input.periodEnd } : {}),
+    ...(input.endedAt === null ? { endedAt: null } : {}),
   };
   const [row] = await tx
     .insert(subscriptions)

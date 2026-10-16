@@ -374,7 +374,8 @@ describe('checkout + cancel', () => {
       productId: PRODUCTS.pro,
       externalCustomerId: u.id,
       customerEmail: u.email,
-      successUrl: 'http://web.test/billing?checkout=done',
+      successUrl: 'http://web.test/billing?checkout=done&checkout_id={CHECKOUT_ID}',
+      returnUrl: 'http://web.test/pricing',
       metadata: { user_id: u.id, kind: 'plan', plan_id: 'pro' },
     });
     expect(sent.discountId).toBeUndefined();

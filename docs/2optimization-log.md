@@ -48,6 +48,42 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 16 October 2026: Polar ready for real money, and Polar's account review prepared
+
+- **Where it is:** on the branches `feat/polar-production` (backend), `feat/polar-portal` (web app), `feat/polar-review` and `legal/google-limited-use-and-terms` (landing page). Not on `main`, not on the server.
+- **Why:** you asked for a proper Polar integration and for Polar's account review to be sent. Payments had only ever run in tests. Checked against Polar's documentation of 16 October (API version 2026-10, webhook events, signatures, refunds, failed payments, the customer portal, the account review and the acceptable use policy).
+- **What was found:**
+  - The integration was sound: the signature check (both kinds of Polar secret), the event saved once, credits from "order paid" given once, renewals only after payment, refunds and Polar's own anti-chargeback refunds, the waitlist discount, and our user id as Polar's customer id.
+  - Missing: a way to Polar's billing page (card, invoices, receipts), so a user whose payment failed had no way to fix the card from the app; handling of a paused subscription (Polar has pausing; a paused plan stayed on); a guard against a free trial set on a product in Polar's dashboard; a clear answer when the server has no Polar token; and any check that Polar's real products match our prices.
+  - In Polar's real account (`text-crew`): identity, payout account, description, website and support email are done; "Set up checkout" is not (no token, no webhook), so "Submit for review" cannot be pressed yet. The only product is "Text crew Pro Plan" at $6 a month (our Pro is $12; $6 is the waitlist's first month). There is no Max, no top-up and no discount. The description there is generic: it doesn't name Textcrew or its prices, and mentions a mobile app we don't have.
+  - On the website: no contact email anywhere, no word on who handles payments or tax, the terms page not published, and no refund policy.
+- **What the user notices:** Pricing has **Invoices and card**, which opens Polar's billing page; after a failed payment it reads **Update card**. The website shows `support@textcrew.in`, says payments go through Polar, that prices are in dollars with tax by country, and how to cancel.
+- **Backend:**
+  - `POST /v1/billing/portal` gives a signed-in link to Polar's billing page with a way back; 409 for someone who never bought anything, 503 when Polar does not answer.
+  - A checkout or the billing page on a server with no Polar token says "payments are not set up yet" (503) instead of failing.
+  - Checkouts switch free trials off, carry a back link to Pricing and pass the checkout's id back to the billing page.
+  - `subscription.paused` ends the plan at once (Free); the paid month after `subscription.resumed` brings it back with its credits. A revoked plan is never brought back by a late event.
+  - A payment is matched to a live account before a deleted one (someone who signed up again with the same email).
+  - `polar-check`: a read-only check of the token, the three products and prices, the discount and the webhook endpoint against our plans. It prints no secret.
+  - The switch from sandbox to real money is settings only; `.env.example` lists the token's scopes and the endpoint's settings.
+- **Cost and speed:** none. One call to Polar when someone opens the billing page.
+- **Contracts:** `openapi.yaml` has the new `POST /v1/billing/portal` and a 503 on the checkout. The web app follows on its branch.
+- **Database:** none.
+- **How it was checked:** the Polar tests: the billing page (link, 409, 503, 401), what the real HTTP client sends (version header, our user id, no trial, back link, `api.polar.sh` when the setting says production), a pause and a paid resume, a late event after a revoke, the deleted account, and the check (all OK, a wrong price, a missing event, a wrong discount, a price in two currencies, no token). Lint, types and the OpenAPI check pass. The full suite: 1,154 of 1,154 before the rebase on `main`; after it, 1,158 of 1,160, the two failures in `browser.test.ts` and `turn-billing.test.ts`, which this work does not touch and which pass when run alone (the known slowness under load). The web app: a click-through test of the button on a paid plan, after a failed payment, on Free and when Polar does not answer; lint, types, all tests and the build. The landing page: lint and build. Nothing has run against Polar's real system: there is no token there.
+- **Still open:**
+  - Your steps in Polar, the decisions (refund policy, the struck-out prices, moving between Pro and Max) and the terms page's blanks: `hld-mvp.md` section 12.
+  - For "Describe what you sell" in the review, this text (from the website and these docs):
+
+    > Textcrew (textcrew.in) is a personal AI assistant that people text from Telegram or the web app (app.textcrew.in). Each user gets their own agent, Tex, in a private, isolated workspace. Tex answers and does work in the apps the user connects (Gmail, Google Calendar, Notion, Slack, GitHub and others, each through its own sign-in), and hands parts of a job to specialists: Scout for web research and browsing, Byte for code changes delivered as GitHub pull requests, Patch for pull-request reviews. Anything that sends to other people, deletes or spends money waits for the user's approval. Users can also set up scheduled automations, such as a morning email summary.
+    >
+    > It is for individuals (founders, developers, busy professionals) who want an assistant that acts in their own accounts. Adults only. It is not a companion or relationship bot, does not generate images, video or voice, and does no outreach or bulk messaging: it only acts for the account owner, in their own apps.
+    >
+    > Pricing, in US dollars, paid through Polar: Free at $0 with 100 credits at sign-up; Pro at $12 a month with 1,500 credits a month; Max at $30 a month with 4,500 credits a month, browser use and the user's own MCP servers; a top-up of $10 for 800 credits on Pro and Max. Credits pay for the agent's running time, app actions and the built-in AI, and each lasts 90 days. Waitlist members get 50% off their first month. Access is automatic: our backend changes the plan and adds the credits as soon as Polar's webhook confirms the payment. Plans can be cancelled any time in the app and run to the end of the paid month.
+
+    "What are you selling": Software / SaaS. "Pricing model": Subscription, and One-time purchase for the top-up.
+- **Docs updated:** `hld-mvp.md` sections 7 ("Invoices, the card, and a failed payment"), 12 (built list, decisions, "Also waiting on you") and 13; `backend-report.md` section 28 (settings, checkout, which account, events, the billing page, failed payments, chargebacks, moving to real money).
+- **Commits:** backend `6f0ea19` (contract), `0d929d7` (billing), then this docs commit. Web app `8668369`, `09b7cd9`. Landing page `39e52fe` (`feat/polar-review`) and `1fd5b30` (terms, on `legal/google-limited-use-and-terms`). The scratchpad script that puts the Polar settings on the server is not in a repo.
+
 ### 16 October 2026: small items from the hand-off (flaky tests, reminders, Hermes's crew, the live stream, Neon docs)
 
 - **Where it is:** on the branches `fix/small-items-oct16` (backend), `fix/hermes-crew-model` (vm-manager) and `feat/stream-replay` (web app), pushed, not on `main` yet. Not on the test server.

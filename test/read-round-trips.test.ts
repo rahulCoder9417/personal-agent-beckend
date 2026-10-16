@@ -131,7 +131,8 @@ afterAll(async () => {
  * Each endpoint alone, the pool warm: [path, the most queries it may make]. Who is signed in comes
  * from the user's copy in Redis (no query); the queries listed run at the same time where there
  * are several (the messages: the list, the conversation check and the chat's start; the apps: the
- * connections and the server's app setups).
+ * connections and the server's app setups; the automations: the list and the linked chats, for
+ * where each one's copies go).
  */
 const ENDPOINTS: Array<[string, number]> = [
   ['/v1/me', 1],
@@ -144,7 +145,7 @@ const ENDPOINTS: Array<[string, number]> = [
   ['/v1/conversations?limit=1&kind=automations', 1],
   ['/v1/messages?limit=30&conversationId=:conversation', 3],
   ['/v1/activity?limit=30', 1],
-  ['/v1/automations', 1],
+  ['/v1/automations', 2],
   ['/v1/agent/settings', 2],
   ['/v1/apps', 2],
   ['/v1/credits', 1],

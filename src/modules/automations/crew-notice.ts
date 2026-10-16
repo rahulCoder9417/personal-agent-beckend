@@ -68,7 +68,7 @@ export function crewNoticeText(input: {
 
 /**
  * Tells the user on Telegram that the job ended (`failure`: why it failed, null when it finished),
- * when it was asked anywhere but Telegram, their "crew jobs finish" switch is on and Telegram is
+ * when it was asked anywhere but Telegram, their "Byte or Patch finishes a job" switch (`crewJobs`) is on and Telegram is
  * linked. Once per job, also when its queue job runs again.
  */
 export async function noticeCrewJob(

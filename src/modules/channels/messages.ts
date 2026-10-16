@@ -25,6 +25,8 @@ export function toApiMessage(m: MessageRow) {
     attachments: (m.mediaRef ?? []).map((a) => ({ id: a.id, name: a.name, mimeType: a.mimeType })),
     status: m.status,
     approvalId: m.approvalId,
+    // Only the web app's own messages have one: it matches its optimistic bubble to the saved one.
+    ...(m.clientMessageId ? { clientMessageId: m.clientMessageId } : {}),
     createdAt: m.createdAt.toISOString(),
   };
 }

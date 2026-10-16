@@ -220,7 +220,7 @@ const RESET_WORDS: Record<Resettable, string> = {
 
 /**
  * Puts the chosen settings back to their defaults with the orchestrator's own functions: the
- * engine to Hermes, Claude Code's model and effort to Default (its own choice), and Scout's
+ * engine to Hermes, Claude Code's model and effort to Default (Sonnet 5.5, quick), and Scout's
  * browser switch to what the plan and the deployment say. The settings change is logged as the
  * admin's; the reset itself is audited with the admin's id and the reason. If the browser switch
  * can't be sent, the rest is kept and the call answers 503.

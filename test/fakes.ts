@@ -135,7 +135,16 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
     onWake: undefined as ((req: { userId: string }) => Promise<void>) | undefined,
     /** The Bridge's stage-times report on the turn's last event (`timings_json`). */
     bridgeTimings: '',
+    /**
+     * Containers that sleep and wake like real ones: a wake of a sleeping container takes
+     * `coldWakeMs` and says so (`was_stopped`, its WakeTimings); a wake of an awake one is at once,
+     * and GetSandbox tells the two apart. Put one to sleep with `asleep(userId)`. Null (the
+     * default): every wake answers as `wasStopped` and `wakeTimings` say, and GetSandbox says awake.
+     */
+    sleepModel: null as { coldWakeMs: number } | null,
   };
+  /** Containers awake under `sleepModel`. */
+  const awake = new Set<string>();
   // Agent runtime + the in-container Claude Code sign-in (the code Anthropic shows the user).
   const runtimes = new Map<string, AgentRuntime>();
   const claudeConnected = new Set<string>();
@@ -180,6 +189,27 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
       wakePriorities.push({ userId: req.userId, priority: req.priority });
       if (state.onWake) await state.onWake(req);
       if (state.wakeError) throw state.wakeError;
+      const sleep = state.sleepModel;
+      if (sleep) {
+        const cold = !awake.has(req.userId);
+        if (cold) {
+          awake.add(req.userId);
+          await new Promise((r) => setTimeout(r, sleep.coldWakeMs));
+        }
+        const ms = BigInt(cold ? sleep.coldWakeMs : 0);
+        return {
+          sandbox: sandboxView(req.userId, SandboxState.AWAKE),
+          wasStopped: cold,
+          timings: {
+            lockWaitMs: 0n,
+            capacityWaitMs: 0n,
+            evicted: false,
+            recreated: false,
+            containerStartMs: ms / 2n,
+            bridgeReadyMs: ms - ms / 2n,
+          },
+        };
+      }
       return {
         sandbox: sandboxView(req.userId, SandboxState.AWAKE),
         wasStopped: state.wasStopped,
@@ -252,7 +282,9 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
       return {
         ...sandboxView(
           req.userId,
-          tokens.has(req.userId) ? SandboxState.AWAKE : SandboxState.STOPPED,
+          (state.sleepModel ? awake.has(req.userId) : tokens.has(req.userId))
+            ? SandboxState.AWAKE
+            : SandboxState.STOPPED,
         ),
         lastActiveAtUnixMs: BigInt(Date.now()),
       };
@@ -338,6 +370,8 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
     logouts,
     browser,
     browserCalls,
+    /** Under `sleepModel`: the container goes to sleep (its idle stop). */
+    asleep: (userId: string) => void awake.delete(userId),
   };
 }
 

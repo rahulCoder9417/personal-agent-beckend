@@ -207,6 +207,11 @@ paths:
 
         Every message carries its `conversationId`.
 
+        A copy sent to a chat app of something kept in the web app (an automation's question or
+        answer, a crew job's notice, sent to Telegram) is never listed: the web app shows the
+        message it copies, in the conversation that keeps it (the Automations chat for an
+        automation's), and the copy lives only in the chat app.
+
         `chatStartedAt` is kept for older clients: when the web chat's newest conversation started,
         or null if the user never started a new chat in web chat.
       parameters:
@@ -310,7 +315,9 @@ paths:
 
         Without `channel`, every channel's conversations are listed. Web conversations can be
         opened and written in; Telegram conversations are listed for reading only (Telegram always
-        writes in its chat's latest one, and `/new` there starts a new one).
+        writes in its chat's latest one, and `/new` there starts a new one). A Telegram
+        conversation with nothing said in it yet (no message from the user or the agent there) is
+        left out until something is.
 
         Every run of every automation answers in one conversation of its own, the Automations chat
         (`kind: automations`, at most one per user). `kind=chat` leaves it out of the list, and

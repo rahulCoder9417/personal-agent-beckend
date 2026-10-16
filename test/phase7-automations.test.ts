@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Worker } from 'bullmq';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DeliverEventType, DeliverKind } from '../proto-gen/vm/v1/vm_pb.ts';
 import { automations } from '../src/modules/automations/schema.ts';
@@ -106,14 +106,20 @@ async function linkedUser(plan: 'free' | 'pro' | 'max' = 'pro') {
 const fired = (title: string) =>
   tg.sent.filter((m) => m.text.includes('\n\nAUTO: ') && m.text.includes(title));
 
-/** What the user's Automations chat holds. */
+/** What the user's Automations chat holds (a copy sent to Telegram is kept there, not shown). */
 async function automationsChatTexts(userId: string): Promise<string[]> {
   const chat = await findAutomationsChat(userId);
   if (!chat) return [];
   const rows = await db()
     .select()
     .from(messages)
-    .where(and(eq(messages.userId, userId), eq(messages.conversationId, chat.id)))
+    .where(
+      and(
+        eq(messages.userId, userId),
+        eq(messages.conversationId, chat.id),
+        isNull(messages.copyOf),
+      ),
+    )
     .orderBy(messages.id);
   return rows.map((m) => m.text);
 }

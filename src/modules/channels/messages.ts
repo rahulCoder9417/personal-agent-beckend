@@ -177,7 +177,8 @@ export async function setMessageStatus(
     .set({ status, ...(externalId ? { externalId } : {}) })
     .where(eq(messages.id, id))
     .returning();
-  if (row) await publish(row.userId, 'message.status', toApiMessage(row));
+  // A copy sent to a chat app is not in the web app (listMessages), so it is not told about it.
+  if (row && !row.copyOf) await publish(row.userId, 'message.status', toApiMessage(row));
   return row;
 }
 
@@ -210,7 +211,8 @@ export async function setStatusByExternalId(
       ),
     )
     .returning();
-  for (const row of rows) await publish(row.userId, 'message.status', toApiMessage(row));
+  for (const row of rows)
+    if (!row.copyOf) await publish(row.userId, 'message.status', toApiMessage(row));
   return rows;
 }
 
@@ -371,12 +373,15 @@ export async function recentInboundTexts(
   return rows.map((r) => r.text).filter(Boolean);
 }
 
-/** The user's messages, newest first: all of them, or one channel's, or one conversation's. */
+/**
+ * The user's messages, newest first: all of them, or one channel's, or one conversation's. A copy
+ * sent to a chat app is left out: the message it copies is listed where it is kept.
+ */
 export async function listMessages(
   userId: string,
   opts: { cursor?: string; limit: number; channel?: Channel; conversationId?: string },
 ) {
-  const where = [eq(messages.userId, userId)];
+  const where = [eq(messages.userId, userId), isNull(messages.copyOf)];
   if (opts.cursor) where.push(lt(messages.id, opts.cursor));
   if (opts.channel) where.push(eq(messages.channel, opts.channel));
   if (opts.conversationId) where.push(eq(messages.conversationId, opts.conversationId));

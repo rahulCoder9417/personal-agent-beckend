@@ -151,9 +151,10 @@ export function copyText(
 
 /**
  * A copy of `message`, which is kept in the Automations chat, is sent to the chat app the user's
- * settings name (copyRules) as well, as plain text. It is saved in that chat's current conversation, to be shown there, marked
- * as a copy: it never becomes part of the agent's context in that chat. Once per message, so a job
- * that runs again sends no second copy.
+ * settings name (copyRules) as well, as plain text. The copy is kept beside the message, in the
+ * Automations chat (outbound.ts, `copyOf`): it starts no conversation in that chat app, is not
+ * shown twice in the web app, and never becomes part of the agent's context. Once per message, so
+ * a job that runs again sends no second copy.
  */
 async function copyToChat(
   a: Automation,

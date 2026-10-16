@@ -82,6 +82,7 @@ export async function noticeCrewJob(
     userId: job.userId,
     kind: 'crew_job',
     key: `notice:crew_job:${job.id}`,
+    conversationId,
     text: crewNoticeText({
       member: job.member,
       title,

@@ -6,7 +6,7 @@ import { newId } from '../../shared/ids.ts';
 import { audit } from '../admin/audit.ts';
 import { conversationOfApproval } from '../channels/messages.ts';
 import { copyApprovalQuestion, settleApprovalMessages } from '../channels/notify.ts';
-import { queueOutbound } from '../channels/outbound.ts';
+import { queueOutbound, queueRawOutbound } from '../channels/outbound.ts';
 import { publish } from '../channels/stream.ts';
 import type { InboundMessage } from '../channels/types.ts';
 import { whileTyping } from '../channels/typing.ts';
@@ -271,9 +271,14 @@ const NO = /^\s*(no|n|reject|rejected|deny|❌|👎)\s*[.!]*\s*$/i;
 
 /**
  * Inbound hook: a tapped approval button (`apr:<id>:yes|no`), or on channels without buttons
- * a plain "yes"/"no" answering the latest pending approval in that chat.
+ * a plain "yes"/"no" answering the latest pending approval in that chat. `eventId`: the inbound
+ * event, which names the one "already answered" reply (a job that runs again sends no second).
  */
-export async function handleApprovalReply(userId: string, msg: InboundMessage): Promise<boolean> {
+export async function handleApprovalReply(
+  userId: string,
+  msg: InboundMessage,
+  eventId?: string,
+): Promise<boolean> {
   let id: string | undefined;
   let approve: boolean | undefined;
   const data = msg.buttonReply?.data;
@@ -313,13 +318,16 @@ export async function handleApprovalReply(userId: string, msg: InboundMessage): 
     );
   } catch {
     const replaced = (await getApproval(userId, id!))?.status === 'replaced';
-    await queueOutbound({
-      userId,
-      sessionKey: `${msg.channel}:${msg.externalChatId}`,
-      text: replaced
+    // Sent, not saved: like the tap or the "yes" it answers, it is part of no conversation, so it
+    // never starts one in that chat (the tap may be on an automation's copy, kept in the web app).
+    await queueRawOutbound(
+      msg.channel,
+      msg.externalChatId,
+      replaced
         ? 'That request was replaced by a newer one. Please answer the newest request.'
         : 'That approval was already answered or has expired.',
-    });
+      `apr-late-${eventId ?? msg.buttonReply?.callbackId ?? msg.externalMessageId}`,
+    );
   }
   return true;
 }

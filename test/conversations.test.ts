@@ -818,8 +818,13 @@ describe('PATCH /v1/conversations/{id}', () => {
     await fromTelegram(chatId, 'hello from Telegram');
     await waitFor(async () => tg.sent.find((m) => m.text === 're: hello from Telegram'));
     await fromTelegram(chatId, '/new');
-    const [, earlier] = await conversationList(user, '?channel=telegram');
+    // The new Telegram conversation is not listed while nothing is said in it.
+    await waitFor(
+      async () => (await conversationList(user, '?channel=telegram'))[0]?.active === false,
+    );
+    const [earlier, ...none] = await conversationList(user, '?channel=telegram');
     expect(earlier).toMatchObject({ epoch: 0, active: false });
+    expect(none).toEqual([]);
     const refused = await expectContract<ApiError>(
       'updateConversation',
       await patchConversation(user, earlier!.id, { active: true }),
@@ -827,7 +832,6 @@ describe('PATCH /v1/conversations/{id}', () => {
     );
     expect(refused.error.code).toBe('conflict');
     expect((await conversationList(user, '?channel=telegram')).map((c) => c.active)).toEqual([
-      true,
       false,
     ]);
     // It can be renamed, though.

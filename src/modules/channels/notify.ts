@@ -75,15 +75,17 @@ export function conversationLink(conversationId: string | null | undefined): str
 /**
  * Sends a notice of this kind to the user's Telegram chat, when they want it and Telegram is
  * linked. `key` names what it is about (a message's id, or a key of the notice's own): one notice
- * per key, so a job that runs again sends no second one. The notice is shown in the Telegram
- * conversation but is not part of its context. Returns the saved message, or null when nothing
- * was sent.
+ * per key, so a job that runs again sends no second one. The notice is a copy (outbound.ts,
+ * `copyOf`): it is kept beside the work it is about (`conversationId`, the conversation it links
+ * to), so it starts no conversation on Telegram and is not shown in the web app. Returns the
+ * saved message, or null when nothing was sent.
  */
 export async function sendTelegramNotice(input: {
   userId: string;
   kind: NoticeKind;
   text: string;
   key: string;
+  conversationId?: string | null;
 }): Promise<MessageRow | null> {
   const target = await noticeTarget(input.userId, input.kind);
   if (!target) return null;
@@ -92,6 +94,7 @@ export async function sendTelegramNotice(input: {
     sessionKey: target,
     text: input.text,
     copyOf: input.key,
+    conversationId: input.conversationId ?? null,
   });
 }
 
@@ -146,7 +149,9 @@ export const ASKED_BY_AUTOMATION =
  * `automationId` (null: the user's own chat asked). Only an automation's question goes to Telegram
  * too, with the same buttons, while the user's "An automation needs my OK" switch is on and
  * Telegram is linked. One asked in the web app stays there; one asked on Telegram is there
- * already. Once per question. Returns the copy, or null when none was sent.
+ * already. Once per question. The copy is kept beside the question (in the Automations chat), so
+ * it lands in the user's Telegram chat without starting or filling a conversation there that the
+ * web app would list. Returns the copy, or null when none was sent.
  */
 export async function copyApprovalQuestion(
   userId: string,

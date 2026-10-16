@@ -553,12 +553,12 @@ What the web app calls:
 
 | Call | What it does |
 |---|---|
-| `GET /v1/conversations` | Lists the user's conversations, the one with the newest message first. `channel` narrows it to web or Telegram. `kind=automations` gives only the Automations chat, `kind=chat` everything else, so the web app can pin it apart. Pages of 30 |
+| `GET /v1/conversations` | Lists the user's conversations, the one with the newest message first. `channel` narrows it to web or Telegram. `kind=automations` gives only the Automations chat, `kind=chat` everything else, so the web app can pin it apart. A Telegram conversation with nothing said in it yet is left out (below). Pages of 30 |
 | `POST /v1/conversations` | Starts a new web conversation and makes it the active one |
 | `PATCH /v1/conversations/{conversationId}` | Renames it, or makes a web conversation the active one. Both answer 409 for the Automations chat |
 | `DELETE /v1/conversations/{conversationId}` | Deletes it with its messages and files. 409 for the Automations chat |
 | `POST /v1/conversations/{conversationId}/read` | Marks it read: the user has seen everything in it up to now. Any conversation, the Automations chat and Telegram ones too |
-| `GET /v1/messages` | With a conversation's id: its messages. With `channel=web` only: the active web conversation's messages. With nothing: every message |
+| `GET /v1/messages` | With a conversation's id: its messages. With `channel=web` only: the active web conversation's messages. With nothing: every message. Never a copy sent to Telegram (section 18, "A copy on Telegram"): the web app shows the message it copies |
 | `POST /v1/messages` | Sends a message. With a conversation's id it goes into that web conversation, which becomes the active one first. The Automations chat is written in where it is: it stays not active |
 
 Example: Rahul plans a trip to Goa in web chat. He clicks "New chat" and asks "what is a good laptop?". The agent answers about laptops and says nothing about Goa. The next day he opens the Goa conversation in the list and asks "and the hotel?". The agent answers with the trip in mind, and knows nothing of the laptop. In both it still knows he is vegetarian, because that is a saved memory.
@@ -569,7 +569,7 @@ The web app's list puts a blue dot on a conversation with something new in it: a
 
 | Time | What it is |
 |---|---|
-| The agent's newest message | When the agent last saved a message in it: a reply, an approval request, an automation run's answer, or the copy of one sent to Telegram. Empty while the agent has said nothing there |
+| The agent's newest message | When the agent last saved a message in it: a reply, an approval request, or an automation run's answer. A copy sent to Telegram does not count (since 16 October it is in no Telegram conversation). Empty while the agent has said nothing there |
 | Read up to | Up to when the user has seen it. Empty while they never have |
 
 A conversation is unread while the agent's newest message is later than the "read up to" time. Every conversation in the api's answers says so, as `unread`.
@@ -601,6 +601,7 @@ Example: Rahul writes in his "Plan a trip to Goa" conversation, then opens "Lapt
 - **Its number:** the new conversation gets the chat's next number. Other chats keep theirs.
 - **Web chat:** at most 30 new chats an hour per user. The earlier conversations stay in the list. The older address `POST /v1/chats/new` still works and does the same.
 - **Telegram:** the command must be the whole message. "/new please" goes to the agent as a normal message. The command and the bot's answer are not saved as chat messages. A Telegram message that arrives twice starts only one new chat and gets one answer.
+- **An empty Telegram conversation is not listed** (since 16 October). The web app's list leaves out a Telegram conversation until the user or the agent says something in it: after `/new` it shows once the user writes there. One holding only copies saved before 16 October (section 18, "A copy on Telegram") is left out too, and a message list never shows a copy. An empty web conversation is still listed: it is the new chat the user is about to write in. Nothing is deleted: the list is only read differently, so the founder's empty "New chat · Telegram" went from the list with no database change.
 - **A chat that is not linked** and sends `/new` only gets the "please link" reply.
 - **The activity log** gets "Started a new chat on Telegram" or "Started a new chat in web chat". It never holds the text of a message.
 
@@ -790,7 +791,7 @@ Every outgoing message takes the same path, whoever wrote it: the agent, the che
 
 The agent names the chat to answer in. Without a name, the reply goes to the chat the user last wrote from. An agent can write only to its own user's chats. The check that the chat is the user's and the read of the turn's conversation go to the database at the same time, so the agent's answer waits for one trip there instead of two.
 
-A copy of an automation's answer for Telegram takes the same path. It is marked with the message it copies, and is saved and sent once per message (section 18).
+A copy for Telegram (an automation's answer or question, a crew job's notice) takes the same path. It is marked with the message it copies, and is saved and sent once per message (section 18). It is only sent: it is kept beside the message it copies, it is not on the live stream, and it moves no conversation in the list.
 
 ### Per channel
 
@@ -877,7 +878,9 @@ The web app reads and changes them through `PATCH /v1/me` (`notifications`). A c
 
 **When nothing is sent.** Telegram is not linked, the user blocked the bot, Telegram is switched off on the server, or the switch is off. Work asked on Telegram gets its answer there anyway, so it gets no extra notice.
 
-**Once only.** Each notice is saved, like a copy, with a mark of what it is about: the job, or the message it copies. A job that runs again finds the mark and sends nothing more. A notice is shown in the Telegram conversation in the web app, but it is never part of that conversation's context (section 18, "A copy on Telegram").
+**Once only.** Each notice is saved, like a copy, with a mark of what it is about: the job, or the message it copies. A job that runs again finds the mark and sends nothing more.
+
+**Only in the Telegram app** (since 16 October). A notice lands in the user's Telegram chat and nowhere else. It is kept beside what it is about: a crew job's notice in the web conversation with the report, an automation's copy in the Automations chat. It is not saved in a Telegram conversation, so it never starts one, never makes one unread, and never moves one up the web app's list. The web app shows the work where it was asked, once. The founder asked for this on 16 October: his Automations chat showed a run, and the list also showed an empty "New chat · Telegram" holding only its copies.
 
 **Quiet hours.** Also in that group: quiet hours, at first on, from 22:00 to 08:00 in the user's time zone. The user can change both times or switch them off. A start after the end runs over midnight; the same start and end are refused. During quiet hours every Telegram message to that user, answers included, goes out at once but silently: Telegram shows it without a sound. Nothing is held back. The worker checks the hours just before each send, from the copy of the user's row (section 6), so it costs no extra trip to the database most of the time.
 
@@ -1250,6 +1253,7 @@ Once a question is on Telegram:
 3. **The agent goes on where it asked.** The answer wakes the agent in the chat and conversation the question was asked in, never in the Telegram copy's.
 4. **Only a button answers a copy.** A typed "yes" on Telegram still answers only a question asked in that Telegram chat, so a "yes" meant for something else can't approve a request from the web app.
 5. **Safe to repeat.** The copy is saved once per question. Editing a message that was edited already is refused by Telegram and passed over. A copy still waiting to be sent is waited for: the job tries again a little later.
+6. **No new chat in the web app.** The copy is kept beside the question in the Automations chat, not in a Telegram conversation, so it starts none and the web app shows the question once. A tap on it starts none either. A tap that comes too late is told "That approval was already answered or has expired." on Telegram, sent and not saved, like the answer to `/new`. Only a message the user types on Telegram goes into the Telegram chat's conversation, as before.
 
 ### The inputs are checked when the agent asks
 
@@ -1694,7 +1698,7 @@ The web app shows it pinned at the top of the chat list, apart from the dated li
 
 1. After the run, the worker finds the run's reply: the last message saved with the run's id that is not an approval's question. That is the agent's answer, or what the platform said instead (out of credits, the run failed).
 2. The copy is plain text, like everything sent to Telegram (section 10). Its first line names the automation, with ⏰ for a timer and ⚡ for an app event: "⏰ Daily open PRs and issues". Its last line says "To follow up, open the Automations chat in the Textcrew web app", with the address that opens it. While web chat is switched off, that line is left out.
-3. The copy is saved in the Telegram chat's current conversation, so the web app shows it there too. It is marked as a copy of the message in the Automations chat.
+3. The copy is saved beside the answer, in the Automations chat, marked as a copy of it, with the Telegram chat it went to. It is not in any Telegram conversation, so it never starts one and the web app shows the answer once, in the Automations chat. Before 16 October it was saved in the Telegram chat's current conversation, and an empty one ("/new" on Telegram, or none yet) then showed in the web app's list as "New chat · Telegram" holding only copies. The list now leaves out a Telegram conversation with nothing said in it, or only those old copies (section 8), and no message list shows a copy.
 4. A copy is never part of the Telegram conversation's context. The router does not see it, and the recap a new engine gets leaves it out. The engine itself never had it: it only knows the turns it ran. So a later Telegram message is answered without the run in mind; the follow-up belongs in the Automations chat.
 5. Once per message: a message can be copied once. A job that runs again after the copy was made sends nothing more.
 6. No copy goes to a chat that is no longer linked to the user, that blocked the bot, or whose channel is switched off.

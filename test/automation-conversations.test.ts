@@ -1,10 +1,11 @@
 // Every run of every automation answers in the user's Automations chat: one conversation of its
 // own, never the one the user has open and never made the active one. One made in a Telegram chat
-// also sends a copy of the answer there, once, outside the Telegram conversation's context. And a
+// also sends a copy of the answer there, once, kept beside the answer in the Automations chat, so it
+// is in no Telegram conversation (and outside every context). And a
 // timer run that starts more than 10 minutes after it was due says so.
 import { randomUUID } from 'node:crypto';
 import type { Job, Worker } from 'bullmq';
-import { and, eq, isNotNull } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DeliverKind } from '../proto-gen/vm/v1/vm_pb.ts';
 import { auditLog } from '../src/modules/admin/schema.ts';
@@ -131,12 +132,19 @@ const conversationsOf = (userId: string) =>
     .where(eq(conversations.userId, userId))
     .orderBy(conversations.sessionKey, conversations.epoch);
 
+/** A conversation's own messages (a copy sent to a chat app, kept beside its message, is not). */
 const textsIn = async (userId: string, conversationId: string) =>
   (
     await db()
       .select()
       .from(messages)
-      .where(and(eq(messages.userId, userId), eq(messages.conversationId, conversationId)))
+      .where(
+        and(
+          eq(messages.userId, userId),
+          eq(messages.conversationId, conversationId),
+          isNull(messages.copyOf),
+        ),
+      )
       .orderBy(messages.id)
   ).map((m) => m.text);
 
@@ -462,13 +470,15 @@ describe('the Automations chat: where every run answers', () => {
           'To follow up, open the Automations chat in the Textcrew web app: ' +
           `${config().WEB_APP_URL}/?chat=automations`,
       );
-      // Kept, for display, in the Telegram chat's current conversation, marked as a copy.
+      // Kept beside the answer, in the Automations chat, marked as a copy: not in the Telegram
+      // chat's conversation.
       const copies = await copiesOf(user.id);
       expect(copies).toHaveLength(1);
       expect(copies[0]).toMatchObject({
         copyOf: reply.id,
-        conversationId: telegramChat.id,
+        conversationId: chat.id,
         sessionKey: user.sessionKey,
+        channel: 'telegram',
         direction: 'out',
       });
       await waitFor(async () => (await copiesOf(user.id))[0]?.status === 'sent');

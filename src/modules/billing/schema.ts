@@ -206,3 +206,55 @@ export const payments = pgTable(
   },
   (t) => [index().on(t.userId)],
 );
+
+/**
+ * Auto top-up settings, one row per user who ever set them (HLD 7, "Auto top-up"). No balance
+ * here either: the job reads the balance from the grants each time.
+ */
+export const autoTopUpSettings = pgTable('auto_topup_settings', {
+  userId: text().primaryKey(),
+  enabled: boolean().notNull().default(false),
+  thresholdCredits: integer().notNull(),
+  topUpId: text().notNull(),
+  monthlyCap: integer().notNull(),
+  /** When the user last allowed the charges (switching on, or changing the settings while on). */
+  consentedAt: ts(),
+  /** The saved card as Polar last described it (brand and last 4 digits only; never the card). */
+  cardBrand: text(),
+  cardLast4: text(),
+  /** Declined cards in a row; back to 0 after a paid top-up. Two in a row switch it off. */
+  declinesInRow: integer().notNull().default(0),
+  /** Set when it switched itself off; cleared when the user switches it on again. */
+  turnedOffReason: text({ enum: ['declined', 'no_card', 'refused'] }),
+  createdAt: ts().notNull().defaultNow(),
+  updatedAt: ts().notNull().defaultNow(),
+});
+
+/**
+ * One row per auto top-up try. `idempotency_key` is unique, so two jobs at once cannot start two
+ * tries; the Polar order id is saved before the charge, so a re-run finalizes the same order
+ * (never a second one). Credits still come only from Polar's order.paid event.
+ */
+export const autoTopUpAttempts = pgTable(
+  'auto_topup_attempts',
+  {
+    id: text().primaryKey(),
+    userId: text().notNull(),
+    idempotencyKey: text().notNull().unique(),
+    topUpId: text().notNull(),
+    credits: integer().notNull(),
+    amountCents: integer().notNull(),
+    /** Polar's draft order; null until it is made. */
+    polarOrderId: text().unique(),
+    /**
+     * charging → waiting (paid; credits on their way) → credited (order.paid granted them).
+     * Or declined (the card), or failed (Polar refused, or no card).
+     */
+    status: text({ enum: ['charging', 'waiting', 'credited', 'declined', 'failed'] }).notNull(),
+    /** A short reason for declined / failed, from Polar's answer (no card data). */
+    reason: text(),
+    createdAt: ts().notNull().defaultNow(),
+    updatedAt: ts().notNull().defaultNow(),
+  },
+  (t) => [index().on(t.userId, t.createdAt)],
+);

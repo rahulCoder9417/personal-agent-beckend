@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { DONE_MARK, markdownToPlainText as plain } from '../src/modules/channels/plain-text.ts';
 import { buttonsAsText } from '../src/modules/channels/text-buttons.ts';
 import { NEW_CHAT_TEXT } from '../src/modules/orchestrator/chats.ts';
+import { helpText, linkedText } from '../src/modules/orchestrator/help-command.ts';
 import { linkInstructionsText } from '../src/modules/orchestrator/process-message.ts';
 import {
   connectAiText,
@@ -422,7 +423,9 @@ describe('text that is not Markdown', () => {
         { id: 'apr:1:no', title: '❌ Deny' },
       ]),
       // The ones written where they are sent (process-message, approvals, automations, billing).
-      '✅ Linked! You can chat with your agent right here. What can I do for you?',
+      linkedText('telegram'),
+      linkedText('whatsapp'),
+      helpText(),
       'This chat is already linked to your account.',
       'That code is invalid or expired. Get a new one in the web app (codes last 10 minutes).',
       'Too many attempts. Please try again in an hour.',

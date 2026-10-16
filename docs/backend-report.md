@@ -436,7 +436,7 @@ Linking proves that a chat on Telegram belongs to an account. Without a link, th
 5. Rahul sends the code to the bot. The webhook saves the event as usual.
 6. The worker sees that the chat is not linked, and finds a code in the text.
 7. In one database step, the worker marks the code as used and saves the link: this chat belongs to this user.
-8. The bot replies that the chat is linked. The activity log records it.
+8. The bot replies that the chat is linked: "✅ Linked! You can chat with your agent right here. What can I do for you?" A second line says how Textcrew works, with the web app's Help page. On Telegram that line also says `/new` starts a fresh conversation (the other chat apps have no `/new`). The activity log records the link.
 
 ### The limits
 
@@ -604,6 +604,18 @@ Example: Rahul writes in his "Plan a trip to Goa" conversation, then opens "Lapt
 - **A chat that is not linked** and sends `/new` only gets the "please link" reply.
 - **The activity log** gets "Started a new chat on Telegram" or "Started a new chat in web chat". It never holds the text of a message.
 
+### The Telegram commands
+
+| Send | What happens |
+|---|---|
+| `/new` | A new conversation starts (above) |
+| `/help` | The bot answers with a short note: what Tex can do (answer and search, work in connected apps and ask first before sending, deleting or paying, automations, memory, files and voice notes), the two commands, and a link to the web app's Help page |
+| `/clear`, `/reset` | The same as `/new`. They still work, but are not in the menu |
+
+- **The menu.** Telegram lists `/new` ("Start a new conversation") and `/help` ("How Textcrew works") when the user types "/" or taps the menu button. The api sets this list when it starts, with Telegram's `setMyCommands`. It first reads Telegram's copy and only sets it when it differs, so a restart changes nothing. Nothing happens when Telegram is switched off or has no bot token. If Telegram can't be reached, the server log says so (never the token) and the api runs on.
+- **Why at api start.** The list lives at Telegram, not in our database, and it changes only when the code does. Setting it at start means every deploy puts the right list in place, with no extra step to remember.
+- **`/help` follows the rules of `/new`.** No turn, no credits, and it works at zero credits. The command and the answer are not saved as chat messages. It must be the whole message: "/help me" goes to Tex. A message that arrives twice gets one answer. A chat that is not linked only gets the "please link" reply.
+
 ### Messages stored before conversations existed
 
 Conversations were added on 9 October. The messages stored before that day were put into conversations once, when the database was updated:
@@ -628,6 +640,7 @@ This section follows one message through the whole system. Example: Rahul texts 
    - A button was tapped: it is an approval answer.
    - The text is a link code: the reply says the chat is already linked, to this account or to another one. The code is not used (section 7).
    - The text is `/new`, `/clear` or `/reset` on Telegram: a new conversation starts in this chat (section 8).
+   - The text is `/help` on Telegram: the bot answers with what Tex can do and the commands (section 8).
    - The text is "yes" or "no" and an approval waits in this chat: it is an approval answer.
    - The text is a coupon code: it is redeemed, and the reply shows the new balance.
 7. It downloads any files and turns voice into text.
@@ -1000,7 +1013,7 @@ The Platform MCP is the platform's tool server. MCP is a standard way for an AI 
 - Every tool call that succeeds adds one entry: the tool's name, a one-line summary, the inputs and the credits charged.
 - The entry is written just after the tool's answer goes back, so the agent doesn't wait for it (about 0.26 s a call). A write that fails is written to the server log as an error, with the user and the tool, and the call itself still succeeds.
 - An input whose name looks like a secret (key, token, password) is blanked. `read_page` keeps the address without the part after the question mark. The memory tools never keep a memory's text.
-- A failed call adds no entry. Three refusals are still logged: a refused search, a refused page and a refused memory.
+- A failed call adds no entry, with these exceptions. A refused search, a refused page and a refused memory are logged. An app action that failed or was refused is logged as `app_action_failed`, and a request for approval that was refused before the user saw it as `approval_request_refused`. Those two hold the action, its app and the reason in plain words ("Couldn't run GMAIL_SEND_EMAIL in Gmail: it needs your approval, and none was given"), never the inputs. The reason is ours, not the app's own error, which may quote the inputs; the agent still gets the app's error. Before 16 October these failures left no trace, which hid the approvals whose arguments did not fit their action.
 - The log is kept for as long as the account exists. Deleting the account removes it, inputs and all. The one row that stays is an admin's record that they deleted the account (section 31).
 - A rate limit is a cap on calls in a period. Per user: 240 calls a minute to `/mcp`, 20 searches a minute, 30 pages a minute, 60 memory changes an hour.
 

@@ -39,7 +39,7 @@ import {
   START_CREW_JOB_ACTION,
 } from '../../orchestrator/approvals.ts';
 import { userHasCredits } from '../../orchestrator/turn.ts';
-import { defineTool, ToolError } from '../registry.ts';
+import { defineTool, ToolError, type FailureEntry } from '../registry.ts';
 import { extendProfile, resolveSession } from './core.ts';
 
 /**
@@ -132,6 +132,28 @@ defineTool({
   summarize: (args) => `Looked up ${args.action}`,
 });
 
+/** Why an app's actions can't run, in plain words for the activity log (agent-apps.ts states). */
+const APP_STATE_REASON: Record<string, string> = {
+  not_on_plan: "the app isn't on your plan",
+  connecting: 'the app was still connecting',
+  needs_reconnecting: 'the app needs to be connected again',
+  not_finished: "the app's connection was never finished",
+};
+
+/**
+ * The activity-log entry of an app action or approval request that failed or was refused: the
+ * action, its app and the reason in plain words, never the inputs. It made the approvals whose
+ * arguments did not fit their action visible (they were refused, and the log showed nothing).
+ */
+function appFailure(logAction: string, verb: string, action: string, reason: string): FailureEntry {
+  const app = appOfAction(action);
+  return {
+    action: logAction,
+    summary: `${verb} ${action}${app ? ` in ${app.name}` : ''}: ${reason}`,
+    details: { action, app: app?.slug ?? null, reason },
+  };
+}
+
 defineTool({
   name: 'request_approval',
   description:
@@ -161,7 +183,10 @@ defineTool({
     // run exactly as shown. Its approval always holds what will run (no arguments means none).
     if (action && action !== START_CREW_JOB_ACTION) {
       const check = await checkActionInputs(action, args.arguments ?? {});
-      if (check && !check.ok) throw new ToolError(check.problem);
+      if (check && !check.ok)
+        throw new ToolError(check.problem, {
+          reason: "its details didn't fit the action, so you weren't asked",
+        });
       if (check) {
         app = check.app.slug;
         approved = args.arguments ?? {};
@@ -173,6 +198,7 @@ defineTool({
     if (args.replaces_approval_id && (!earlier || earlier.action !== action))
       throw new ToolError(
         'replaces_approval_id must be the id of an earlier request of yours for the same action',
+        { reason: 'it named an earlier request that is not for the same action' },
       );
     const a = await requestApproval({
       userId,
@@ -205,6 +231,16 @@ defineTool({
   },
   summarize: (args) =>
     `${args.replaces_approval_id ? 'Asked again for approval' : 'Asked for approval'}: ${args.summary}`,
+  // Only a request for an action is logged: a plain question has no app to name.
+  auditFailure: (args, reason) =>
+    args.action
+      ? appFailure(
+          'approval_request_refused',
+          "Couldn't ask for approval to run",
+          args.action,
+          reason,
+        )
+      : null,
 });
 
 /**
@@ -252,10 +288,14 @@ defineTool({
       const app = appOfAction(args.action);
       const state =
         app && user ? agentAppStates(rows, user.plan).find((s) => s.app === app) : undefined;
-      throw new ToolError(state?.note ?? 'That app is not connected or not available on your plan');
+      throw new ToolError(
+        state?.note ?? 'That app is not connected or not available on your plan',
+        { reason: (state && APP_STATE_REASON[state.status]) ?? "the app isn't connected" },
+      );
     }
     const conn = newestActiveConnection(rows, toolkit);
-    if (!conn) throw new ToolError('That app is not connected');
+    if (!conn)
+      throw new ToolError('That app is not connected', { reason: "the app isn't connected" });
 
     // HLD 7.5: at zero credits an action that changes something doesn't run (reading still does).
     const changes = await appActionChangesSomething(args.action);
@@ -263,6 +303,7 @@ defineTool({
       throw new ToolError(
         "Your user is out of credits, so actions that change something can't run (reading still works). " +
           'Tell them to open the Textcrew web app to top up or upgrade. Do not send a link.',
+        { reason: 'you were out of credits' },
       );
 
     let consumedId: string | null = null;
@@ -283,11 +324,13 @@ defineTool({
         throw new ToolError(
           "This action needs the user's approval. If the user already approved it, call run_app_action again " +
             'with that approval_id. Otherwise call request_approval and end your turn.',
+          { reason: 'it needs your approval, and none was given' },
         );
       const approval = await consumeApproval(userId, args.approval_id, args.action);
       if (!approval)
         throw new ToolError(
           'No matching approved approval (it must be approved, unused, for this exact action)',
+          { reason: 'there was no approved request for it that was still unused' },
         );
       if (approval.arguments) {
         // The approval holds what runs. Arguments sent again must be exactly those.
@@ -295,6 +338,7 @@ defineTool({
           await db().update(approvals).set({ usedAt: null }).where(eq(approvals.id, approval.id));
           throw new ToolError(
             'The arguments differ from what the user approved. Leave arguments out: the approved ones run.',
+            { reason: 'its details differed from what you approved' },
           );
         }
         runArgs = approval.arguments;
@@ -319,6 +363,12 @@ defineTool({
           consumedId
             ? approvedRunFailed(consumedId, res.error)
             : `The app returned an error: ${res.error ?? 'unknown'}`,
+          // The app's own error may quote the inputs: the log says only that it refused.
+          {
+            reason: consumedId
+              ? 'the app refused the approved request, so nothing was done'
+              : 'the app returned an error',
+          },
         );
       data = res.data;
     } catch (err) {
@@ -327,7 +377,9 @@ defineTool({
       if (crewJobId) await releaseCrewJobComment(userId, crewJobId);
       if (err instanceof ToolError) throw err;
       logger().warn({ userId, action: args.action, err: String(err) }, 'composio execute failed');
-      throw new ToolError('The app is unavailable right now; tell the user and try later');
+      throw new ToolError('The app is unavailable right now; tell the user and try later', {
+        reason: "the app couldn't be reached",
+      });
     }
 
     // Only a successful action is charged. The approval id is the charge's key when there is one
@@ -364,4 +416,9 @@ defineTool({
     return `Ran ${args.action}${args.approval_id ? ' (approved)' : ''}`;
   },
   creditsCharged: (_args, result) => (result as { credits_charged: number }).credits_charged,
+  // Nothing is charged for an action that did not run.
+  auditFailure: (args, reason) => ({
+    ...appFailure('app_action_failed', "Couldn't run", args.action, reason),
+    creditsCharged: 0,
+  }),
 });

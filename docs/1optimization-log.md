@@ -48,6 +48,30 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 16 October 2026: Telegram polish (the "/" menu, `/help`, the linked reply, failed app actions in the activity log)
+
+- **Where it is:** on branch `feat/telegram-polish` in the backend, the vm-manager and the web app, not merged or deployed yet.
+- **Why:** small things found while testing on Telegram. The bot had no "/" menu, `/help` went to Tex like any message and cost a turn, the "Linked!" reply said nothing about `/new`, the Bridge sent people to an Apps page address that moved, and an app action that failed or was refused left no trace in the activity log. That last one hid the approvals whose arguments did not fit their action.
+- **What the user notices:**
+  - In Telegram, typing "/" or tapping the menu button lists `/new` ("Start a new conversation") and `/help` ("How Textcrew works"). `/clear` and `/reset` still work but are not listed.
+  - `/help` gets a short answer from the bot at once: what Tex can do, the two commands, and a link to the web app's Help page. It is free and works at zero credits.
+  - Once a chat is linked, the reply adds a line: on Telegram "Send /new any time to start a fresh conversation. How Textcrew works: (the Help page)". The other chat apps get only the Help page line, since they have no `/new`.
+  - The activity log now shows an app action that didn't run ("Couldn't run GMAIL_SEND_EMAIL in Gmail: it needs your approval, and none was given") and a request for approval that was refused before the user saw it. Each says the action, the app and the reason in plain words, never the inputs.
+  - Tex sends people to the Apps page at its current address, `/integrations/apps`.
+  - The web Approvals screen has a Replaced tab, for the requests Tex asked again with corrected details. The web Help page lists `/help` and the menu.
+- **Backend:**
+  - The menu is set when the api starts, with Telegram's `setMyCommands`. It reads Telegram's copy first and sets it only when it differs, so every restart after the first changes nothing. It is skipped when Telegram is off or has no bot token, and a failure is written to the server log (never the token) without stopping the api. Chosen over an ops command because the list changes only with the code, so each deploy puts the right one in place with no step to remember.
+  - `/help` is handled beside `/new`: no turn, no credits, not saved as a message, one answer per event, and a chat that is not linked only gets the "please link" reply.
+  - A platform tool can now say how its failures are logged. `run_app_action` logs `app_action_failed` (0 credits) and `request_approval` logs `approval_request_refused`, for a request that names an action. The reason is one of our own fixed sentences (not connected, out of credits, needs approval, details differ, the app returned an error, the app couldn't be reached…), never the app's own error, which may quote the inputs. The agent still gets the full error, as before.
+- **vm-manager:** the Bridge's Apps page address is now `https://app.textcrew.in/integrations/apps` (the README too).
+- **Cost and speed:** none. `/help` used to cost a turn and now costs nothing. The menu adds one call to Telegram per api start. A failed app action adds one activity-log write, made after the answer goes back.
+- **Contracts:** `openapi.yaml`: the activity entry's `action` has a description and two new examples, `app_action_failed` and `approval_request_refused`. No shape changed. `vm.proto` unchanged.
+- **Database:** none.
+- **How it was checked:** new `test/telegram-polish.test.ts` (the menu with a fake Telegram: set once, left alone after, set again when a description changed, skipped when off, a failing Telegram does not stop the api; `/help` with no turn, no saved message and no credit change at zero credits, once per event, not for an unlinked chat; the linked reply on Telegram and elsewhere; failed and refused app actions logged with action, app and reason and no input anywhere in the log, and listed by `GET /v1/activity`). The plain-text tests now check the new texts arrive as written. Bridge tests check the new address. Web tests check the Replaced tab, the activity labels and the Help table. Results: see below.
+- **Still open:** a deploy (api, worker, the agent image) and a restart, so the menu is set and the Bridge's new address reaches the containers.
+- **Docs updated:** `backend-report.md` section 7 (the linked reply), section 8 (a new part, "The Telegram commands"), section 9 (step 6) and section 13 ("The activity log and the rate limits").
+- **Commits:** see below.
+
 ### 16 October 2026: automations on a canvas, phase 2 (drafts from the chat)
 
 - **Where it is:** on `main` and on the test server (backend with migration 0026, and vm-manager), and live in the web app, since 16 October.

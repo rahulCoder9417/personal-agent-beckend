@@ -57,6 +57,7 @@ import {
   START_CREW_JOB_ACTION,
 } from '../../orchestrator/approvals.ts';
 import { userHasCredits } from '../../orchestrator/turn.ts';
+import { actionInputsOf, misplacedInputsNote } from '../misplaced-inputs.ts';
 import { defineTool, ToolError, type FailureEntry } from '../registry.ts';
 import { extendProfile, resolveSession } from './core.ts';
 
@@ -188,6 +189,29 @@ function appFailure(logAction: string, verb: string, action: string, reason: str
   };
 }
 
+/** The activity log's mark of inputs that were sent beside `action` and used. */
+const movedDetails = (moved: string[]) => (moved.length > 0 ? { inputs_moved: moved } : {});
+
+/**
+ * An action's inputs, as the agent is shown them. Inputs sent beside `action` instead are used too
+ * (misplaced-inputs.ts), so the tools keep the names they do not know (`keepOtherInputs`).
+ */
+const ACTION_ARGUMENTS = z
+  .record(z.string(), z.unknown())
+  .optional()
+  .describe(
+    "The action's inputs, as one object with the names from describe_app_action, e.g. " +
+      '{"owner": "octocat", "repo": "hello-world"}. Every input goes here, not beside action.',
+  );
+const APPROVAL_INPUTS = ['summary', 'action', 'arguments', 'replaces_approval_id', 'session_key'];
+const RUN_INPUTS = ['action', 'arguments', 'approval_id'];
+
+/** request_approval's action inputs: only an app action's (a plain question has none). */
+const approvalInputs = (args: Record<string, unknown>) =>
+  args.action
+    ? actionInputsOf(args, APPROVAL_INPUTS)
+    : actionInputsOf({ arguments: args.arguments }, APPROVAL_INPUTS);
+
 defineTool({
   name: 'request_approval',
   description:
@@ -204,15 +228,19 @@ defineTool({
   input: {
     summary: z.string().min(3).max(500),
     action: z.string().optional(),
-    arguments: z.record(z.string(), z.unknown()).optional(),
+    arguments: ACTION_ARGUMENTS,
     replaces_approval_id: z.string().optional(),
     session_key: z.string().optional(),
   },
+  keepOtherInputs: true,
   async run({ userId }, args) {
     const sessionKey = await resolveSession(userId, args.session_key);
     const action = args.action ?? null;
     let app: string | null = null;
-    let approved = args.arguments ?? null;
+    // The inputs in `arguments`, or the ones the agent put beside `action` instead.
+    const found = approvalInputs(args);
+    const inputsNote = misplacedInputsNote(found);
+    let approved = found.inputs ?? null;
     // During an automation's run, its limits. A run with steps: only the current step's action can
     // be asked for (no plain question, no crew job), its fixed inputs put in, and the approval is
     // bound to that step of that run.
@@ -221,7 +249,7 @@ defineTool({
     if (limits?.runId) {
       const gate = await gateApprovalRequest(userId, limits.runId, {
         action,
-        args: args.arguments ?? {},
+        args: found.inputs ?? {},
       });
       if (!gate.ok)
         throw new ToolError(gate.refusal, {
@@ -273,6 +301,7 @@ defineTool({
       expires_at: a.expiresAt.toISOString(),
       shown_to_user: approvalAskText(a.summary, channelOfSession(sessionKey)),
       ...(step ? { step_id: step.stepId } : {}),
+      ...(inputsNote ? { inputs_note: inputsNote } : {}),
       ...(replaced
         ? {
             replaced_approval_id: replaced.id,
@@ -290,6 +319,15 @@ defineTool({
   },
   summarize: (args) =>
     `${args.replaces_approval_id ? 'Asked again for approval' : 'Asked for approval'}: ${args.summary}`,
+  // The log keeps the inputs as they were used, and says when they were sent beside `action`.
+  auditArgs: (args) => {
+    const found = approvalInputs(args);
+    const own = Object.entries(args).filter(
+      ([k]) => APPROVAL_INPUTS.includes(k) && k !== 'arguments',
+    );
+    return { ...Object.fromEntries(own), ...(found.inputs ? { arguments: found.inputs } : {}) };
+  },
+  auditDetails: (args) => movedDetails(approvalInputs(args).moved),
   // Only a request for an action is logged: a plain question has no app to name.
   auditFailure: (args, reason) =>
     args.action
@@ -330,12 +368,16 @@ defineTool({
     'the bodies, or read one with GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID); any answer over about 8,000 tokens is cut, with a note on how to ask for less.',
   input: {
     action: z.string().min(3),
-    arguments: z.record(z.string(), z.unknown()).optional(),
+    arguments: ACTION_ARGUMENTS,
     approval_id: z.string().optional(),
   },
+  keepOtherInputs: true,
   async run({ userId }, args) {
+    // The inputs in `arguments`, or the ones the agent put beside `action` instead.
+    const found = actionInputsOf(args, RUN_INPUTS);
+    const inputsNote = misplacedInputsNote(found);
     // What runs: the agent's arguments, or with an approval exactly the approved ones (below).
-    let runArgs = args.arguments ?? {};
+    let runArgs = found.inputs ?? {};
     // One read of the user's connections serves every check below (it was three or four). The
     // run's limits (an automation's run only) are read at the same time.
     const [[user, read], limits] = await Promise.all([
@@ -445,7 +487,7 @@ defineTool({
         );
       if (approval.arguments) {
         // The approval holds what runs. Arguments sent again must be exactly those.
-        if (args.arguments && !isDeepStrictEqual(approval.arguments, args.arguments)) {
+        if (found.inputs && !isDeepStrictEqual(approval.arguments, found.inputs)) {
           await db().update(approvals).set({ usedAt: null }).where(eq(approvals.id, approval.id));
           throw new ToolError(
             'The arguments differ from what the user approved. Leave arguments out: the approved ones run.',
@@ -541,6 +583,7 @@ defineTool({
       data: shaped.data,
       ...(shaped.note ? { note: shaped.note } : {}),
       credits_charged: creditsCharged,
+      ...(inputsNote ? { inputs_note: inputsNote } : {}),
       ...(prReviewRepo ? { pr_review: prReviewRepo } : {}),
       ...(crewJobId ? { crew_job: crewJobId } : {}),
       ...(next ? { next } : {}),
@@ -553,6 +596,16 @@ defineTool({
     if (job) return `Ran ${args.action} (the review the user asked for in crew job ${job})`;
     return `Ran ${args.action}${args.approval_id ? ' (approved)' : ''}`;
   },
+  // The log keeps the inputs as they ran, and says when they were sent beside `action`.
+  auditArgs: (args) => {
+    const found = actionInputsOf(args, RUN_INPUTS);
+    return {
+      action: args.action,
+      ...(found.inputs ? { arguments: found.inputs } : {}),
+      ...(args.approval_id ? { approval_id: args.approval_id } : {}),
+    };
+  },
+  auditDetails: (args) => movedDetails(actionInputsOf(args, RUN_INPUTS).moved),
   creditsCharged: (_args, result) => (result as { credits_charged: number }).credits_charged,
   // Nothing is charged for an action that did not run.
   auditFailure: (args, reason) => ({

@@ -376,7 +376,7 @@ Picture: GoDraw, page 4, "Credits".
 | Web search through Textcrew | No | No | Yes |
 | When the server is busy | Normal | Normal | First in line |
 
-The launch prices were set on 16 October, to be looked at again later. A checkout charges the launch price. The regular price is shown beside it as plain words ("$19/month, launch price (regular $30)"), never as a struck-out number, because it has never been charged. Waitlist members still get 50% off their first month on top: Pro $9.50, Max $15.
+The launch prices were set on 16 October, to be looked at again later. A checkout charges the launch price. From 17 October the regular price is shown crossed out beside it ("$30" struck out, then "$19/month"), with a small "Launch price" tag, on the website and in the web app. It has never been charged, which is what the tag says. Until 16 October it was written as plain words and never struck out; that was reversed on 17 October. Only the display changed, not the charges. Waitlist members still get 50% off their first month on top: Pro $9.50, Max $15.
 
 ### What costs credits
 
@@ -455,7 +455,7 @@ One exception to rule 6, by decision: a Max user's container with Scout's browse
 | Audience | Developers and tech founders who manage a team. First use case: pull-request review |
 | Channels | Telegram and the web app. WhatsApp and iMessage are built and switched off |
 | AI | Three ways: own API key, own Claude plan (labelled beta), Textcrew AI on credits |
-| Plans | Free $0, Pro $19 (launch price, regular $30), Max $30 (launch price, regular $50), top-up $10 for 800 credits. Credits last 90 days. Regular prices are shown as plain words, never struck out |
+| Plans | Free $0, Pro $19 (launch price, regular $30), Max $30 (launch price, regular $50), top-up $10 for 800 credits. Credits last 90 days. From 17 October the regular prices are shown crossed out with a "Launch price" tag (display only) |
 | The crew | Tex, Byte, Patch, Scout |
 | Web search | Only Scout searches. The engine's own search first; Brave on Max otherwise |
 | The browser | Max plan. It runs inside the user's own container, not at an outside provider |
@@ -591,7 +591,7 @@ Two grey areas with Anthropic's rule are known. The one-time sign-in code passes
 
 - **Polar, before real money** (16 October). Details and steps in "Also waiting on you":
   - **Refund policy:** decided on 16 October, option (b), 14 days. A refund on request within 14 days of a payment (a plan or a top-up), by writing to support@textcrew.in. The credits that payment added are taken back, and credits already spent stay as a debt, paid from the next credits. After 14 days, no refund except where the law requires. Cancelling stops the next renewal, and the plan runs to the end of the month paid for. Polar, the merchant of record, makes the refund, and may also refund on its own to stop a chargeback. The other options were (a) no refunds except where the law requires, and (c) as (b) but only while most of the credits are unused. The terms page says this, at `textcrew.in/terms#refunds`. The backend already does it: `backend-report.md` section 28, "Refunds and chargebacks".
-  - **The struck-out "regular" prices:** decided on 16 October, option (b). Pro is $19 a month and Max $30 a month as launch prices, with the regular price ($30, $50) written beside them as plain words and no struck-out number, on the website and in the web app. The prices will be looked at again later.
+  - **The struck-out "regular" prices:** on 16 October the choice was option (b), plain words and no struck-out number. On 17 October you reversed it: the regular price ($30, $50) is now shown crossed out beside the launch price ($19, $30), with a small "Launch price" tag, on the website and in the web app. The prices themselves and the charges are unchanged, and they will be looked at again later.
   - **Moving between Pro and Max.** Polar's account has "Allow multiple subscriptions" off and "Enable subscription plan changes" on. Our app says: cancel the plan, then buy the other one, which means two subscriptions for a few days, and Polar may refuse that checkout. (a) Switch "Allow multiple subscriptions" on (our backend already allows only one plan that renews) and plan changes off, so the app's way is the only way; (b) keep plan changes on in Polar's billing page and send people there to switch (a change applies at once, the new plan's credits come with the next month); (c) leave both as they are and test. Recommended: (a).
 
 - **Speed: "the load takes too long"** (17 October). Measured that day (`3optimization-log.md`, the entry of 17 October): most of what is left is distance and sign-in, not code. In order of what each costs:

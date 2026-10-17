@@ -21,8 +21,8 @@ export interface PlanDef {
   /** What a checkout charges now: the launch price while the plan has one. */
   priceCents: number;
   /**
-   * The regular price, shown as plain text beside the launch price ("launch price, regular $30"),
-   * never struck out. null when the plan has no launch price.
+   * The regular price, shown crossed out beside the launch price with a "Launch price" tag (from
+   * 17 Oct 2026; it has never been charged). Display only. null when the plan has no launch price.
    */
   regularPriceCents: number | null;
   interval: 'month' | null;

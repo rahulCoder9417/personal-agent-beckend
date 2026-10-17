@@ -2422,7 +2422,7 @@ A plan decides how many credits a user gets each month and what they may use. Th
 | Queue priority | Last | Middle | First |
 | Textcrew AI models | Cheap model only | All models | All models |
 
-- **Launch prices.** Pro and Max have a launch price (what a checkout charges, $19 and $30) and a regular price ($30 and $50). The plans list in the API gives both (`priceCents` and `regularPriceCents`; Free has no regular price). The web app and the website show the regular price as plain words beside the launch price, never struck out, because it has never been charged. Polar's products are priced at the launch price, and the Polar check compares them with it. Set on 16 October, to be looked at again later.
+- **Launch prices.** Pro and Max have a launch price (what a checkout charges, $19 and $30) and a regular price ($30 and $50). The plans list in the API gives both (`priceCents` and `regularPriceCents`; Free has no regular price). From 17 October the web app and the website show the regular price crossed out beside the launch price, with a small "Launch price" tag, because it has never been charged (until then it was plain words, never struck out). This is display only: the charges and Polar are unchanged. Polar's products are priced at the launch price, and the Polar check compares them with it. Set on 16 October, to be looked at again later.
 - **Sign-up credits.** Every new account gets 100 credits once. They last 90 days. They are given when the account is set up, together with the user's LiteLLM key. If the monthly cap on free credits is reached, they are not given (see "Coupon codes").
 - **Automations:** a repo with pull-request review switched on counts as one.
 - **An own MCP server** is a tool server the user adds to their agent.

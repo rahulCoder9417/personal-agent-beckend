@@ -48,6 +48,19 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 17 October 2026: The regular price is shown crossed out beside the launch price
+
+- **Where it is:** on a branch (`ui/struck-regular-price`) in the backend, the web app and the landing page, not merged yet.
+- **Why:** you reversed the 16 October choice. Pro stays $19 a month and Max $30 a month, and the regular prices ($30 and $50) are now shown crossed out, the usual sale look, instead of plain words.
+- **What the user notices:** on the pricing page, the Credits plan card and the website's pricing page and teaser, Pro reads "$30 crossed out, then $19, per month" and Max "$50 crossed out, then $30". A small muted "Launch price" tag stays beside it, because the regular price has never been charged. Free shows nothing crossed out. The crossed-out price is read out as "Regular price $30" by screen readers.
+- **Backend:** only a comment next to the regular price in the plans file. No logic changed.
+- **Cost and speed:** none. The charges, the amounts sent to Polar and the plans list in the API are exactly as before.
+- **Contracts:** none changed. The terms page wording ("these are launch prices: the regular prices are $30 and $50") is still true and was left as it is.
+- **Database:** none.
+- **How it was checked:** the web app's pricing tests were changed to look for the crossed-out price and the tag; lint lists clean in the backend (docs and a comment only).
+- **Docs updated:** `hld-mvp.md` (the launch-price paragraph in section 5, the plans row, and the decision on the struck-out price) and `backend-report.md` (the "Launch prices" part).
+- **Commits:** see the branch `ui/struck-regular-price` in each repo.
+
 ### 17 October 2026: "Draft it" on the New automation page stays on the page and gives Tex's verdict
 
 - **Where it is:** merged to main in the backend and the web app, and live on the test server and app.textcrew.in since 17 October (evening). The backend went out first, as it must.

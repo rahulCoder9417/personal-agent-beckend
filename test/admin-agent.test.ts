@@ -429,7 +429,14 @@ describe('POST /v1/admin/users/{id}/agent/reset', () => {
   it('puts the engine, model and effort back to their defaults through the settings', async () => {
     const u = await withContainer();
     await markClaudeConnected(u.id);
-    await updateAgentSettings(u.id, { claudeModel: 'claude-sonnet-4-6', claudeEffort: 'max' });
+    await updateAgentSettings(u.id, {
+      claudeModel: 'claude-sonnet-4-6',
+      claudeEffort: 'max',
+      claudeCrew: {
+        byte: { model: 'claude-haiku-5-5', effort: 'low' },
+        scout: { effort: 'high' },
+      },
+    });
     fake.runtimeCalls.length = 0;
 
     const res = await call(
@@ -447,6 +454,9 @@ describe('POST /v1/admin/users/{id}/agent/reset', () => {
     expectNoSecrets(text, u.id);
     const settings = await getAgentSettings(u.id);
     expect(settings).toMatchObject({ runtime: 'hermes', claudeModel: null, claudeEffort: null });
+    // The crew's choices go back to Default with Tex's.
+    const onDefault = { model: null, effort: null };
+    expect(settings.claudeCrew).toEqual({ byte: onDefault, patch: onDefault, scout: onDefault });
     // The vm-manager was told the way the user's own change tells it.
     expect(fake.runtimeCalls).toEqual([{ userId: u.id, runtime: AgentRuntime.HERMES }]);
 
@@ -478,7 +488,11 @@ describe('POST /v1/admin/users/{id}/agent/reset', () => {
     expect(fake.browserCalls).toEqual([{ userId: u.id, enabled: false }]);
 
     // The vm-manager can't be told: the rest is reset, the call answers 503, and the audit says so.
-    await updateAgentSettings(u.id, { claudeEffort: 'low' });
+    // Only the efforts go back: a crew member's model stays.
+    await updateAgentSettings(u.id, {
+      claudeEffort: 'low',
+      claudeCrew: { patch: { model: 'claude-sonnet-5-5', effort: 'low' } },
+    });
     fake.browser.set(u.id, true);
     fake.state.browserError = new ConnectError('down', Code.Unavailable);
     await expectContract(
@@ -490,6 +504,10 @@ describe('POST /v1/admin/users/{id}/agent/reset', () => {
       503,
     );
     expect((await getAgentSettings(u.id)).claudeEffort).toBeNull();
+    expect((await getAgentSettings(u.id)).claudeCrew.patch).toEqual({
+      model: 'claude-sonnet-5-5',
+      effort: null,
+    });
     const rows = await auditRows(u.id, 'agent_reset');
     expect(rows.map((r) => r.details)).toContainEqual({
       adminId: admin.id,

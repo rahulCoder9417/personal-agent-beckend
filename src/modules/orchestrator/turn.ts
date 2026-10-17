@@ -698,9 +698,9 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
   // What the platform adds to the delivery's metadata: the conversation's number in its chat,
   // always. The Bridge keeps one engine conversation per number, so this turn continues its own
   // conversation's context; the number is lower than the chat's highest when the user went back
-  // to an earlier conversation. On Claude Code also the model and the effort the user chose (each
-  // left out when it is Claude Code's default). `stream_text`: whether the Bridge sends the draft of
-  // the answer as it is written (web chat only).
+  // to an earlier conversation. On Claude Code also the model and the effort the user chose for Tex
+  // and, under `crew`, for each crew member (each left out when it is on Default). `stream_text`:
+  // whether the Bridge sends the draft of the answer as it is written (web chat only).
   const metadata: Record<string, unknown> = {
     chat_epoch: conversation.epoch,
     stream_text: streamsDraft(input),

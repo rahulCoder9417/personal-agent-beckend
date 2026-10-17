@@ -8,7 +8,12 @@ import { badRequest, conflict } from '../../shared/errors.ts';
 import { logger } from '../../shared/logger.ts';
 import { audit } from '../admin/audit.ts';
 import { hasByokKey, listByokKeys, type ByokProvider } from '../integrations/byok.ts';
-import { agentSettings, CLAUDE_EFFORTS } from './schema.ts';
+import {
+  agentSettings,
+  CLAUDE_CREW_MEMBERS,
+  CLAUDE_EFFORTS,
+  type StoredClaudeCrew,
+} from './schema.ts';
 import { AgentRuntime, vm } from './vm.ts';
 
 export type RuntimeName = (typeof agentSettings.$inferSelect)['runtime'];
@@ -16,7 +21,8 @@ export type AiPreference = (typeof agentSettings.$inferSelect)['aiPreference'];
 export type AiAccess = 'claude_plan' | 'own_key' | 'platform' | 'none';
 export type AiAccessMode = 'platform' | 'own_only';
 export type ClaudeEffort = (typeof CLAUDE_EFFORTS)[number];
-export { CLAUDE_EFFORTS };
+export type ClaudeCrewMember = (typeof CLAUDE_CREW_MEMBERS)[number];
+export { CLAUDE_CREW_MEMBERS, CLAUDE_EFFORTS };
 
 export type ClaudeModelGroup = 'current' | 'older';
 
@@ -76,10 +82,29 @@ export const CLAUDE_MODELS: readonly ClaudeModel[] = [
   { id: 'claude-haiku-4-5', label: 'Haiku 4.5', group: 'older', efforts: [] },
 ];
 
-const isClaudeModel = (id: string | null | undefined): id is string =>
-  CLAUDE_MODELS.some((m) => m.id === id);
-const isClaudeEffort = (e: string | null | undefined): e is ClaudeEffort =>
-  (CLAUDE_EFFORTS as readonly string[]).includes(e ?? '');
+const isClaudeModel = (id: unknown): id is string =>
+  typeof id === 'string' && CLAUDE_MODELS.some((m) => m.id === id);
+const isClaudeEffort = (e: unknown): e is ClaudeEffort =>
+  typeof e === 'string' && (CLAUDE_EFFORTS as readonly string[]).includes(e);
+
+/** One crew member's model and effort; null is that member's Default. */
+export interface ClaudeCrewChoice {
+  model: string | null;
+  effort: ClaudeEffort | null;
+}
+export type ClaudeCrew = Record<ClaudeCrewMember, ClaudeCrewChoice>;
+
+/**
+ * What a crew member left on Default runs on Claude Code. This must say what the Bridge does
+ * (vm-manager, agent-image/bridge/crew.py `CLAUDE_CREW_DEFAULTS` and `claude_member_model`): Byte
+ * and Patch write and review code, where thinking pays, so Opus 5.5 at medium effort whatever Tex
+ * runs on; Scout reads the web and runs as Tex does (null: the same as Tex).
+ */
+export const CLAUDE_CREW_DEFAULTS: ClaudeCrew = {
+  byte: { model: 'claude-opus-5-5', effort: 'medium' },
+  patch: { model: 'claude-opus-5-5', effort: 'medium' },
+  scout: { model: null, effort: null },
+};
 
 export interface AgentSettingsView {
   /** What the user chose. */
@@ -94,11 +119,13 @@ export interface AgentSettingsView {
   claude: { connected: boolean; connectedAt: Date | null };
   ownKeyProviders: ByokProvider[];
   /**
-   * Claude Code's model and effort (null: Default, which the Bridge runs as Sonnet 5.5 at low
-   * effort). Used only on Claude Code turns.
+   * Tex's model and effort on Claude Code (null: Default, which the Bridge runs as Sonnet 5.5 at
+   * low effort). Used only on Claude Code turns.
    */
   claudeModel: string | null;
   claudeEffort: ClaudeEffort | null;
+  /** Each crew member's model and effort on Claude Code, on its own (null: CLAUDE_CREW_DEFAULTS). */
+  claudeCrew: ClaudeCrew;
 }
 
 /**
@@ -172,32 +199,80 @@ export async function getAgentSettings(userId: string): Promise<AgentSettingsVie
 
 /** The stored choice, if it is still on the list (an id taken off the list means the default). */
 function claudeChoiceOf(
-  row: { claudeModel: string | null; claudeEffort: string | null } | undefined,
+  row:
+    { claudeModel: string | null; claudeEffort: string | null; claudeCrew?: unknown } | undefined,
 ) {
   return {
     claudeModel: isClaudeModel(row?.claudeModel) ? row.claudeModel : null,
     claudeEffort: isClaudeEffort(row?.claudeEffort) ? row.claudeEffort : null,
+    claudeCrew: crewOf(row?.claudeCrew),
   };
 }
 
+/** The stored crew choices, read leniently: anything not on offer (any more) is Default. */
+function crewOf(stored: unknown): ClaudeCrew {
+  const all = (stored && typeof stored === 'object' ? stored : {}) as Record<string, unknown>;
+  const one = (member: ClaudeCrewMember): ClaudeCrewChoice => {
+    const raw = all[member];
+    const c = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    return {
+      model: isClaudeModel(c.model) ? c.model : null,
+      effort: isClaudeEffort(c.effort) ? c.effort : null,
+    };
+  };
+  return { byte: one('byte'), patch: one('patch'), scout: one('scout') };
+}
+
+type ChosenCrew = Partial<Record<ClaudeCrewMember, { model?: string; effort?: ClaudeEffort }>>;
+
 /**
- * What a Claude Code turn is told about the model and the effort (the delivery's `claude` field).
- * A value left out means Default: the Bridge then runs Sonnet 5.5 at low effort (vm-manager,
- * claude.py).
+ * Only the members and the fields off Default (null when every member is on Default): what the
+ * column keeps, and what a turn is told.
  */
-export async function claudeTurnOptions(
-  userId: string,
-): Promise<{ model?: string; effort?: ClaudeEffort }> {
+function chosenCrew(crew: ClaudeCrew): ChosenCrew | null {
+  const out: ChosenCrew = {};
+  for (const member of CLAUDE_CREW_MEMBERS) {
+    const { model, effort } = crew[member];
+    if (model || effort)
+      out[member] = { ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+const sameCrew = (a: ClaudeCrew, b: ClaudeCrew) =>
+  CLAUDE_CREW_MEMBERS.every((m) => a[m].model === b[m].model && a[m].effort === b[m].effort);
+
+export type ClaudeCrewPatch = Partial<
+  Record<ClaudeCrewMember, { model?: string | null; effort?: ClaudeEffort | null }>
+>;
+
+export interface ClaudeTurnOptions {
+  model?: string;
+  effort?: ClaudeEffort;
+  /** Only the members off Default; left out when every member is on Default. */
+  crew?: ChosenCrew;
+}
+
+/**
+ * What a Claude Code turn is told about the models and the efforts (the delivery's `claude`
+ * field): Tex's in `model` and `effort`, each crew member's in `crew`. A value left out means
+ * Default: the Bridge then runs Tex on Sonnet 5.5 at low effort (vm-manager, claude.py) and the
+ * crew as CLAUDE_CREW_DEFAULTS says (crew.py).
+ */
+export async function claudeTurnOptions(userId: string): Promise<ClaudeTurnOptions> {
   return claudeOptionsOf(claudeChoiceOf(await settingsRow(userId)));
 }
 
 /** The same, from settings the turn has already read (no second read of the row). */
 export function claudeOptionsOf(
-  settings: Pick<AgentSettingsView, 'claudeModel' | 'claudeEffort'>,
-): { model?: string; effort?: ClaudeEffort } {
+  settings: Pick<AgentSettingsView, 'claudeModel' | 'claudeEffort'> &
+    Partial<Pick<AgentSettingsView, 'claudeCrew'>>,
+): ClaudeTurnOptions {
+  const crew = settings.claudeCrew ? chosenCrew(settings.claudeCrew) : null;
   return {
     ...(settings.claudeModel ? { model: settings.claudeModel } : {}),
     ...(settings.claudeEffort ? { effort: settings.claudeEffort } : {}),
+    ...(crew ? { crew } : {}),
   };
 }
 
@@ -247,6 +322,7 @@ async function saveSettings(
     claudeConnectedAt?: Date | null;
     claudeModel?: string | null;
     claudeEffort?: ClaudeEffort | null;
+    claudeCrew?: StoredClaudeCrew | null;
   },
 ): Promise<void> {
   const set = { ...values, updatedAt: new Date() };
@@ -309,10 +385,11 @@ export async function syncRuntimeAfterWake(
 }
 
 /**
- * PATCH /v1/agent/settings: the runtime, the AI preference, Claude Code's model and effort, or
- * any of them together. Claude Code needs a connected Claude plan, and Textcrew AI can only be
- * chosen while it is on offer (409 otherwise). A model that isn't on the list is 400. The model
- * and the effort can be set whatever the engine is: they apply to Claude Code turns.
+ * PATCH /v1/agent/settings: the runtime, the AI preference, Claude Code's model and effort for
+ * Tex or for a crew member, or any of them together. Claude Code needs a connected Claude plan,
+ * and Textcrew AI can only be chosen while it is on offer (409 otherwise). A model that isn't on
+ * the list, or a crew member that isn't one, is 400. The models and the efforts can be set
+ * whatever the engine is: they apply to Claude Code turns.
  */
 export async function updateAgentSettings(
   userId: string,
@@ -321,6 +398,7 @@ export async function updateAgentSettings(
     aiPreference?: AiPreference;
     claudeModel?: string | null;
     claudeEffort?: ClaudeEffort | null;
+    claudeCrew?: ClaudeCrewPatch;
   },
   /** Who made the change, for the activity log: the user, or support (admin tools). */
   by: 'user' | 'admin' = 'user',
@@ -329,6 +407,14 @@ export async function updateAgentSettings(
     throw badRequest('Unknown Claude model', { claudeModel: patch.claudeModel });
   if (patch.claudeEffort != null && !isClaudeEffort(patch.claudeEffort))
     throw badRequest('Unknown thinking effort', { claudeEffort: patch.claudeEffort });
+  for (const [member, choice] of Object.entries(patch.claudeCrew ?? {})) {
+    if (!(CLAUDE_CREW_MEMBERS as readonly string[]).includes(member))
+      throw badRequest('Unknown crew member', { claudeCrew: member });
+    if (choice?.model != null && !isClaudeModel(choice.model))
+      throw badRequest('Unknown Claude model', { claudeCrew: { [member]: choice.model } });
+    if (choice?.effort != null && !isClaudeEffort(choice.effort))
+      throw badRequest('Unknown thinking effort', { claudeCrew: { [member]: choice.effort } });
+  }
   const current = await getAgentSettings(userId);
   if (patch.runtime === 'claude_code' && !current.claude.connected)
     throw conflict('Connect your Claude plan first');
@@ -339,12 +425,15 @@ export async function updateAgentSettings(
     patch.aiPreference !== undefined && patch.aiPreference !== current.aiPreference;
   const model = patch.claudeModel !== undefined && patch.claudeModel !== current.claudeModel;
   const effort = patch.claudeEffort !== undefined && patch.claudeEffort !== current.claudeEffort;
-  if (runtime || preference || model || effort) {
+  const wantedCrew = withCrewPatch(current.claudeCrew, patch.claudeCrew);
+  const crew = !sameCrew(wantedCrew, current.claudeCrew);
+  if (runtime || preference || model || effort || crew) {
     await saveSettings(userId, {
       ...(runtime ? { runtime: patch.runtime } : {}),
       ...(preference ? { aiPreference: patch.aiPreference } : {}),
       ...(model ? { claudeModel: patch.claudeModel } : {}),
       ...(effort ? { claudeEffort: patch.claudeEffort } : {}),
+      ...(crew ? { claudeCrew: chosenCrew(wantedCrew) } : {}),
     });
   }
   if (runtime) {
@@ -370,6 +459,20 @@ export async function updateAgentSettings(
   await pushRuntime(userId, settings);
   if (runtime || preference) await aiSourceChanged(userId);
   return settings;
+}
+
+/** The crew with a PATCH's changes: only the members and the fields sent change. */
+function withCrewPatch(current: ClaudeCrew, patch: ClaudeCrewPatch | undefined): ClaudeCrew {
+  const next = { ...current };
+  for (const member of CLAUDE_CREW_MEMBERS) {
+    const change = patch?.[member];
+    if (!change) continue;
+    next[member] = {
+      model: change.model !== undefined ? change.model : current[member].model,
+      effort: change.effort !== undefined ? change.effort : current[member].effort,
+    };
+  }
+  return next;
 }
 
 /**

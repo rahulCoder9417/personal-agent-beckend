@@ -1,0 +1,1 @@
+ALTER TABLE "agent_settings" ADD COLUMN "claude_crew" jsonb;

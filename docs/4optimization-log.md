@@ -48,6 +48,20 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 17 October 2026: Tex hands a web job to Scout at once
+
+- **Where it is:** on the branch `fix/web-straight-to-scout` in the vm-manager and in the backend, not merged or deployed yet.
+- **Why:** in your web chat (17 October, 11:13 UTC) you wrote "Run curl -s https://youtube.com in your workspace." Tex answered that web fetching is Scout's domain and asked what you were trying to get from YouTube. You said it should have given it to Scout. Tex was right that the web is Scout's, but it explained that to you and asked back, when it should simply have handed the job over.
+- **What the user notices:** a request to fetch, curl, wget or open an address now goes to Scout straight away, with no explaining whose job it is and no question first. Tex then reports what Scout found in plain words, including when the page shows little because it needs JavaScript. Tex asks you something only when the job cannot start without the answer.
+- **Backend:** nothing, apart from this entry.
+- **vm-manager (the Bridge, in the agent image):** Tex's rules gain three short sentences saying the above. The message the gate sends back when Tex itself tries to use a web tool now says to hand the job to Scout now, without explaining or asking first, and to report what Scout found.
+- **Cost and speed:** Tex's instructions grow by about 500 characters, in the part the prompt cache keeps. A fetch request skips one round of talk with you.
+- **Contracts:** none changed. **Database:** none.
+- **How it was checked:** a new test checks that Tex's rules hold the straight-away rule, that fetch, curl, wget and open-an-address count as web jobs, and that Tex asks only when it cannot start. The Bridge's tests all pass (284 run, 1 skipped as before). Not run on the test server yet.
+- **Still open:** merge, deploy, and try the same sentence in the web chat.
+- **Docs updated:** none.
+- **Commits:** vm-manager c6fb9f9 on `fix/web-straight-to-scout`; backend: the commit with this entry on the same branch name.
+
 ### 17 October 2026: Code review that reads before it judges (files as text, Patch never posts, plain command cards)
 
 - **Where it is:** on the branch `fix/review-no-guessing` in the backend and in the vm-manager, not merged or deployed yet.

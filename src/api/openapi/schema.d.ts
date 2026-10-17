@@ -3062,7 +3062,13 @@ export interface components {
             connectable: boolean;
             connections: {
                 id: string;
-                /** @example work@acme.com */
+                /**
+                 * @description Who the connection is signed in as: the email address (Gmail) or the username
+                 *     (GitHub). The app is asked once, when Tex first looks at the user's apps; null
+                 *     until then, and for apps that cannot say.
+                 * @example work@acme.com
+                 * @example rahulcoder9417
+                 */
                 accountLabel?: string | null;
                 /** @enum {string} */
                 status: "active" | "expired" | "error";
@@ -4128,7 +4134,11 @@ export interface components {
             appName: string;
             /** @enum {string} */
             status: "pending" | "active" | "expired" | "error";
-            /** @example work@acme.com */
+            /**
+             * @description Who the connection is signed in as (an email or a GitHub username), when known
+             * @example work@acme.com
+             * @example rahulcoder9417
+             */
             accountLabel: string | null;
             setupSource: components["schemas"]["AdminAppSetupSource"];
             /** @description The app can be connected on this server today */

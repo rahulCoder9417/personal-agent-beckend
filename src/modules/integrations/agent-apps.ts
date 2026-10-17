@@ -190,15 +190,94 @@ export interface ListedApp {
   app: string;
   name: string;
   status: AgentAppStatus;
-  /** How many actions the app has (matching the search word, when one is given). */
+  /** How many actions the app has (matching the search words, when they are given). */
   actions?: number;
   note?: string;
+}
+
+/** Words that narrow nothing in a search for an action. */
+const STOP_WORDS = new Set(
+  'a all an and any are by for from i in is me my of on or the to with'.split(' '),
+);
+
+/** Short words people use, as the actions spell them. */
+const SPELLED_OUT: Record<string, string[]> = { pr: ['pull', 'request'], prs: ['pull', 'request'] };
+
+/** A word without its plural ending: "repositories" → "repository", "pulls" → "pull". */
+function stem(word: string): string {
+  if (word.length > 4 && word.endsWith('ies')) return `${word.slice(0, -3)}y`;
+  if (word.length > 3 && word.endsWith('s') && !word.endsWith('ss')) return word.slice(0, -1);
+  return word;
+}
+
+/** The words of a text, slug or search: lowercase, split at anything not a letter or digit. */
+const wordsOf = (text: string) =>
+  text
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .map(stem);
+
+/** The words of a search that narrow it, with the short ones spelled out. */
+export function searchWords(search: string): string[] {
+  const out = new Set<string>();
+  for (const raw of search.toLowerCase().split(/[^a-z0-9]+/)) {
+    if (!raw || STOP_WORDS.has(raw)) continue;
+    for (const w of SPELLED_OUT[raw] ?? [raw]) out.add(stem(w));
+  }
+  return [...out];
+}
+
+/** A search word fits a word of the action when it starts it ("repo" fits "repository"). */
+const fits = (q: string, words: string[]) =>
+  words.some((w) => (q.length <= 2 ? w === q : w.startsWith(q)));
+
+/**
+ * The actions that fit a search, best first. Each word of the search is looked for in the action's
+ * name (its slug and title) and in its description, so "list pull requests" finds
+ * GITHUB_LIST_PULL_REQUESTS ("Lists pull requests for a GitHub repository"). Until 17 October 2026
+ * the whole search had to appear as it was typed, and it did not. An action with every word comes
+ * first, the ones with the words in their name before the ones with them only in the description.
+ * When no action has every word, the ones with the most of them, and `partial` says so.
+ */
+export function matchActions(
+  tools: ComposioTool[],
+  search: string,
+): { tools: ComposioTool[]; partial: boolean } {
+  const words = searchWords(search);
+  if (words.length === 0) return { tools, partial: false };
+  const scored = tools.map((t, i) => {
+    const named = [...wordsOf(t.slug), ...wordsOf(t.name)];
+    const described = wordsOf(t.description);
+    let found = 0;
+    let score = 0;
+    for (const q of words) {
+      if (fits(q, named)) {
+        found += 1;
+        score += 2;
+      } else if (fits(q, described)) {
+        found += 1;
+        score += 1;
+      }
+    }
+    return { t, i, found, score };
+  });
+  const most = Math.max(0, ...scored.map((s) => s.found));
+  if (most === 0) return { tools: [], partial: false };
+  return {
+    tools: scored
+      .filter((s) => s.found === most)
+      .sort((a, b) => b.score - a.score || a.i - b.i)
+      .map((s) => s.t),
+    partial: most < words.length,
+  };
 }
 
 /**
  * list_app_actions: the user's apps with their state, and the actions of the connected ones.
  * Composio is asked once per app, so an app with hundreds of actions (GitHub) cannot crowd out the
- * others; then every app gets a fair share of the MAX_LISTED_ACTIONS places.
+ * others; then every app gets a fair share of the MAX_LISTED_ACTIONS places. Search words are
+ * matched against all of an app's actions (matchActions), the best first.
  */
 export async function appActionsFor(
   userId: string,
@@ -210,21 +289,27 @@ export async function appActionsFor(
   const states = (await currentAgentAppStates(userId, plan, rows)).filter(
     (s) => !wanted || s.app.slug === wanted || s.app.toolkit === wanted,
   );
-  const q = filter.search?.trim().toLowerCase();
-  const lists = await Promise.all(
+  const q = filter.search?.trim();
+  const fetched = await Promise.all(
     states.map(async (s): Promise<ComposioTool[] | Error | null> => {
       if (s.status !== 'connected') return null;
       try {
-        const tools = await toolkitTools(s.app.toolkit);
-        return tools.filter(
-          (t) => !q || t.slug.toLowerCase().includes(q) || t.description.toLowerCase().includes(q),
-        );
+        return await toolkitTools(s.app.toolkit);
       } catch (err) {
         logger().warn({ userId, app: s.app.slug, err: String(err) }, 'composio list tools failed');
         return err instanceof Error ? err : new Error(String(err));
       }
     }),
   );
+  // With search words: the actions that have them all, in any app. Only when no app has an action
+  // with every word, each app's actions with the most of them.
+  const matched = fetched.map((l) => (Array.isArray(l) && q ? matchActions(l, q) : null));
+  const anyWhole = matched.some((m) => m && !m.partial && m.tools.length > 0);
+  const lists = fetched.map((l, i) => {
+    const m = matched[i];
+    if (!m) return l;
+    return anyWhole && m.partial ? [] : m.tools;
+  });
   const shares = fairShares(
     lists.map((l) => (Array.isArray(l) ? l.length : 0)),
     MAX_LISTED_ACTIONS,
@@ -246,16 +331,23 @@ export async function appActionsFor(
       return;
     }
     const shown = list.slice(0, shares[i]);
+    const notes: string[] = [];
+    if (q && !anyWhole && list.length === 0)
+      notes.push(
+        `No ${s.app.name} action matches "${q}". Search again with other words: the thing ` +
+          '(e.g. "pull request", "issue", "event") or what to do with it ("list", "create").',
+      );
+    else if (q && !anyWhole && matched[i]?.partial)
+      notes.push(`No ${s.app.name} action has every word of "${q}": these have the most of them.`);
+    if (shown.length < list.length)
+      notes.push(
+        `Showing ${shown.length} of its ${list.length} actions${q ? ' that match, the best first' : ''}. ` +
+          `To find another, call list_app_actions again with app "${s.app.slug}" and search words.`,
+      );
     apps.push({
       ...base,
       actions: list.length,
-      ...(shown.length < list.length
-        ? {
-            note:
-              `Showing ${shown.length} of its ${list.length} actions. To find another, call ` +
-              `list_app_actions again with app "${s.app.slug}" and a search word.`,
-          }
-        : {}),
+      ...(notes.length > 0 ? { note: notes.join(' ') } : {}),
     });
     for (const t of shown)
       actions.push({

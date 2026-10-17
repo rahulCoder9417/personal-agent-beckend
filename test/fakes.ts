@@ -520,7 +520,8 @@ export const FAKE_TRIGGER_TYPES: Record<string, ComposioTriggerType[]> = {
 
 /** Fake Composio: every app "connects" instantly; webhooks are "signed" with signature "valid". */
 export async function installFakeComposio() {
-  const { setComposioApi } = await import('../src/modules/integrations/composio.ts');
+  const { setComposioApi, TOOL_LIST_LIMIT } =
+    await import('../src/modules/integrations/composio.ts');
   const executed: ExecutedAction[] = [];
   const triggers: Array<{
     userId: string;
@@ -557,9 +558,9 @@ export async function installFakeComposio() {
     toolRequests: [] as string[][],
     /**
      * Like Composio's tool list: one request for several toolkits answers at most this many tools
-     * in all (the request's `limit`), toolkit by toolkit in name order.
+     * in all (the request's `limit`, TOOL_LIST_LIMIT), toolkit by toolkit in name order.
      */
-    toolsLimit: 200,
+    toolsLimit: TOOL_LIST_LIMIT,
     /** The next listTools call for this toolkit fails (used once). */
     toolsError: new Map<string, Error>(),
     /** tool calls (one tool asked by its name), by slug. */

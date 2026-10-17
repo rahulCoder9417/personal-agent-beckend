@@ -9,6 +9,13 @@ export interface PlatformTool<S extends z.ZodRawShape = z.ZodRawShape> {
   name: string;
   description: string;
   input: S;
+  /**
+   * Keep inputs that `input` does not name, instead of dropping them without a word (what a Zod
+   * object does by default). The tool reads them from its arguments. For run_app_action and
+   * request_approval: an agent sometimes puts an action's inputs next to `action` instead of
+   * inside `arguments` (17 October 2026).
+   */
+  keepOtherInputs?: boolean;
   /** Returns JSON-serialisable output. Throw ToolError for an error the agent should see. */
   run(ctx: ToolContext, args: z.infer<z.ZodObject<S>>): Promise<unknown>;
   /** One-line summary for the audit log. */

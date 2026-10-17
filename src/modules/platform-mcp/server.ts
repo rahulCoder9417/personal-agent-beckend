@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import { z } from 'zod';
 import { runLater } from '../../shared/later.ts';
 import { logger } from '../../shared/logger.ts';
 import { audit, type AuditInput } from '../admin/audit.ts';
@@ -24,7 +25,11 @@ export function createPlatformMcpServer(ctx: ToolContext): McpServer {
   for (const tool of platformTools()) {
     server.registerTool(
       tool.name,
-      { description: tool.description, inputSchema: tool.input },
+      {
+        description: tool.description,
+        // A plain shape drops the inputs it does not name; a loose object keeps them for the tool.
+        inputSchema: tool.keepOtherInputs ? z.looseObject(tool.input) : tool.input,
+      },
       async (args: Record<string, unknown>) => {
         touch(ctx.userId);
         try {

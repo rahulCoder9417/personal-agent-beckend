@@ -1046,8 +1046,8 @@ The Platform MCP is the platform's tool server. MCP is a standard way for an AI 
 | Tool | What it does |
 |---|---|
 | `send_message` | Sends a text to one of the user's own chats |
-| `get_profile` | Returns the user's name, time zone, plan, connected apps, and the apps that are not ready yet with what to tell the user |
-| `list_app_actions` | Lists the user's apps with their status, and the actions the agent may run in the connected ones: each action's name and one line on what it does |
+| `get_profile` | Returns the user's name, time zone, plan, connected apps (each with the account it is connected as, such as the GitHub username: section 14, "Who an app is connected as"), and the apps that are not ready yet with what to tell the user |
+| `list_app_actions` | Lists the user's apps with their status and the account each is connected as, and the actions the agent may run in the connected ones: each action's name and one line on what it does |
 | `describe_app_action` | Gives one action's inputs: their names, their kinds and which are required (new on 16 October) |
 | `run_app_action` | Runs one app action, for example "send an email". The answer is kept short (section 14) |
 | `request_approval` | Asks the user to approve a risky action, with its exact inputs, checked against the action first. Answers "pending" at once |
@@ -1145,7 +1145,7 @@ Each connection keeps the time the platform last heard from Composio about it: a
 A user connects an app again with the same account: to move to our own sign-in app, or after the connection expired (Reconnect). The older connection must then go, and what was made on it must follow.
 
 1. Whenever a connection becomes active, in any of the four ways above, the api or the worker adds a job named `settle-connection` to the system queue. One job per connection.
-2. The job looks for the user's older connections of the same app to the same account. "The same account" means the same account label: the email Composio gives for the account, in any letter case. A label we don't have yet is asked of Composio and kept.
+2. The job looks for the user's older connections of the same app to the same account. "The same account" means the same account label, in any letter case: who the account is (next part). A label we don't have yet is asked of Composio and kept. Composio's record gives none in practice, so the job only finds a match once the app itself has said who both accounts are (next part).
 3. For each one, the user's app-event automations of that app move to the new connection. The automations module makes a new trigger on the new connection, points the automation at it, then removes the old trigger. Which automations watch the old connection is asked of Composio.
 4. Then the old connection is removed at Composio, and in our table.
 
@@ -1154,6 +1154,19 @@ It never removes a connection to another account of the app ("Add account"), nor
 It is safe to run twice. A second run finds nothing to do. A run that stopped after making a new trigger but before saving it leaves that trigger on the new connection; the next run uses it instead of making another. An old account that Composio no longer has counts as removed. Runs for the same user wait for each other, with a short lock of their own.
 
 **Example.** Rahul's Gmail is on Composio's shared sign-in, with "when my boss emails me, tell me". He connects Gmail again through our own sign-in app. A few seconds later Integrations → Apps shows one Gmail connection, the new one, and the automation watches the new one.
+
+### Who an app is connected as
+
+Each connection keeps who it is signed in as: the user's GitHub username, their Gmail address. It is called the account label. Tex sees it, so it never has to ask the user.
+
+- **Where it comes from.** Composio's record of a connected account does not say who it is. On 17 October 2026 every connection on the server had an empty label, Gmail's too. So the api asks the app itself, with the app's own "who am I" action: `GITHUB_GET_THE_AUTHENTICATED_USER` (its `login`) for GitHub, `GMAIL_GET_PROFILE` (its `emailAddress`) for Gmail. These only read. The platform runs them, not the agent: nothing is charged, and they are not in the activity log.
+- **When.** The first time the agent looks at the user's apps (`get_profile` or `list_app_actions`) and an active connection has no label yet. The answer is kept on the connection, so the app is asked once. Two calls at the same moment ask once.
+- **What the agent sees.** `get_profile` gives each connected app with `account`, for example GitHub with `rahulCoder9417`. `list_app_actions` gives the same `account` for each connected app: the one of the connection its actions run on, the newest. Null means the app does not say.
+- **Where else it shows.** The Integrations page shows it under the app (the `accountLabel` of each connection, which held only emails before), and so do the admin pages.
+- **When the app is slow or fails.** The agent's answer waits at most 3 seconds for it. A slower answer is still kept when it comes, for the next call. A failed one, or one that does not say, leaves the label empty, and that connection is asked again 10 minutes later at the soonest.
+- **Apps without such an action.** The other apps keep no label for now. Tex's instructions say: use the account when it is given; if it is null, ask the app when it has an action for it; only when the app cannot tell, look in the memory, and if it is not there, ask the user once and save the answer with `remember` (section 34, "The two engines").
+
+**Example.** On 17 October the founder asked Tex about his repositories. Tex asked for his GitHub username, he gave it, and in a new chat two hours later Tex asked again: nothing had been saved, and nothing in Tex's view said who GitHub was connected as. Now his GitHub shows as `rahulCoder9417` in `get_profile` from the first look, and a repository named without its owner is looked for among his own.
 
 ### How the agent finds and runs an action
 
@@ -1186,7 +1199,7 @@ It is safe to run twice. A second run finds nothing to do. A run that stopped af
 - At zero credits, a changing action is refused before it reaches Composio. Reading still works.
 - The platform decides by the words in the action's name. CREATE or SEND means a change. GET or LIST means reading. An action it cannot place counts as a change.
 - **Composio's keys stay on the server.** The Composio key is a setting of the api and the worker only. No container gets it.
-- The app sign-ins are kept by Composio. Our `connections` table holds only Composio's account id, the status and a label.
+- The app sign-ins are kept by Composio. Our `connections` table holds only Composio's account id, the status and a label (who the account is, section 14, "Who an app is connected as").
 
 ### What can go wrong
 
@@ -1197,7 +1210,7 @@ It is safe to run twice. A second run finds nothing to do. A run that stopped af
 - **Composio is down while a user connects, or will not make a setup** (for example, the Composio key may not make setups). The api answers 503: "Gmail can't be connected right now". Nothing is saved, and the next try asks again.
 - **Composio cannot remove a connected account.** On Disconnect, by the user or an admin, the failure is only written to the server log, and our row is deleted anyway. The account then stays at Composio, with the app's sign-in, and nothing tries again. On account deletion it is different: the row stays and the deletion job fails, so it tries again (section 33).
 - **Two users connect a new app at the same moment.** Each may make a setup at Composio. The first one saved is used by everyone. The other stays unused at Composio, with no connections on it.
-- **Two connections of the same app stay after connecting again.** Composio gave no email for the account, so the server can't tell it from a second account. The agent uses the newer one; the user can remove the old one with Disconnect.
+- **Two connections of the same app stay after connecting again.** Composio gave no email for the account, so the server can't tell it from a second account. Since 17 October GitHub and Gmail say who the account is, but only once the agent has looked at the apps, which is usually after the clean-up job has run for the new connection. The agent uses the newer one; the user can remove the old one with Disconnect.
 - **A trial setting is damaged.** The api and the worker don't start after the restart, and the log says which value is wrong.
 - **Which permissions does an app's sign-in ask for?** Our server sets none; each app uses Composio's default set, which Composio does not publish. The dev-user script's `scopes` command prints it: the setup's own scopes, the ones Composio's sign-in always asks for, Composio's narrowest and smallest sets for the app's actions, and for a Google app each scope's class at Google (basic, non-sensitive, sensitive or restricted). It only reads, and of a setup it reads the scopes only, never the client id or secret beside them. `docs/composio.md`, section 9.
 - **The user says an app is connected, but the agent can't see it.** The agent says it may still be finishing, or that it needs connecting again on the Integrations page. To see why, run the dev-user script's `apps` command on the server (`docs/composio.md`, section 11). It prints each connection with our status, its Composio account id, what Composio says about it, the setup it was made with, and what the agent sees.
@@ -1997,6 +2010,7 @@ A memory is one short fact about the user, on one line of at most 300 characters
 - `recall` finds memories by the words of a question. With no words, it lists the latest. It does not search by meaning.
 - `forget` removes a memory. With a correction, it replaces the text and keeps the id.
 - The tool texts tell the agent to save only what the user says or confirms. Something only read in a web page or an email must not be saved.
+- Who the user is in an app is saved only when the app cannot say it: the platform shows the account of GitHub and Gmail by itself (section 14, "Who an app is connected as"). For another app, Tex asks once and saves the answer, for example "Their Notion workspace is Acme", so it never asks again.
 
 ### How memories reach the agent
 
@@ -3311,6 +3325,10 @@ Two rules follow, since 16 October, after "check my email" took 62 seconds and 1
 A third, since 17 October, after Tex sent Scout to github.com for the founder's open pull requests:
 
 - **The user's own data in an app comes from the app.** Their GitHub repositories, pull requests and issues, their email, their calendar: from the app's actions, never from the app's website. Search `list_app_actions` with the app and a few plain words (app "github", search "pull request"), and try other words before deciding the app cannot do it. Three GitHub actions are named: `GITHUB_FIND_PULL_REQUESTS` (pull requests across the user's repositories), `GITHUB_LIST_REPOSITORIES_FOR_THE_AUTHENTICATED_USER` and `GITHUB_GET_THE_AUTHENTICATED_USER` (the username). The agent does not ask the user for what the app can tell it.
+
+A fourth, also since 17 October, after Tex asked the founder for his GitHub username in two chats:
+
+- **Who the user is in an app comes from the app.** `get_profile` and `list_app_actions` give each connected app's account (GitHub: the username, which owns the user's own repositories; Gmail: the address). Tex uses it and never asks the user for it. A repository named without its owner is most likely the user's own: Tex looks for it among their repositories instead of asking. When an app's account is null, Tex asks the app if it has an action for it (GitHub: `GITHUB_GET_THE_AUTHENTICATED_USER`). Only when the app cannot tell does Tex look in the memory, and if it is not there, it asks the user once and saves the answer with `remember`. This rule comes right after the memory rules.
 
 Each tool call goes out as a progress line in plain words, the same on both engines: "Looked at your apps", "Checked your inbox", "Sent an email", "Asked for your OK", "Ran a command". A call that is only the engine's own housekeeping (Claude Code's ToolSearch) has no line. An unknown tool is "Used a tool", never its raw name.
 

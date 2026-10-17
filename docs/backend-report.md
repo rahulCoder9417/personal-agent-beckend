@@ -775,6 +775,10 @@ The event's "queued" mark is written after the answer. The event is saved only o
 
 The web app can name the conversation to write in. Without a name, the message goes into web chat's active conversation. A named conversation that is not active becomes the active one first. The Automations chat is the exception: the message goes into it, and the active conversation stays the one it was. The api answers 404 for a conversation that is not the user's, and 409 for a Telegram conversation. The turn then runs in the message's own conversation, also when the user opens another one before the worker gets to it. The same message sent twice is saved once and does not change which conversation is active.
 
+A message sent from the New automation page says so (`purpose: automation_draft`). It always goes into the Automations chat, which is started if the user has none yet, and the active conversation stays as it was; naming a conversation as well is refused (400). The rest of its path is the one above. Section 18, "Asked from the New automation page", says what the turn does with it.
+
+**The turn's id on every message** (since 17 October). Each message the api lists or sends on the live updates carries `turnId`, the id of the turn it belongs to: on the user's message, the turn that answers it; on the agent's message, and on what the platform says during a turn ("out of credits", the apology for a failed turn), the turn it was written in. It is the same id the drafts of an answer carry (section 12). So the answer to one message is the agent's message with the same `turnId`, also in a conversation where something else is said meanwhile, such as a run's answer in the Automations chat. A notice written outside a turn has none.
+
 ### What can go wrong
 
 - **The server is full, or the vm-manager cannot be reached.** The job fails and is retried with the usual waits.
@@ -1508,6 +1512,7 @@ There are three ways:
 
 - **A plain one-time reminder** ("remind me Friday at 10 to call the bank"): the agent calls `schedule_reminder` with a text and a time, and it is saved at once.
 - **Anything else asked in chat** (a schedule, an app event, or a one-time job with work to do): the agent proposes it with `propose_automation`, and it is saved only when the user saves the draft. The part "Drafts" below explains it. Until 16 October the agent saved these at once with `create_automation`; that tool is no longer the agent's.
+- **Asked on the New automation page** ("Ask Tex to set it up"): the same draft, but the page stays where it is and opens the draft on the canvas, or shows why it can't be one. The part "Asked from the New automation page" below explains it.
 - **Built by hand** on the canvas in the web app, box by box. The part "Building and changing one by hand" below explains it.
 
 When it is saved, either way:
@@ -1584,6 +1589,18 @@ A draft is an automation the agent proposed that the user has not saved. It neve
 - **The account goes:** its drafts go with it.
 
 **Example.** Rahul writes on Telegram "every Monday at 9, send me my open pull requests". Tex proposes it. Telegram shows the outline and ✅ Save. Nothing runs. He opens the link, sees the five boxes, then taps Save on Telegram. The automation is made, its timer set, and each Monday the list lands in his Automations chat with a copy on Telegram.
+
+**Asked from the New automation page** (since 17 October). The box "Ask Tex to set it up" on the web app's New automation page sends the words as a web message marked `purpose: automation_draft` (section 9). Until then "Draft it" opened the chat with the words typed in; now the page stays.
+
+1. The api saves the message in the user's Automations chat (started if there is none) and adds the job, as for any web message. It is the user's to find there later, with Tex's answer under it.
+2. The worker runs one normal turn: the same credits and limits as a chat message. The quick router never answers it; it always goes to the agent.
+3. The turn's text starts with a note from the platform: the request came from the New automation page and the user is waiting there for a draft. The agent may do only one of two things. If it can run as an automation (at a set time, on a schedule, or on an app event; a one-time reminder too), it proposes it with `propose_automation`, filling what is left open with sensible defaults the user can change on the canvas. If it can't (no trigger fits, an app it needs isn't connected, or it is a one-off question or task), it says why in one or two plain sentences, then suggests a request that would work, as `Try: "…"`. It asks no question and does not do the task itself in that turn: no app actions, no messages to anyone, no crew jobs. The user's message is saved as typed; the note is only in the turn.
+4. In the Automations chat `schedule_reminder` is refused anyway (the part "No reminder when the agent has read what the user did not write" below), so a one-time reminder asked here becomes a draft too, and nothing is set before the user saves.
+5. The page follows the turn by the message's `turnId` (section 9): a message of that turn with a draft opens the draft on the canvas (`/automations/new?draft=…`, or the automation's page for a change); a plain answer is shown under the box as Tex's "why not", with "Try another prompt"; a failed turn or a refused send is an error note; no answer in 90 seconds says "Tex is taking longer" with a link to the Automations chat, and the page keeps watching.
+
+Example: Priya types "Every morning at 9, sum up my unread email" and taps Draft it. The box says "Tex is checking if this can be an automation…". Tex proposes "Morning email", and the canvas opens with it, marked "Not saved". Had she typed "Book a table for two tonight", Tex would answer under the box: "That's something to do once, not something to run later, so it can't be an automation. Try: "Every Friday at 6pm, remind me to book a table."" Her words stay in the box to edit.
+
+If a job of such a message is added again from its saved event alone (Redis lost its jobs), the worker reads the message and its purpose from the event, so the note is not lost.
 
 ### Building and changing one by hand
 
@@ -3753,7 +3770,7 @@ This section says what the web app can do through the api, group by group. Almos
 |---|---|
 | Profile | Read the user's name, plan and credit summary, whether a time zone was ever set, and the two first-run marks (welcome steps done, checklist closed). Change the name and time zone, and set or clear the marks. The app sets the time zone from the browser once, while nobody has set one |
 | Channels and linking | See linked chat apps and which channels are on. Get a one-time code to link Telegram. Unlink a chat |
-| Chat and the live stream | List the conversations, with the Automations chat apart if asked. Start a new web conversation, open an earlier one, rename or delete one (the Automations chat keeps its name and cannot be deleted). See which ones are unread and mark one read. Read the messages of one conversation, or of all. Send a message into the active web conversation or into one the app names. Upload a file up to 10 MB. Keep a live stream open |
+| Chat and the live stream | List the conversations, with the Automations chat apart if asked. Start a new web conversation, open an earlier one, rename or delete one (the Automations chat keeps its name and cannot be deleted). See which ones are unread and mark one read. Read the messages of one conversation, or of all. Send a message into the active web conversation or into one the app names, or, from the New automation page, a request for an automation draft into the Automations chat. Each message says which turn it belongs to. Upload a file up to 10 MB. Keep a live stream open |
 | Approvals | List approvals, the waiting ones by default. Approve or reject one |
 | Apps | See the app list with status and plan, and which apps can be connected on this server. Start connecting an app. Disconnect one |
 | MCP servers | List the user's own MCP servers. Add one (Max plan), rename it, switch it on or off, remove it |

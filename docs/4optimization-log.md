@@ -48,6 +48,38 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 17 October 2026: "Draft it" on the New automation page stays on the page and gives Tex's verdict
+
+- **Where it is:** on the branch `feat/draft-on-page` in the backend and the web app, not on `main` yet (17 October, evening).
+- **Why:** you asked that "Draft it" on the New automation page stop sending you to the chat. It should stay on the page, check whether the request can be an automation, and either open the canvas with Tex's draft or say why not and what would work.
+- **What the user notices:**
+  - After "Draft it" the box says "Tex is checking if this can be an automation…", with the button off and the words kept in the box.
+  - When it can be built, the canvas opens with Tex's draft, marked "Not saved". Nothing runs until it is saved, as before.
+  - When it can't, a short note under the box gives Tex's reason in a sentence or two and a request that would work ("Try: …"), with a "Try another prompt" button that puts the cursor back in the box. The words stay there to edit.
+  - A failed turn, or a send that is refused (out of credits, offline), is a plain error note; out of credits links to Credits. With no answer after 90 seconds the note says "Tex is taking longer — see it in Chat", links to the Automations chat, frees the box for another try, and the page keeps watching: a draft that comes later still opens.
+  - The request and Tex's answer stay in the Automations chat, so they can be found later. The chat that was open stays the open one, and no new chat is started for each try.
+  - An empty box still does nothing, and the three ideas under it still fill it. It works at 375 px wide (the note's button goes under the words).
+- **Backend:**
+  - A web message can say it comes from the New automation page. Such a message goes into the user's Automations chat, which is started if there is none yet; naming a conversation as well is refused.
+  - Its turn is one normal turn of Tex in that chat. The worker puts a note from the platform at the start of the turn's text: the request came from the New automation page, the user is waiting there for a draft, and Tex may only do one of two things. Either it proposes the automation with its usual draft tool, filling what is left open with sensible defaults, or it says why it can't be one in one or two sentences and suggests a request that would work, with no question. It must not do the task itself in that turn. The user's message is saved as typed; the note is only in the turn.
+  - Such a request always reaches Tex: the quick router never answers it, and text that looks like a coupon code is not taken as one.
+  - In the Automations chat Tex already can't set a reminder straight away, so a one-time reminder asked on this page also comes back as a draft, and nothing is set before the user saves.
+  - Every message the api lists or sends on the live updates now carries the id of the turn it belongs to: on the user's message the turn that answers it, on Tex's (and on the platform's "out of credits" or "something went wrong") the turn it was written in. The page uses it to find the answer to its own request, also when an automation's run answers in the same chat at the same moment.
+  - The job of a web message, when added again from its saved event alone (after Redis lost its jobs), now reads the message and this mark from the event. Before, such a job found no message and was dropped.
+- **vm-manager:** nothing. The note travels in the turn's text, which the Bridge already passes on, so Tex's rules and the agent image do not change.
+- **Cost and speed:** each try is one normal turn, charged like a chat message. The turn's text grows by about 800 characters. The page waits for the same live updates the chat uses; the only other requests are the Automations chat's newest messages once per try, and the draft itself before the canvas opens (which the canvas needs anyway).
+- **Contracts:** `openapi.yaml` changed. Sending a message (`POST /v1/messages`) takes `purpose: automation_draft`, and every message has `turnId`. The web app's copy is synced. `vm.proto` is unchanged.
+- **Database:** none.
+- **How it was checked:**
+  - Backend: a new test file, `automation-draft-ask.test.ts`, with 13 tests: the request goes into the Automations chat (started for it) and the open chat stays as it was; the turn's text carries the note and ends with the user's words, while an ordinary message carries none; a draft's message and a plain answer carry the request's turn id, and another turn's answer in the same chat has another; the quick router and a coupon-looking text never take it from Tex; a conversation named beside it and an unknown purpose are refused; at zero credits nothing is saved and no Automations chat is started; each user's request goes into their own Automations chat and another user can't read it; the same request sent twice is one message and one turn; and a job added again from the saved event alone still carries the note, and does nothing once the turn has run. All 13 pass. Lint and type check pass. The suites nearest to it (`phase3-web`, `conversations`, `automation-conversations`, `automation-drafts`, `phase6-routing`, `new-chat`, `dev-user-script`, `memory-turns`, `channels-switch`): 146 tests pass. The whole suite was not run here; the main session runs it at merge.
+  - Web app: the page's states in `new-automation.test.ts` (checking, the canvas opening on a draft, the note on a plain answer, another turn's message ignored, a failed turn, a refused send with the link to Credits, and the 90-second note with the link to the chat), tried both as rules and by clicking through the page against the demo account. Lint, 1258 tests in 99 files, build and type check pass. The demo account answers such a request the same way, so the page can be tried there.
+  - Not tried with a real Tex: how well Tex keeps to "draft it or say why not" is up to the note, and was not measured.
+- **Still open:**
+  - Deploy the backend before the web app: an older backend ignores the mark and would treat the request as an ordinary chat message (in the open chat, where Tex might do the task). No migration and no new agent image.
+  - If Tex still asks a question or does the task now and then, the next step is one sentence in Tex's own rules about requests from this page (in the vm-manager), or refusing app actions during such a turn.
+- **Docs updated:** `backend-report.md`: section 9 ("A message from web chat": the page's requests and the turn's id on every message), section 18 ("Creating one", and a new part "Asked from the New automation page" at the end of "Drafts"), and the chat line of section 41. `hld-mvp.md`: section 5.4 (the "New automation" line, and step 1 of "a draft first") and section 12 (an item under "Built, never run for real").
+- **Commits:** backend `3a8a1bf` (contract, send, turn, tests), this entry and the docs in the next commit; web app `2dffc7e`.
+
 ### 17 October 2026: Approved means done (an approved app action runs the moment you press Approve)
 
 - **Where it is:** on the branch `feat/approve-runs-now` in the backend and in the vm-manager, not merged or deployed yet.

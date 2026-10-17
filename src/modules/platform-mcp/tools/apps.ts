@@ -11,6 +11,7 @@ import {
   currentConnections,
   describeAppAction,
 } from '../../integrations/agent-apps.ts';
+import { withAccountLabels } from '../../integrations/account-identity.ts';
 import { shapeResult, withResultDefaults } from '../../integrations/app-results.ts';
 import {
   activeConnectionsOf,
@@ -108,11 +109,12 @@ async function runLimits(userId: string): Promise<RunLimits | null> {
 }
 
 // The profile asks Composio about connections still pending first, so an app the user just
-// connected shows at once; one that is not ready is named with what to tell the user.
+// connected shows at once; one that is not ready is named with what to tell the user. Each
+// connected app says who it is connected as (`account`), asked of the app once when not known yet.
 extendProfile(async (userId) => {
   const [user, rows] = await userAndConnections(userId);
   if (!user) return { connected_apps: [], apps_not_ready: [] };
-  const current = await currentConnections(userId, rows);
+  const current = await withAccountLabels(await currentConnections(userId, rows));
   return {
     connected_apps: activeConnectionsOf(current).map((c) => ({
       app: c.catalog.slug,

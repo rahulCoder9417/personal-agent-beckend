@@ -26,6 +26,19 @@ export interface CatalogApp {
    * can make the setup itself. False for Exa, which signs in with an API key (docs/composio.md).
    */
   managedAuth: boolean;
+  /**
+   * How to ask the app who a connection is signed in as (account-identity.ts): its own read-only
+   * "who am I" action, and the field of the result that names the account. Only for apps where
+   * that is one cheap call; the others have no account label, and Tex asks the user once.
+   */
+  identity?: AccountIdentity;
+}
+
+/** An app's "who am I" action and the field of its result that names the account. */
+export interface AccountIdentity {
+  action: string;
+  field: string;
+  arguments?: Record<string, unknown>;
 }
 
 type Entry = Omit<CatalogApp, 'managedAuth'> & { managedAuth?: boolean };
@@ -39,6 +52,7 @@ const APPS: Entry[] = [
     category: 'email',
     toolkit: 'gmail',
     free: true,
+    identity: { action: 'GMAIL_GET_PROFILE', field: 'emailAddress', arguments: { user_id: 'me' } },
   },
   {
     slug: 'googlecalendar',
@@ -111,6 +125,7 @@ const APPS: Entry[] = [
     category: 'dev',
     toolkit: 'github',
     free: true,
+    identity: { action: 'GITHUB_GET_THE_AUTHENTICATED_USER', field: 'login' },
   },
   {
     slug: 'exa',

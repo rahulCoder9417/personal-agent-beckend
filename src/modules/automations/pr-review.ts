@@ -245,7 +245,8 @@ function instruction(repo: RepoRef, number: number, headSha: string): string {
     'Have Patch review it:',
     `1. Clone https://github.com/${name} and check out commit ${headSha}.`,
     '2. Look for bugs, security problems and missing or failing tests in what the pull request changes.',
-    '3. Post ONE review on the pull request that carries all the comments: use the GitHub "create a ' +
+    '3. When Patch has reported, post ONE review on the pull request yourself (Patch never posts) that ' +
+      'carries all the comments: use the GitHub "create a ' +
       `review for a pull request" action (find it with list_app_actions) with owner "${repo.owner}", ` +
       `repo "${repo.repo}", pull_number ${number}, commit_id "${headSha}" and event "COMMENT". ` +
       'It needs no approval in this repo and costs 1 credit; separate comments would cost 1 credit each.',

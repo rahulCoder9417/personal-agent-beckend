@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { newId } from '../../../shared/ids.ts';
@@ -41,6 +42,7 @@ import {
 import { appOfAction, checkActionInputs } from '../../integrations/action-inputs.ts';
 import {
   actionNeedsApproval,
+  actionWords,
   appAllowedOnPlan,
   appForToolkit,
   prCommentTarget,
@@ -49,9 +51,12 @@ import { audit } from '../../admin/audit.ts';
 import { composio } from '../../integrations/composio.ts';
 import { approvalAskText, channelOfSession } from '../../orchestrator/approval-text.ts';
 import {
+  autoApprovedText,
+  claimAutoApproval,
   consumeApproval,
   finishApprovedRun,
   getApproval,
+  publishApproval,
   releaseApproval,
   replaceApproval,
   requestApproval,
@@ -61,7 +66,8 @@ import {
   type ApprovedActionResult,
 } from '../../orchestrator/approvals.ts';
 import type { ApprovedRun } from '../../orchestrator/schema.ts';
-import { userHasCredits } from '../../orchestrator/turn.ts';
+import { matchingSkipRule, recipientsOf, type SkipRule } from '../../orchestrator/skip-rules.ts';
+import { turnInProgress, userHasCredits } from '../../orchestrator/turn.ts';
 import { actionInputsOf, misplacedInputsNote } from '../misplaced-inputs.ts';
 import { defineTool, ToolError, type FailureEntry } from '../registry.ts';
 import { extendProfile, resolveSession } from './core.ts';
@@ -280,7 +286,9 @@ defineTool({
     'these arguments. If an approved request could not run and its arguments must change, ask again with replaces_approval_id ' +
     'set to its id: the earlier request is marked replaced. ' +
     'Returns immediately with status "pending". Then END YOUR TURN: the user already sees what you asked and that you wait for ' +
-    "their answer, so don't repeat it or say you're waiting. Their answer arrives later as a new message.",
+    "their answer, so don't repeat it or say you're waiting. Their answer arrives later as a new message. " +
+    'Exception: if your user made a rule to skip approval for this action, nobody is asked. It runs at once instead and the answer ' +
+    'has status "auto_approved" with its result (like run_app_action): then do not end with NO_REPLY, tell the user what was done.',
   input: {
     summary: z.string().min(3).max(500),
     action: z.string().optional(),
@@ -339,6 +347,32 @@ defineTool({
         'replaces_approval_id must be the id of an earlier request of yours for the same action',
         { reason: 'it named an earlier request that is not for the same action' },
       );
+    // The user's skip rule covers exactly this request: nobody is asked. It runs now, the way
+    // run_app_action runs an approved one, and is kept in their Approvals as auto-approved. An
+    // automation set to ask before any change stays strict.
+    if (
+      app &&
+      action &&
+      actionNeedsApproval(action) &&
+      limits?.askFirst !== 'changes' &&
+      (await matchingSkipRule(userId, action, approved ?? {}))
+    ) {
+      const ran = await runAppAction(
+        userId,
+        { action, arguments: approved ?? {} },
+        { summary: args.summary },
+      );
+      const autoId = (ran as { approval_id?: string }).approval_id;
+      const auto = autoId ? await getApproval(userId, autoId) : undefined;
+      // The earlier request it corrects is set aside, as for a new question.
+      if (earlier && auto) await replaceApproval(userId, earlier.id, auto);
+      return {
+        // A standing permission of another kind (pull-request review) may have covered it instead.
+        status: (ran as { auto_approved?: boolean }).auto_approved ? 'auto_approved' : 'done',
+        ...ran,
+        ...(inputsNote ? { inputs_note: inputsNote } : {}),
+      };
+    }
     const a = await requestApproval({
       userId,
       sessionKey,
@@ -373,8 +407,13 @@ defineTool({
           }),
     };
   },
-  summarize: (args) =>
-    `${args.replaces_approval_id ? 'Asked again for approval' : 'Asked for approval'}: ${args.summary}`,
+  summarize: (args, result) =>
+    (result as { status?: string }).status === 'auto_approved'
+      ? autoSummary(args.action ?? '', result)
+      : `${args.replaces_approval_id ? 'Asked again for approval' : 'Asked for approval'}: ${args.summary}`,
+  // A request a skip rule let run at once was charged like the run it is.
+  creditsCharged: (_args, result) =>
+    (result as { credits_charged?: number }).credits_charged ?? null,
   // The log keeps the inputs as they were used, and says when they were sent beside `action`.
   auditArgs: (args) => {
     const found = approvalInputs(args);
@@ -417,6 +456,8 @@ defineTool({
     'for the same action: it runs exactly the arguments the user approved, so leave arguments out (any you pass must be the approved ones). ' +
     "During an automation's run only that automation's apps can be used, and one set to ask first before any change needs " +
     'request_approval for every action that changes something. ' +
+    'If your user made a rule to skip approval for a risky action, it runs without approval_id and the answer says ' +
+    'auto_approved: tell the user what was done. ' +
     'Posting a new review or comment on a pull request needs no approval in a repo where your user turned on ' +
     'pull-request review (a review must use event "COMMENT"); merging, approving and comments on other repos still do. ' +
     'A successful action that changes something (send, create, update, delete) costs your user 1 credit; reading, listing and searching are free. ' +
@@ -428,89 +469,168 @@ defineTool({
     approval_id: z.string().optional(),
   },
   keepOtherInputs: true,
-  async run({ userId }, args) {
-    // The inputs in `arguments`, or the ones the agent put beside `action` instead.
+  run: ({ userId }, args) => runAppAction(userId, args),
+  summarize: (args, result) => {
+    if ((result as { auto_approved?: boolean }).auto_approved)
+      return autoSummary(args.action, result);
+    if ((result as { already_done?: boolean }).already_done)
+      return `Result of ${args.action} (it ran when the user approved)`;
+    const repo = (result as { pr_review?: string }).pr_review;
+    if (repo) return `Ran ${args.action} (pull-request review is on for ${repo})`;
+    const job = (result as { crew_job?: string }).crew_job;
+    if (job) return `Ran ${args.action} (the review the user asked for in crew job ${job})`;
+    return `Ran ${args.action}${args.approval_id ? ' (approved)' : ''}`;
+  },
+  // The log keeps the inputs as they ran, and says when they were sent beside `action`.
+  auditArgs: (args) => {
     const found = actionInputsOf(args, RUN_INPUTS);
-    const inputsNote = misplacedInputsNote(found);
-    // What runs: the agent's arguments, or with an approval exactly the approved ones (below).
-    let runArgs = found.inputs ?? {};
-    // One read of the user's connections serves every check below (it was three or four). The
-    // run's limits (an automation's run only) and the approval are read at the same time.
-    const [[user, read], limits, approval] = await Promise.all([
-      userAndConnections(userId),
-      runLimits(userId),
-      args.approval_id ? getApproval(userId, args.approval_id) : undefined,
-    ]);
-    // The platform ran it the moment the user approved (or runs it now): its result, never a
-    // second run. (A step of a run with steps is always run here, by the agent.)
-    if (approval && !limits?.runId) {
-      const ran = await approvedRunOf(userId, approval, args.action);
-      if (ran) {
-        if (found.inputs && !isDeepStrictEqual(approval.arguments ?? {}, found.inputs))
-          throw new ToolError(
-            'This approval already ran the moment the user approved it, with exactly the approved arguments, and ' +
-              'nothing ran now: the arguments you sent differ from those and were not used. Leave arguments out ' +
-              'to get its result. Something different needs a request_approval of its own.',
-            { reason: 'its details differed from what you approved' },
-          );
-        return ranResult(ran);
-      }
-    }
-    const { conn, toolkit } = await connectionFor(userId, user, read, args.action);
-    // An automation's run may use only the apps on its canvas.
-    const refusal = limits && appRefusal(limits, toolkit, appForToolkit(toolkit)?.name ?? toolkit);
-    if (refusal)
-      throw new ToolError(refusal, { reason: "the automation isn't set to use this app" });
+    return {
+      action: args.action,
+      ...(found.inputs ? { arguments: found.inputs } : {}),
+      ...(args.approval_id ? { approval_id: args.approval_id } : {}),
+    };
+  },
+  auditDetails: (args, result) => ({
+    ...movedDetails(actionInputsOf(args, RUN_INPUTS).moved),
+    ...autoDetails(result),
+  }),
+  creditsCharged: (_args, result) => (result as { credits_charged: number }).credits_charged,
+  // Nothing is charged for an action that did not run.
+  auditFailure: (args, reason) => ({
+    ...appFailure('app_action_failed', "Couldn't run", args.action, reason),
+    creditsCharged: 0,
+  }),
+});
 
-    const changes = await appActionChangesSomething(args.action);
-    // A run of an automation with steps: the call must fit the current step (its own action, with
-    // its fixed inputs put in, or a read to look something up first); it is counted.
-    let gate: Extract<StepGate, { ok: true }> | null = null;
-    if (limits?.runId) {
-      const g = await gateAppAction(userId, limits.runId, {
-        action: args.action,
-        args: runArgs,
-        changes,
-      });
-      if (!g.ok)
-        throw new ToolError(g.refusal, { reason: "it didn't fit the automation's current step" });
-      gate = g;
-      runArgs = g.args;
-    }
-    const stepAction = gate?.kind === 'step' ? gate : null;
+/** The activity log's line for an action a skip rule let run without asking. */
+function autoSummary(action: string, result: unknown): string {
+  return (result as { already_done?: boolean }).already_done
+    ? `Result of ${action} (it ran already in this turn, without asking: your skip rule)`
+    : `Ran ${action} without asking (your skip rule)`;
+}
 
-    // HLD 7.5: at zero credits an action that changes something doesn't run (reading still does).
-    if (changes && !(await userHasCredits(userId))) {
-      // A step's action that can't run fails its step, and the run stops.
-      const next = stepAction
-        ? await failStep(userId, stepAction.run.id, stepAction.step.id, 'out of credits')
-        : '';
-      throw new ToolError(`${OUT_OF_CREDITS}${next ? ` ${next}` : ''}`, {
-        reason: 'you were out of credits',
-      });
-    }
+/** The activity log's mark of an action a skip rule let run: the approval it is kept as. */
+function autoDetails(result: unknown): Record<string, unknown> {
+  const r = result as { auto_approved?: boolean; approval_id?: string; skip_rule_id?: string };
+  return r.auto_approved
+    ? { auto_approved: true, approval_id: r.approval_id, skip_rule_id: r.skip_rule_id }
+    : {};
+}
 
-    let consumedId: string | null = null;
-    // Pull-request review is on for this repo: the user's standing approval covers a new review
-    // or comment on its pull requests, and nothing else (HLD 0.8).
-    let prReviewRepo: string | null = null;
-    // A crew job whose brief says "post it on the pull request": the user's yes for ONE review or
-    // comment on that pull request, during that job (docs/backend-report.md, "The crew").
-    let crewJobId: string | null = null;
-    const risky = actionNeedsApproval(args.action);
-    // The automation's "ask me first" set to every change: an action that changes something
-    // waits for the user's yes too, not only a risky one. A step set to ask first: its action.
-    const askedFirst =
-      !risky && ((changes && limits?.askFirst === 'changes') || stepAction?.step.askFirst === true);
-    // In a run with steps the standing permissions (pull-request review, a crew job's one review)
-    // don't apply: a step that changes things asks first as its step says.
-    if (risky && !args.approval_id && !limits?.runId) {
-      const target = prCommentTarget(args.action, runArgs);
-      if (target && (await prCommentAllowed(userId, target)))
-        prReviewRepo = `${target.owner}/${target.repo}`;
-      else if (target) crewJobId = await claimCrewJobComment(userId, target);
+/** A run_app_action call's inputs: the action, its arguments, an approval, and anything beside. */
+type RunArgs = {
+  action: string;
+  arguments?: Record<string, unknown>;
+  approval_id?: string;
+} & Record<string, unknown>;
+
+/**
+ * run_app_action: runs an action in one of the user's apps. Also request_approval's run of a
+ * request the user's skip rule covers (`opts.summary`: what the agent asked, kept on the approval).
+ */
+async function runAppAction(userId: string, args: RunArgs, opts: { summary?: string } = {}) {
+  // The inputs in `arguments`, or the ones the agent put beside `action` instead.
+  const found = actionInputsOf(args, RUN_INPUTS);
+  const inputsNote = misplacedInputsNote(found);
+  // What runs: the agent's arguments, or with an approval exactly the approved ones (below).
+  let runArgs = found.inputs ?? {};
+  // One read of the user's connections serves every check below (it was three or four). The
+  // run's limits (an automation's run only) and the approval are read at the same time.
+  const [[user, read], limits, approval] = await Promise.all([
+    userAndConnections(userId),
+    runLimits(userId),
+    args.approval_id ? getApproval(userId, args.approval_id) : undefined,
+  ]);
+  // The platform ran it the moment the user approved (or runs it now): its result, never a
+  // second run. (A step of a run with steps is always run here, by the agent.)
+  if (approval && !limits?.runId) {
+    const ran = await approvedRunOf(userId, approval, args.action);
+    if (ran) {
+      if (found.inputs && !isDeepStrictEqual(approval.arguments ?? {}, found.inputs))
+        throw new ToolError(
+          'This approval already ran the moment the user approved it, with exactly the approved arguments, and ' +
+            'nothing ran now: the arguments you sent differ from those and were not used. Leave arguments out ' +
+            'to get its result. Something different needs a request_approval of its own.',
+          { reason: 'its details differed from what you approved' },
+        );
+      return ranResult(ran);
     }
-    if ((risky && !prReviewRepo && !crewJobId) || askedFirst) {
+  }
+  const { conn, toolkit } = await connectionFor(userId, user, read, args.action);
+  // An automation's run may use only the apps on its canvas.
+  const refusal = limits && appRefusal(limits, toolkit, appForToolkit(toolkit)?.name ?? toolkit);
+  if (refusal) throw new ToolError(refusal, { reason: "the automation isn't set to use this app" });
+
+  const changes = await appActionChangesSomething(args.action);
+  // A run of an automation with steps: the call must fit the current step (its own action, with
+  // its fixed inputs put in, or a read to look something up first); it is counted.
+  let gate: Extract<StepGate, { ok: true }> | null = null;
+  if (limits?.runId) {
+    const g = await gateAppAction(userId, limits.runId, {
+      action: args.action,
+      args: runArgs,
+      changes,
+    });
+    if (!g.ok)
+      throw new ToolError(g.refusal, { reason: "it didn't fit the automation's current step" });
+    gate = g;
+    runArgs = g.args;
+  }
+  const stepAction = gate?.kind === 'step' ? gate : null;
+
+  // HLD 7.5: at zero credits an action that changes something doesn't run (reading still does).
+  if (changes && !(await userHasCredits(userId))) {
+    // A step's action that can't run fails its step, and the run stops.
+    const next = stepAction
+      ? await failStep(userId, stepAction.run.id, stepAction.step.id, 'out of credits')
+      : '';
+    throw new ToolError(`${OUT_OF_CREDITS}${next ? ` ${next}` : ''}`, {
+      reason: 'you were out of credits',
+    });
+  }
+
+  let consumedId: string | null = null;
+  // The user's skip rule that let it run without asking (kept as an auto-approved approval).
+  let byRule: SkipRule | null = null;
+  // Pull-request review is on for this repo: the user's standing approval covers a new review
+  // or comment on its pull requests, and nothing else (HLD 0.8).
+  let prReviewRepo: string | null = null;
+  // A crew job whose brief says "post it on the pull request": the user's yes for ONE review or
+  // comment on that pull request, during that job (docs/backend-report.md, "The crew").
+  let crewJobId: string | null = null;
+  const risky = actionNeedsApproval(args.action);
+  // The automation's "ask me first" set to every change: an action that changes something
+  // waits for the user's yes too, not only a risky one. A step set to ask first: its action.
+  const askedFirst =
+    !risky && ((changes && limits?.askFirst === 'changes') || stepAction?.step.askFirst === true);
+  // In a run with steps the standing permissions (pull-request review, a crew job's one review)
+  // don't apply: a step that changes things asks first as its step says.
+  if (risky && !args.approval_id && !limits?.runId) {
+    const target = prCommentTarget(args.action, runArgs);
+    if (target && (await prCommentAllowed(userId, target)))
+      prReviewRepo = `${target.owner}/${target.repo}`;
+    else if (target) crewJobId = await claimCrewJobComment(userId, target);
+  }
+  if ((risky && !prReviewRepo && !crewJobId) || askedFirst) {
+    // No approval, but the user's skip rule covers exactly this: it runs now, with no card, the
+    // way an approved one does, and is kept in their Approvals as auto-approved. Never in an
+    // automation set to ask before any change (a stricter setting wins), never for an action that
+    // always asks (deleting, paying, merging: skip-rules.ts and catalog.ts).
+    const auto =
+      !args.approval_id && !askedFirst && limits?.askFirst !== 'changes'
+        ? await claimByRule(userId, {
+            action: args.action,
+            args: runArgs,
+            summary: opts.summary,
+            step: stepAction ? { runId: stepAction.run.id, stepId: stepAction.step.id } : null,
+          })
+        : null;
+    // The same request again in this turn: the result of the first, nothing run again.
+    if (auto && !auto.fresh) return earlierAutoResult(userId, auto.approval, auto.rule);
+    if (auto) {
+      consumedId = auto.approval.id;
+      byRule = auto.rule;
+    } else {
       if (!args.approval_id)
         throw new ToolError(
           askedFirst
@@ -549,129 +669,219 @@ defineTool({
       }
       consumedId = consumed.id;
     }
+  }
 
-    // Our defaults for actions whose own send far too much (Gmail's fetch: no bodies), never on
-    // approved arguments: those run exactly as the user saw them.
-    if (!consumedId) runArgs = withResultDefaults(args.action, runArgs);
+  // Our defaults for actions whose own send far too much (Gmail's fetch: no bodies), never on
+  // approved arguments: those run exactly as the user saw them.
+  if (!consumedId) runArgs = withResultDefaults(args.action, runArgs);
 
-    let data: unknown;
-    try {
-      // The Composio user id is ALWAYS the caller's (forced from the container token).
-      const res = await composio().execute(args.action, {
-        userId,
-        connectedAccountId: conn.composioAccountId,
-        arguments: runArgs,
-      });
-      if (!res.successful)
-        throw new ToolError(
-          consumedId
+  let data: unknown;
+  try {
+    // The Composio user id is ALWAYS the caller's (forced from the container token).
+    const res = await composio().execute(args.action, {
+      userId,
+      connectedAccountId: conn.composioAccountId,
+      arguments: runArgs,
+    });
+    if (!res.successful)
+      throw new ToolError(
+        byRule
+          ? autoRunFailed(res.error)
+          : consumedId
             ? approvedRunFailed(consumedId, res.error)
             : `The app returned an error: ${res.error ?? 'unknown'}`,
-          // The app's own error may quote the inputs: the log says only that it refused.
-          {
-            reason: consumedId
+        // The app's own error may quote the inputs: the log says only that it refused.
+        {
+          reason: byRule
+            ? 'the app refused it, so nothing was done'
+            : consumedId
               ? 'the app refused the approved request, so nothing was done'
               : 'the app returned an error',
-          },
-        );
-      data = res.data;
-    } catch (err) {
-      const failed =
-        err instanceof ToolError
-          ? err
-          : new ToolError('The app is unavailable right now; tell the user and try later', {
-              reason: "the app couldn't be reached",
-            });
-      // Nothing happened: the approval is handed back, for one more try.
-      if (consumedId)
-        await finishApprovedRun(userId, consumedId, {
-          ok: false,
-          error: failed.message,
-          reason: failed.reason ?? 'the app refused it',
-        });
-      if (crewJobId) await releaseCrewJobComment(userId, crewJobId);
-      if (!(err instanceof ToolError))
-        logger().warn({ userId, action: args.action, err: String(err) }, 'composio execute failed');
-      // A step's own action: one more try, then the step fails and the run stops.
-      if (stepAction) {
-        const next = await stepActionFailed(
-          userId,
-          stepAction.run.id,
-          stepAction.step.id,
-          failed.reason ?? 'the app refused it',
-        );
-        if (next)
-          throw new ToolError(`${failed.message} ${next}`, {
-            ...(failed.reason ? { reason: failed.reason } : {}),
+        },
+      );
+    data = res.data;
+  } catch (err) {
+    const failed =
+      err instanceof ToolError
+        ? err
+        : new ToolError('The app is unavailable right now; tell the user and try later', {
+            reason: "the app couldn't be reached",
           });
-      }
-      throw failed;
-    }
-
-    // Only a successful action is charged. The approval id is the charge's key when there is one
-    // (an approval runs once); otherwise an id for this one run.
-    const creditsCharged = changes
-      ? await chargeRan(userId, args.action, consumedId ?? newId('act'))
-      : 0;
-    // A file the app gave as a link to Composio's storage: its content, never the link
-    // (app-files.ts). Never throws: the action has run, and a file that can't be fetched is a note.
-    data = await inlineAppFiles(args.action, data);
-    // No more than the agent needs: Gmail's fetch summarised, anything too long cut (app-results.ts).
-    const shaped = shapeResult(args.action, runArgs, data);
-    // The approval keeps the result: asked again, it gives this, and never runs twice.
+    // Nothing happened: the approval is handed back, for one more try.
     if (consumedId)
       await finishApprovedRun(userId, consumedId, {
-        ok: true,
-        data: shaped.data,
-        ...(shaped.note ? { note: shaped.note } : {}),
-        creditsCharged,
+        ok: false,
+        error: failed.message,
+        reason: failed.reason ?? 'the app refused it',
       });
-    // A run with steps: the step's own action is done (its short result saved, the pointer moved
-    // on); a look-up leaves it where it is. Either way the answer says what comes next.
-    let next: string | null = null;
-    if (gate) {
-      const after = stepAction
-        ? await stepActionDone(userId, gate.run.id, gate.step.id, shaped.data)
-        : null;
-      next = nowText(after ?? gate.run);
+    if (byRule && consumedId) await publishApproval(userId, consumedId);
+    if (crewJobId) await releaseCrewJobComment(userId, crewJobId);
+    if (!(err instanceof ToolError))
+      logger().warn({ userId, action: args.action, err: String(err) }, 'composio execute failed');
+    // A step's own action: one more try, then the step fails and the run stops.
+    if (stepAction) {
+      const next = await stepActionFailed(
+        userId,
+        stepAction.run.id,
+        stepAction.step.id,
+        failed.reason ?? 'the app refused it',
+      );
+      if (next)
+        throw new ToolError(`${failed.message} ${next}`, {
+          ...(failed.reason ? { reason: failed.reason } : {}),
+        });
     }
-    return {
+    throw failed;
+  }
+
+  // Only a successful action is charged. The approval id is the charge's key when there is one
+  // (an approval runs once); otherwise an id for this one run.
+  const creditsCharged = changes
+    ? await chargeRan(userId, args.action, consumedId ?? newId('act'))
+    : 0;
+  // A file the app gave as a link to Composio's storage: its content, never the link
+  // (app-files.ts). Never throws: the action has run, and a file that can't be fetched is a note.
+  data = await inlineAppFiles(args.action, data);
+  // No more than the agent needs: Gmail's fetch summarised, anything too long cut (app-results.ts).
+  const shaped = shapeResult(args.action, runArgs, data);
+  // The approval keeps the result: asked again, it gives this, and never runs twice.
+  if (consumedId)
+    await finishApprovedRun(userId, consumedId, {
       ok: true,
       data: shaped.data,
       ...(shaped.note ? { note: shaped.note } : {}),
-      credits_charged: creditsCharged,
-      ...(inputsNote ? { inputs_note: inputsNote } : {}),
-      ...(prReviewRepo ? { pr_review: prReviewRepo } : {}),
-      ...(crewJobId ? { crew_job: crewJobId } : {}),
-      ...(next ? { next } : {}),
-    };
+      creditsCharged,
+    });
+  // Kept in the user's Approvals, under Auto-approved, with its result.
+  if (byRule && consumedId) await publishApproval(userId, consumedId);
+  // A run with steps: the step's own action is done (its short result saved, the pointer moved
+  // on); a look-up leaves it where it is. Either way the answer says what comes next.
+  let next: string | null = null;
+  if (gate) {
+    const after = stepAction
+      ? await stepActionDone(userId, gate.run.id, gate.step.id, shaped.data)
+      : null;
+    next = nowText(after ?? gate.run);
+  }
+  return {
+    ok: true,
+    data: shaped.data,
+    ...(shaped.note ? { note: shaped.note } : {}),
+    credits_charged: creditsCharged,
+    ...(inputsNote ? { inputs_note: inputsNote } : {}),
+    ...(prReviewRepo ? { pr_review: prReviewRepo } : {}),
+    ...(crewJobId ? { crew_job: crewJobId } : {}),
+    ...(byRule
+      ? {
+          auto_approved: true,
+          approval_id: consumedId,
+          skip_rule_id: byRule.id,
+          about_approval: autoApprovedText(byRule, Boolean(gate)),
+        }
+      : {}),
+    ...(next ? { next } : {}),
+  };
+}
+
+/**
+ * The app refused an action the user's skip rule let run, so nothing happened. The rule still
+ * covers the action: corrected arguments run without asking too.
+ */
+function autoRunFailed(error: string | null): string {
+  return (
+    `The app refused it, so nothing was done: ${error ?? 'unknown error'}. Your user's rule to skip ` +
+    'approval for this action still covers it: if the arguments must change, call run_app_action again ' +
+    'with the corrected ones. Tell the user in plain words what happened.'
+  );
+}
+
+/** The fingerprint of one request in one turn: the same one again finds the first (claimAutoApproval). */
+function autoKey(turnId: string | null, action: string, args: Record<string, unknown>): string {
+  const sorted = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(sorted)
+      : v && typeof v === 'object'
+        ? Object.fromEntries(
+            Object.keys(v as Record<string, unknown>)
+              .sort()
+              .map((k) => [k, sorted((v as Record<string, unknown>)[k])]),
+          )
+        : v;
+  // No turn on record (a call outside a turn): the same request within ten minutes is the same.
+  const turn = turnId ?? `t${Math.floor(Date.now() / 600_000)}`;
+  return createHash('sha256')
+    .update(JSON.stringify([turn, action.toUpperCase(), sorted(args)]))
+    .digest('hex');
+}
+
+/** The approval's line when the agent gave none (run_app_action alone): "Send email to a@b.com". */
+function autoSummary0(action: string, args: Record<string, unknown>): string {
+  const to = recipientsOf(action, args);
+  const where = action.toUpperCase().startsWith('GITHUB_') ? 'in' : 'to';
+  return `${actionWords(action)}${to.length ? ` ${where} ${to.join(', ')}` : ''}`.slice(0, 500);
+}
+
+/**
+ * The user's skip rule for this request, claimed as an auto-approved approval in the chat of the
+ * turn in progress. Null: no rule covers it (the action asks, as before).
+ */
+async function claimByRule(
+  userId: string,
+  input: {
+    action: string;
+    args: Record<string, unknown>;
+    summary: string | undefined;
+    step: { runId: string; stepId: string } | null;
   },
-  summarize: (args, result) => {
-    if ((result as { already_done?: boolean }).already_done)
-      return `Result of ${args.action} (it ran when the user approved)`;
-    const repo = (result as { pr_review?: string }).pr_review;
-    if (repo) return `Ran ${args.action} (pull-request review is on for ${repo})`;
-    const job = (result as { crew_job?: string }).crew_job;
-    if (job) return `Ran ${args.action} (the review the user asked for in crew job ${job})`;
-    return `Ran ${args.action}${args.approval_id ? ' (approved)' : ''}`;
-  },
-  // The log keeps the inputs as they ran, and says when they were sent beside `action`.
-  auditArgs: (args) => {
-    const found = actionInputsOf(args, RUN_INPUTS);
-    return {
-      action: args.action,
-      ...(found.inputs ? { arguments: found.inputs } : {}),
-      ...(args.approval_id ? { approval_id: args.approval_id } : {}),
-    };
-  },
-  auditDetails: (args) => movedDetails(actionInputsOf(args, RUN_INPUTS).moved),
-  creditsCharged: (_args, result) => (result as { credits_charged: number }).credits_charged,
-  // Nothing is charged for an action that did not run.
-  auditFailure: (args, reason) => ({
-    ...appFailure('app_action_failed', "Couldn't run", args.action, reason),
-    creditsCharged: 0,
-  }),
-});
+): Promise<{ approval: Approval; fresh: boolean; rule: SkipRule } | null> {
+  const rule = await matchingSkipRule(userId, input.action, input.args);
+  if (!rule) return null;
+  const turn = await turnInProgress(userId);
+  const claimed = await claimAutoApproval({
+    userId,
+    sessionKey: turn?.sessionKey ?? 'web',
+    summary: input.summary?.trim() || autoSummary0(input.action, input.args),
+    app: rule.app,
+    action: input.action,
+    arguments: input.args,
+    rule,
+    key: autoKey(turn?.turnId ?? null, input.action, input.args),
+    run: input.step,
+  });
+  return { ...claimed, rule };
+}
+
+/**
+ * The same request a skip rule let run earlier in this turn: its result (waited for while it runs),
+ * never a second run. One that never came back is not run again either.
+ */
+async function earlierAutoResult(userId: string, a: Approval, rule: SkipRule) {
+  const run =
+    a.runResult?.state === 'running'
+      ? await waitForApprovedRun(userId, a.id, TOOL_WAIT_MS)
+      : a.runResult;
+  if (!run || run.state !== 'done')
+    throw new ToolError(
+      'This exact action was started a moment ago in this turn (your user’s skip rule let it run without asking) ' +
+        "and its result has not come back. Don't run it again: it may already have happened. Tell the user it " +
+        'was started and that they can check in the app whether it went through.',
+      { reason: 'it was still running from a moment ago' },
+    );
+  return {
+    ok: true,
+    data: run.data,
+    ...(run.note ? { note: run.note } : {}),
+    // Charged once, when it ran.
+    credits_charged: 0,
+    already_done: true,
+    auto_approved: true,
+    approval_id: a.id,
+    skip_rule_id: rule.id,
+    about_approval:
+      'This exact action already ran earlier in this turn, without asking (your user’s skip rule), and ' +
+      "nothing ran again now. Don't run it again; tell the user what was done.",
+  };
+}
 
 /** How long run_app_action waits for the platform's run of the same approval to end. */
 const TOOL_WAIT_MS = 60_000;

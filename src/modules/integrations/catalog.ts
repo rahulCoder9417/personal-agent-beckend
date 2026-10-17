@@ -301,6 +301,58 @@ export function actionNeedsApproval(actionSlug: string): boolean {
   return RISKY.test(slug) || writesGithubComment(slug);
 }
 
+// --- Which risky actions a skip rule may cover (founder's decision, 17 October) -----------------
+//
+// The user may say "don't ask again" for a risky action (orchestrator/skip-rules.ts). Never for
+// these, whatever a rule says, also one written straight into the database:
+//   - deleting: DELETE, REMOVE, TRASH, and ARCHIVE (our own approvals table counts it as deleting);
+//     DESTROY, PURGE, ERASE and WIPE too, should an action be named so;
+//   - paying: PAY, PAYMENT, TRANSFER, CHARGE, REFUND, PURCHASE, BUY;
+//   - MERGE: a merge writes to the target branch, usually the default one, which may deploy to
+//     production; it can't simply be taken back, and the git gateway never lets the agent write to
+//     a default branch by itself either;
+//   - the platform's own (TEXTCREW_…): Tex's commands and file changes, pushes, crew jobs and
+//     running a crew job again;
+//   - a GitHub review that approves or requests changes (`event` other than COMMENT): an approval
+//     can set off an auto-merge.
+const NEVER_SKIPPED =
+  /(^|_)(DELETE|REMOVE|TRASH|ARCHIVE|DESTROY|PURGE|ERASE|WIPE|PAY|PAYMENT|TRANSFER|CHARGE|REFUND|PURCHASE|BUY|MERGE)(_|$)/;
+
+/**
+ * Whether a skip rule may let this risky action run without asking. False for one that is not
+ * risky (it never asks: there is nothing to skip) and for the kinds above. `args`, when given, are
+ * the request's inputs: a GitHub review is skippable only as a plain comment.
+ */
+export function approvalSkippable(actionSlug: string, args?: Record<string, unknown>): boolean {
+  const slug = actionSlug.toUpperCase();
+  if (slug.startsWith('TEXTCREW_') || !actionNeedsApproval(slug) || NEVER_SKIPPED.test(slug))
+    return false;
+  if (slug.startsWith('GITHUB_') && GITHUB_COMMENT.test(slug) && args && given(args.event)) {
+    return typeof args.event === 'string' && args.event.toUpperCase() === 'COMMENT';
+  }
+  return true;
+}
+
+/**
+ * Whether the action's name says it sends to someone (an email, a message, a post, an invite), so
+ * a rule for it is about who it goes to. Others (update, move, close…) change what is there.
+ */
+const SENDS = /(^|_)(SEND|SENDS|REPLY|FORWARD|POST|PUBLISH|TWEET|SHARE|INVITE|CREATE_EVENT)(_|$)/;
+export function actionSendsToOthers(actionSlug: string): boolean {
+  return SENDS.test(actionSlug.toUpperCase());
+}
+
+/** The action in words: GMAIL_SEND_EMAIL → "Send email" (the app's own prefix left out). */
+export function actionWords(actionSlug: string): string {
+  const slug = actionSlug.toUpperCase();
+  const app = CATALOG.filter((a) => slug.startsWith(`${a.toolkit.toUpperCase()}_`)).sort(
+    (a, b) => b.toolkit.length - a.toolkit.length,
+  )[0];
+  const rest = (app ? slug.slice(app.toolkit.length + 1) : slug).replace(/_+/g, ' ').trim();
+  const lower = rest.toLowerCase();
+  return lower ? lower.charAt(0).toUpperCase() + lower.slice(1) : actionSlug;
+}
+
 // --- Does an action change something? (HLD 7.2: 1 credit if it does, reading is free) ----------
 //
 // Decided from the action's name, word by word like the risky check above:

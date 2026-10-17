@@ -14,9 +14,10 @@ import { messages } from '../src/modules/channels/schema.ts';
 import { closeQueues } from '../src/modules/events/queues.ts';
 import { connections } from '../src/modules/integrations/tables.ts';
 import { requestApproval } from '../src/modules/orchestrator/approvals.ts';
+import { createSkipRule } from '../src/modules/orchestrator/skip-rules.ts';
 import { handleDeleteUser } from '../src/modules/orchestrator/lifecycle.ts';
 import { ensureSandbox } from '../src/modules/orchestrator/sandbox.ts';
-import { approvals } from '../src/modules/orchestrator/schema.ts';
+import { approvals, skipRules } from '../src/modules/orchestrator/schema.ts';
 import { db } from '../src/shared/db/client.ts';
 import { newId } from '../src/shared/ids.ts';
 import { wireModules } from '../src/wiring.ts';
@@ -44,6 +45,8 @@ const connectionsOf = (userId: string) =>
   db().select().from(connections).where(eq(connections.userId, userId));
 const messagesOf = (userId: string) =>
   db().select().from(messages).where(eq(messages.userId, userId));
+const rulesOf = (userId: string) =>
+  db().select().from(skipRules).where(eq(skipRules.userId, userId));
 
 /**
  * A user with what the privacy page lists: an approval asked for an email to Priya (its inputs
@@ -53,7 +56,7 @@ async function userWithData(tag: string) {
   const user = await chatUser();
   await ensureSandbox(user.id);
   const recipient = `priya.${tag}@example.com`;
-  await requestApproval({
+  const asked = await requestApproval({
     userId: user.id,
     sessionKey: 'web',
     summary: `Send the notes to ${recipient}`,
@@ -61,6 +64,8 @@ async function userWithData(tag: string) {
     action: 'GMAIL_SEND_EMAIL',
     arguments: { recipient_email: recipient, subject: 'Notes' },
   });
+  // "Don't ask again" for emails to Priya: the rule holds her address too.
+  await createSkipRule(user.id, { approvalId: asked.id, scope: 'listed' });
   await audit({
     userId: user.id,
     actor: 'agent',
@@ -95,10 +100,11 @@ async function connect(userId: string, app: string): Promise<string> {
 }
 
 describe('deleting an account', () => {
-  it('removes its approvals and its activity log; another user keeps theirs', async () => {
+  it('removes its approvals, its skip rules and its activity log; another user keeps theirs', async () => {
     const { user, recipient } = await userWithData('a');
     const other = await userWithData('b');
     expect(await approvalsOf(user.id)).toHaveLength(1);
+    expect(await rulesOf(user.id)).toHaveLength(1);
     expect((await auditOf(user.id)).length).toBeGreaterThanOrEqual(3);
     const otherAudit = await auditOf(other.user.id);
     const otherMessages = await messagesOf(other.user.id);
@@ -108,10 +114,12 @@ describe('deleting an account', () => {
     expect(vmFake.tokens.has(user.id)).toBe(false);
     expect(await messagesOf(user.id)).toEqual([]);
     expect(await approvalsOf(user.id)).toEqual([]);
+    expect(await rulesOf(user.id)).toEqual([]);
     expect(await auditOf(user.id)).toEqual([]);
     // The recipient was in the approval's inputs, its question and the activity log: gone from all.
     const all = JSON.stringify([
       await db().select().from(approvals),
+      await db().select().from(skipRules),
       await db().select().from(auditLog),
       await db().select().from(messages),
     ]);
@@ -119,6 +127,7 @@ describe('deleting an account', () => {
 
     // The other user is untouched.
     expect(await approvalsOf(other.user.id)).toHaveLength(1);
+    expect(await rulesOf(other.user.id)).toHaveLength(1);
     expect(await auditOf(other.user.id)).toEqual(otherAudit);
     expect(await messagesOf(other.user.id)).toEqual(otherMessages);
     expect(vmFake.tokens.has(other.user.id)).toBe(true);

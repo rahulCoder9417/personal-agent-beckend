@@ -22,7 +22,8 @@ import {
   channelOfSession,
   DENY_TITLE,
 } from './approval-text.ts';
-import { approvals, type ApprovedRun } from './schema.ts';
+import { approvals, type ApprovedRun, type SkipScope } from './schema.ts';
+import { scopeWords, skipOfferOf, type SkipRule } from './skip-rules.ts';
 import { runTurn, turnForAutomation, turnMessageFields } from './turn.ts';
 
 export type Approval = typeof approvals.$inferSelect;
@@ -242,7 +243,41 @@ export async function withApprovalId(job: Job): Promise<Job> {
   return job;
 }
 
+/** The rule an auto-approved action ran by, as it was then (kept in `details.skipRule`). */
+interface RuleSnapshot {
+  id: string;
+  scope: SkipScope;
+  recipients: string[];
+}
+const isRuleSnapshot = (v: unknown): v is RuleSnapshot =>
+  Boolean(v) &&
+  typeof (v as RuleSnapshot).id === 'string' &&
+  typeof (v as RuleSnapshot).scope === 'string' &&
+  Array.isArray((v as RuleSnapshot).recipients);
+
+/** At most this much of a run's result goes into the API's view of an approval. */
+const RESULT_IN_VIEW_MAX = 600;
+
+/** How the platform's run of an app action went, for the web app (OpenAPI ApprovalRun). */
+function runView(run: ApprovedRun | null) {
+  if (!run) return null;
+  let result: string | null = null;
+  if (run.state === 'done') {
+    const text = typeof run.data === 'string' ? run.data : JSON.stringify(run.data ?? null);
+    result = text.length > RESULT_IN_VIEW_MAX ? `${text.slice(0, RESULT_IN_VIEW_MAX - 1)}…` : text;
+  }
+  return {
+    state: run.state,
+    at: run.at,
+    result,
+    error: run.state === 'failed' ? run.error : null,
+    creditsCharged: run.state === 'done' ? run.creditsCharged : 0,
+  };
+}
+
 export function toApiApproval(a: Approval) {
+  // The rule's snapshot has a field of its own; the details are what the action was asked with.
+  const { skipRule, ...details } = a.details ?? {};
   return {
     id: a.id,
     kind: approvalKind(a),
@@ -250,11 +285,115 @@ export function toApiApproval(a: Approval) {
     summary: a.summary,
     app: a.app,
     action: a.action,
-    details: { ...(a.details ?? {}), ...(a.arguments ? { arguments: a.arguments } : {}) },
+    details: { ...details, ...(a.arguments ? { arguments: a.arguments } : {}) },
     createdAt: a.createdAt.toISOString(),
     expiresAt: a.expiresAt.toISOString(),
     decidedAt: a.decidedAt ? a.decidedAt.toISOString() : null,
+    skip: skipOfferOf(a),
+    skipRule:
+      a.status === 'auto_approved' && isRuleSnapshot(skipRule)
+        ? { id: skipRule.id, scope: skipRule.scope, recipients: skipRule.recipients }
+        : null,
+    run: runView(a.runResult),
   };
+}
+
+// --- a skip rule lets an app action run without asking -----------------------------------------
+
+/**
+ * The approval of an app action the user's skip rule let run without a card (skip-rules.ts): saved
+ * as `auto_approved`, already claimed (used, `running`), so run_app_action runs it at once with the
+ * same charge (keyed by its id), result shaping and kept result as an approved one. `key` (the turn,
+ * the action and its exact inputs) makes it once: the same request again in the same turn finds
+ * this row (`fresh: false`) and its result, and runs nothing. One whose run failed (nothing was
+ * done) may be tried again, once per call.
+ */
+export async function claimAutoApproval(input: {
+  userId: string;
+  sessionKey: string;
+  summary: string;
+  app: string;
+  action: string;
+  arguments: Record<string, unknown>;
+  rule: SkipRule;
+  key: string;
+  run?: { runId: string; stepId: string } | null;
+}): Promise<{ approval: Approval; fresh: boolean }> {
+  const now = new Date();
+  const claim = {
+    usedAt: now,
+    decidedAt: now,
+    decidedVia: `rule:${input.rule.id}`,
+    runResult: { state: 'running' as const, at: now.toISOString() },
+    details: {
+      skipRule: {
+        id: input.rule.id,
+        scope: input.rule.scope,
+        recipients: input.rule.scope === 'listed' ? (input.rule.recipients ?? []) : [],
+      },
+    },
+  };
+  const [row] = await db()
+    .insert(approvals)
+    .values({
+      id: newId('apr'),
+      userId: input.userId,
+      summary: input.summary,
+      app: input.app,
+      action: input.action,
+      arguments: input.arguments,
+      status: 'auto_approved',
+      sessionKey: input.sessionKey,
+      automationId: await turnForAutomation(input.userId),
+      expiresAt: now,
+      automationRunId: input.run?.runId ?? null,
+      automationStepId: input.run?.stepId ?? null,
+      autoKey: input.key,
+      ...claim,
+    })
+    .onConflictDoNothing()
+    .returning();
+  if (row) return { approval: row, fresh: true };
+  const [earlier] = await db()
+    .select()
+    .from(approvals)
+    .where(and(eq(approvals.userId, input.userId), eq(approvals.autoKey, input.key)));
+  if (!earlier) throw new Error('auto-approved action could not be saved');
+  if (earlier.runResult?.state === 'failed') {
+    const [again] = await db()
+      .update(approvals)
+      .set(claim)
+      .where(
+        and(
+          eq(approvals.userId, input.userId),
+          eq(approvals.id, earlier.id),
+          sql`${approvals.runResult}->>'state' = 'failed'`,
+        ),
+      )
+      .returning();
+    if (again) return { approval: again, fresh: true };
+  }
+  return { approval: earlier, fresh: false };
+}
+
+/**
+ * What the agent is told beside the result of an action its user's skip rule let run: no card,
+ * nobody asked, and where it is kept. `inRun`: a step of an automation's run (the run's own next
+ * step comes after it, so nothing is said to the user now).
+ */
+export function autoApprovedText(rule: SkipRule, inRun: boolean): string {
+  return (
+    `This ran without asking: your user made a rule to skip approval for ${rule.action} ` +
+    `(${scopeWords(rule)}), so no card was shown. It is kept in their Approvals as auto-approved. ` +
+    "Don't run it again." +
+    (inRun ? '' : ' Tell the user in one short sentence what was done.')
+  );
+}
+
+/** The approval's change, live to the web app (its Approvals page): an auto-approved one ran. */
+export async function publishApproval(userId: string, id: string): Promise<void> {
+  const a = await getApproval(userId, id);
+  if (a) await publish(userId, 'approval.resolved', toApiApproval(a));
 }
 
 const effective = (a: Approval): Approval =>
@@ -419,6 +558,8 @@ export async function decideApproval(
     if (!existing) throw notFound('Approval not found');
     if (existing.status === 'replaced')
       throw conflict('This request was replaced by a newer one, so it can no longer be answered');
+    if (existing.status === 'auto_approved')
+      throw conflict('This ran without asking, by your skip rule, so there is nothing to answer');
     throw conflict(`Approval is already ${existing.status}`);
   }
   const row = decided.answered;

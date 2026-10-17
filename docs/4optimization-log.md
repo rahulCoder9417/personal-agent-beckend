@@ -78,7 +78,7 @@ Each entry has a heading with the date and the name of the feature, then the par
   - Deploy: all three parts, in any order. The server's deploy script runs the new migration before it starts the api and the worker, and builds the new agent image; containers take it at their next wake. The web app goes out with a push to `main` (Vercel). Before the backend is deployed, the web app shows only Tex's row, as today. An old agent image ignores the crew's choices.
   - The admin panel does not show the crew's choices yet; support's reset covers them.
 - **Docs updated:** `backend-report.md`: section 30 "The Claude model and the thinking effort" (who has which default, the steps, Byte and Patch keep their own while Tex is on "Default", an example), and one line each in section 20 (which model each one runs on), the admin reset table and its example, and the table of who owns which table. The vm-manager's `README.md`: the metadata table, "The crew" and "The chat default" under "Claude Code runtime", the crew's "Model" line and `BRIDGE_CLAUDE_CREW_MODEL`.
-- **Commits:** backend `b7b591e` (contract), `2f93db2` (settings, turn, admin reset, migration), `6f77d1e` (docs), and the next commit ("Default" follows Tex, with this entry's update); vm-manager `cdd3a4a`, `0602512` ("Default" follows Tex); web app `4e8a826`, and the next commit (the same).
+- **Commits:** backend `b7b591e` (contract), `2f93db2` (settings, turn, admin reset, migration), `6f77d1e` (docs), `07970e7` ("Default" follows Tex, with this entry's update); vm-manager `cdd3a4a`, `0602512` ("Default" follows Tex); web app `4e8a826`, `440c094` (the same).
 
 ### 17 October 2026: Code review that reads before it judges (files as text, Patch never posts, plain command cards)
 

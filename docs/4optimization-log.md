@@ -96,7 +96,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 17 October 2026: Code review that reads before it judges (files as text, Patch never posts, plain command cards)
 
-- **Where it is:** on the branch `fix/review-no-guessing` in the backend and in the vm-manager, not merged or deployed yet.
+- **Where it is:** merged to main in the backend and the vm-manager, and live on the test server since 17 October (evening). The founder's next review after it (PR #1 in Code-Smith, 11:00 UTC) read the real files and found the PR ready to merge.
 - **Why:** you called your chat "hey can u check for the unchecked pr" (17 October, 10:00 to 10:04 UTC) hallucinating, and it was. What happened, step by step:
   - Asked about "the unchecked pr", Tex searched only pull requests waiting for your review, found none and said nothing was waiting. Your own repository Code-Smith had pull request #1 open.
   - Asked to check Code-Smith, Tex handed it to Patch. Patch asked GitHub for a file (`GITHUB_GET_RAW_REPOSITORY_CONTENT`), and Composio answered with a link to its temporary file storage, signed and good for an hour, instead of the file. Patch tried to download that link with `curl`, twice. Each try became a card for you whose title was the whole signed address, with the reason "it reaches the internet, and Scout's browser is on, so any website can be reached". You could read neither.

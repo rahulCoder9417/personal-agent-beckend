@@ -50,7 +50,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 17 October 2026: "Draft it" on the New automation page stays on the page and gives Tex's verdict
 
-- **Where it is:** on the branch `feat/draft-on-page` in the backend and the web app, not on `main` yet (17 October, evening).
+- **Where it is:** merged to main in the backend and the web app, and live on the test server and app.textcrew.in since 17 October (evening). The backend went out first, as it must.
 - **Why:** you asked that "Draft it" on the New automation page stop sending you to the chat. It should stay on the page, check whether the request can be an automation, and either open the canvas with Tex's draft or say why not and what would work.
 - **What the user notices:**
   - After "Draft it" the box says "Tex is checking if this can be an automation…", with the button off and the words kept in the box.
@@ -82,7 +82,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 17 October 2026: Approved means done (an approved app action runs the moment you press Approve)
 
-- **Where it is:** on the branch `feat/approve-runs-now` in the backend and in the vm-manager, not merged or deployed yet.
+- **Where it is:** merged to main in the backend and the vm-manager, and live on the test server since 17 October (evening). Migration 0034 is applied on Neon.
 - **Why:** on 17 October at 11:07 UTC you asked Tex to merge a pull request. Two things went wrong.
   - Tex raised the card for the merge, then wrote a second message: "The approval card is waiting for you above — approve or deny it there." After your Approve the card said "You approved this" with that line still under it. An earlier rule told Tex to say in a few words what waits on the card; it did.
   - You pressed Approve at 11:08:36.269 and sent a new message 0.1 seconds later. The api saved the "approved" event about half a second after your answer, after your message's event. Your message's turn took your lock first and ran Byte for about 50 seconds. Only then did Tex's turn after the yes run, and the merge happened at 11:09:33. You waited about a minute: "I clicked approve, why is it taking so much time".
@@ -122,7 +122,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ### 17 October 2026: A model and a thinking effort for each of the crew (Tex, Byte, Patch, Scout)
 
-- **Where it is:** merged to main in the backend, the vm-manager and the web app on 17 October (evening); the server part goes out with the next deploy.
+- **Where it is:** merged to main in the backend, the vm-manager and the web app, and live on the test server and app.textcrew.in since 17 October (evening). Migration 0033 is applied on Neon.
 - **Why:** you said reviews of pull requests take too long, and that Tex, Byte and Patch should each have their own model in Settings, because not every job needs a strong or a weak one. Until now there was one choice for Claude Code. A model picked for Tex also ran for Byte, Patch and Scout, so a deep model picked for chat made every review slow too, and there was no way to give a helper something else.
 - **What the user notices:**
   - Settings, Agent & AI has a new part, **Crew**, under Engine. One row each: Tex (leads, talks to you), Byte (writes code), Patch (reviews code), Scout (researches and uses the browser). Each row has a model and a thinking effort. "Default" comes first and says what it runs: "Default (Sonnet 5.5, quick)" and "Default (Low)" for Tex as before; for Byte and Patch "Default (same as Tex)" when a model is picked for Tex, else "Default (Opus 5.5)" and "Default (Medium)"; "Default (same as Tex)" for Scout. One quiet line under the heading: "Faster models answer sooner; stronger ones are more careful on hard code." Each change is saved as it is made.

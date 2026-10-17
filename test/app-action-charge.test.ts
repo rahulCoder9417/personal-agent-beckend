@@ -75,6 +75,13 @@ async function appUser(opts: { credits?: number } = {}) {
 const appActionRows = async (userId: string) =>
   (await ledgerOf(userId)).filter((r) => r.meta?.kind === 'app_action');
 
+/** The platform runs an approved app action at once: waits until that run has ended. */
+const ranOnApproval = (id: string) =>
+  waitFor(async () => {
+    const [a] = await db().select().from(approvals).where(eq(approvals.id, id));
+    return a?.runResult && a.runResult.state !== 'running' ? a : null;
+  });
+
 describe('which actions change something', () => {
   it('names with a write word change something; names with only a read word read', () => {
     for (const a of [
@@ -207,14 +214,25 @@ describe('app-action charge', () => {
       ).text,
     ) as { approval_id: string };
     await decideApproval(u.id, asked.approval_id, true, 'web');
-
-    const sent = await u.run(SEND, { approval_id: asked.approval_id });
-    expect(JSON.parse(sent.text)).toMatchObject({ ok: true, credits_charged: 1 });
+    // It runs at the yes, and is charged then.
+    const ran = await ranOnApproval(asked.approval_id);
+    expect(ran.runResult).toMatchObject({ state: 'done', creditsCharged: 1 });
     expect((await appActionRows(u.id)).map((r) => r.idempotencyKey)).toEqual([
       `app-action:${asked.approval_id}`,
     ]);
+
+    // The agent's call gets that result, and is charged nothing more.
+    const sent = await u.run(SEND, { approval_id: asked.approval_id });
+    expect(JSON.parse(sent.text)).toMatchObject({
+      ok: true,
+      credits_charged: 0,
+      already_done: true,
+    });
     // The same approval can't run again, and its charge can't be written again.
-    expect((await u.run(SEND, { approval_id: asked.approval_id })).isError).toBe(true);
+    expect(JSON.parse((await u.run(SEND, { approval_id: asked.approval_id })).text)).toMatchObject({
+      already_done: true,
+    });
+    expect(composio.executed.filter((e) => e.slug === SEND)).toHaveLength(1);
     expect(await chargeAppAction(u.id, { action: SEND, ref: asked.approval_id })).toMatchObject({
       charged: 0,
       balance: 999,
@@ -244,7 +262,10 @@ describe('app-action charge', () => {
         })
       ).text,
     ) as { approval_id: string };
+    // The run at the yes fails: nothing is charged, and the approval stays usable.
+    composio.state.executeFailure = 'mailbox unavailable';
     await decideApproval(u.id, asked.approval_id, true, 'web');
+    await ranOnApproval(asked.approval_id);
     composio.state.executeFailure = 'mailbox unavailable';
     expect((await u.run(SEND, { approval_id: asked.approval_id })).isError).toBe(true);
     expect(await getBalance(u.id)).toBe(1000);

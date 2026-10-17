@@ -173,7 +173,7 @@ The api only adds jobs, and the worker runs them. This keeps the api fast. It sa
 | inbound | User messages, approval answers, fired automations, app events | 20 |
 | outbound | Replies to send, delivery receipts | 20 |
 | scheduled | Timers of reminders and automations | 5 |
-| system | Sign-up, account deletion, payments, usage sync, the billing of each turn, refunds of failed turns, checking and tidying app connections, cleanup, backup | 5 |
+| system | Sign-up, account deletion, payments, usage sync, the billing of each turn, refunds of failed turns, checking and tidying app connections, an approved app action and a tap on an approval's button (section 15), cleanup, backup | 5 |
 
 There are four so slow work never blocks fast work. A long agent turn in inbound does not hold back a reply in outbound. Some system jobs repeat on their own. Usage sync and the health check run every 5 minutes. Credit expiry and approval expiry run every hour. Cleanup and backup run once a day.
 
@@ -198,6 +198,8 @@ Why the short wait first: the lock is often held only by the end of the turn bef
 The lock covers only what the next message depends on: the turn itself, its messages and the state of its conversation. The billing of a turn is not part of it. Since 15 October 2026 it runs as a job of its own in the system queue, after the lock is given back (section 25).
 
 So one user's messages are handled one by one, in order. The lock ends on its own after 16 minutes, a little longer than the longest turn. Paying users go first in the inbound queue: Max, then Pro, then Free.
+
+Two things never wait for the lock, because they run no turn (since 17 October): an app action the user has just approved, and a tap on an approval's button in Telegram or WhatsApp. Both go to the system queue, so pressing Approve while Tex is busy with another message still does the action at once (section 15).
 
 ### What can go wrong
 
@@ -367,8 +369,8 @@ Example: Telegram sends Rahul's text twice. The second copy matches the saved ev
 | Sender | How it is verified | What it becomes |
 |---|---|---|
 | Clerk | Signed with a secret we share (`CLERK_WEBHOOK_SECRET`) | A system job: create, update or delete the user |
-| Telegram | Telegram sends back a secret we gave it, in a header | An inbound job for a message or a button tap |
-| WhatsApp | Meta signs the body with our app secret | One inbound job per message. Receipts go to outbound |
+| Telegram | Telegram sends back a secret we gave it, in a header | An inbound job for a message or a button tap. A tap on an approval's button is a system job, which does not wait for a busy turn (section 15) |
+| WhatsApp | Meta signs the body with our app secret | One inbound job per message; a tap on an approval's button is a system job. Receipts go to outbound |
 | Sendblue (iMessage) | A shared secret in a header | An inbound job, or a receipt in outbound |
 | Polar | Signed with a secret we share (`POLAR_WEBHOOK_SECRET`) | A system job that applies the payment |
 | Composio | Composio's own library checks the signature | Inbound for an app event. System for a connection change |
@@ -1267,12 +1269,31 @@ The platform decides by these words in the action's name. There are two exceptio
 2. For an app's action, the api first checks the inputs against the action's own list of inputs, which Composio gives (next part). Inputs that don't fit are refused at once, and the user sees nothing.
 3. The api saves it in the table `approvals` as `pending`, with its inputs. It expires after 24 hours.
 4. The api sends Tex's question to the chat the request came from. It is made from the summary, so it is there at once and costs nothing: no model is asked. "I'd like to " goes before the summary, its first word in small letters, and the way to answer goes after it: "I'd like to send the notes to priya@example.com. Approve or Deny below." In web chat the message carries the approval, and the web app shows the Approve and Deny card right under it, with the inputs under the action's own names. Telegram and WhatsApp show two buttons, Approve and Deny. iMessage has no buttons, so the line "Reply YES to approve or NO to deny." is added instead of "Approve or Deny below.". A summary that does not start with a common verb ("send", "delete", "pay", "create" and about 50 more) is kept as written: "I'd like your OK for this: ...". When an automation's run asked, the same question can also go to the user's Telegram chat, with the same two buttons and a last line: "Asked by one of your automations. Tex carries on in the web app after your answer." (next part). A question asked in the web app stays there.
-5. The tool answers "pending" at once, with the question the user now sees. It tells the agent to end its turn and not to repeat the question or say it is waiting: the user already sees both. The agent never waits inside a turn. In the web app the turn has paused: the "working" sign stops and a line under the card says "Waiting for your OK".
+5. The tool answers "pending" at once, with the question the user now sees. It tells the agent to end its turn and not to repeat the question or say it is waiting: the user already sees both. The agent never waits inside a turn. The card is the message: with nothing else to say, Tex's final answer is the word `NO_REPLY`, which the container never sends, so no line pointing at the card comes after it (since 17 October; before, Tex wrote "The approval card is waiting for you above — approve or deny it there.", which stayed under the card after the yes). In the web app the turn has paused: the "working" sign stops and a line under the card says "Waiting for your OK".
 6. The user taps a button, types "yes" or "no", or decides in the web app. A typed answer goes to the newest waiting approval in that chat.
-7. The api records the answer in the activity log ("Approved: ..." or "Denied: ..."). A job then wakes the agent with a new message: "The user APPROVED ..." or "The user REJECTED ... Don't do it. Tell them in one short sentence that you won't." It goes to the conversation the approval was asked in, not to the one that is open now. In the web app Tex shows as working again from the tap until it answers.
-8. After a yes, the agent calls `run_app_action` with the action's name and the approval's id. The inputs saved with the approval run; the agent does not send them again. The agent says how it went.
+7. The api records the answer, and in the same database step the event that will wake the agent, so a message the user sends right after the answer is queued after it. For an app action the yes also starts the action at once (next part). The answer goes into the activity log ("Approved: ..." or "Denied: ...").
+8. A job then wakes the agent with a new message, in the conversation the approval was asked in, not the one that is open now. After a yes to an app action: "The user APPROVED ... It is DONE: Textcrew ran it ... Don't run it again. The result: ...", and the agent says how it went. After a no: "The user REJECTED ... Don't do it. Tell them in one short sentence that you won't." In the web app Tex shows as working again from the tap until it answers.
 
-**Example.** Rahul texts "email Priya the notes". He gets "I'd like to send the notes to priya@example.com. Approve or Deny below.", with the two buttons. He taps Approve. The agent wakes up, sends the email and says so. 1 credit is charged.
+**Example.** Rahul texts "email Priya the notes". He gets "I'd like to send the notes to priya@example.com. Approve or Deny below.", with the two buttons, and nothing else. He taps Approve. The email goes at once; then Tex says it was sent. 1 credit is charged.
+
+### Approved means done (since 17 October)
+
+**Why.** Until 17 October the agent did the action itself after the yes, in a new turn, and a new turn waits for the user's turn in progress (the per-user lock, section 3). That day the founder pressed Approve on a merge and sent a new message a tenth of a second later. His message's turn took the lock first and ran for about 50 seconds; only then did the merge happen. He waited about a minute. His decision: the server does an approved app action the moment the user presses Approve, and tells Tex the result.
+
+**What runs at once.** An action in one of the user's apps: merging a pull request, sending an email, posting a review, and so on (an approval whose app is known because its inputs were checked when Tex asked). Not the agent's own kinds: a command in Tex's container, a push, a crew job, running a crew job again. Those are let through when Tex makes the same call again, as before. Not a step of an automation's run with steps either: that run goes on through Tex, one step at a time, as before (section 18).
+
+**How.**
+
+1. The yes adds a job to the system queue, which never waits for the user's lock. A tap on Approve in Telegram or WhatsApp goes to the system queue as well (the tap runs no turn), so it too goes through while Tex is busy. A typed "yes" is a message and keeps its place in line.
+2. The job runs the action exactly as `run_app_action` would with the approval: the saved inputs, the user's newest connection of that app, nothing at zero credits, the same charge of 1 credit with the approval's id as its key, the same short result (a file given as a link becomes its text, a long answer is cut), and the same entry in the activity log ("Ran … (approved)").
+3. It first marks the approval used, in one database step, as `run_app_action` does. So whoever comes second (a job run again, the turn that tells Tex, Tex's own call) finds it running or done and never runs it a second time.
+4. The result is kept on the approval (`run_result`): done with its short result, or failed with why.
+5. The turn that tells Tex reads that result. If the job is still running, it waits for it, up to 90 seconds. If the job has not started yet, the turn runs the action itself, once. Tex is told it was approved and done, with the result (up to 4,000 characters of it), and "Don't run it again".
+6. If Tex calls `run_app_action` with the approval anyway, it gets the kept result, charged nothing more, and nothing runs again. Other inputs with that approval are refused and run nothing.
+
+**When it fails.** If the app refuses it, or the user is out of credits, or the app is not connected, nothing was done and nothing is charged. The approval is handed back unused. Tex is told in the same turn what went wrong, that it may try once more with the same approval, or ask again with corrected inputs (next parts). The job does not try again by itself.
+
+**When the result does not come back.** If the worker stops in the middle of the action, nobody knows whether the app did it. The approval stays used, so it is never run again. After 5 minutes it counts as ended without a result, and Tex is told it was started, not to run it again, and to have the user check in the app.
 
 ### The same question on Telegram too
 
@@ -1320,18 +1341,18 @@ A request that is not about an app's action (no action, or one that is no app's)
 
 ### Single use and exact match
 
-`run_app_action` runs a risky action only when all of this is true:
+`run_app_action`, and the server's run of an approved action, run a risky action only when all of this is true:
 
 - the approval belongs to this user and names the same action;
 - it is approved, and the yes is less than 24 hours old;
 - it has not been used before;
 - the inputs are the ones saved with the approval. The saved inputs are what runs. If the agent sends inputs too, they must be exactly the saved ones.
 
-"Used" is marked in the same step as the check. So two calls at the same moment cannot both use one approval. An approval saved before 15 October without inputs still compares only the action's name; those are all gone after 24 hours.
+"Used" is marked in the same step as the check. So two calls at the same moment cannot both use one approval. An approval saved before 15 October without inputs still compares only the action's name; those are all gone after 24 hours. Once the server has run an approved action, `run_app_action` with that approval gives the kept result instead (above).
 
 ### Asking again: "replaced"
 
-Sometimes the app refuses an approved action, for example because a value it needs is wrong. Nothing has happened then, and the approval stays usable for one more try, in case the problem passes. The agent is told so. It is also told how to ask again when the inputs must change: with `request_approval`, the corrected inputs and `replaces_approval_id`, the id of the earlier request.
+Sometimes the app refuses an approved action, for example because a value it needs is wrong. Nothing has happened then, and the approval stays usable for one more try, in case the problem passes. The agent is told so: since 17 October in the message that tells it about the yes, because the server tried the action at once. It is also told how to ask again when the inputs must change: with `request_approval`, the corrected inputs and `replaces_approval_id`, the id of the earlier request.
 
 The earlier request then becomes `replaced`, if it is still waiting, or approved and not used:
 
@@ -1345,14 +1366,16 @@ The agent must name an earlier request of the same user for the same action; any
 ### What can go wrong
 
 - **Denied.** The agent is woken, told not to do it and to say so in one sentence. That approval can never run an action. (Its state in the API is still called `rejected`.)
-- **The agent writes after asking anyway.** Its text arrives as a message after the question. Nothing breaks; the user reads the same thing twice.
+- **The agent writes after asking anyway.** Its text arrives as a message after the question. Nothing breaks; the user reads the same thing twice. Since 17 October the agent is told the card is its message and to answer `NO_REPLY` when it has nothing else to say, which is never sent. The api does not try to spot a line that only points at the card: it cannot tell such a line from one that matters reliably.
 - **Never answered.** After 24 hours an hourly job marks it `expired`. The agent is not woken. Nothing runs.
 - **A late tap on an old button.** The user gets "That approval was already answered or has expired.", or for a replaced one "That request was replaced by a newer one. Please answer the newest request." Since 16 October the buttons go once a request is answered, so this is rare: a tap in the second before the edit.
 - **Telegram can't be reached when the buttons should go.** The job tries again, up to 5 times. If it never gets through, the buttons stay, and a tap gets the line above.
 - **A risky action with no approval.** Refused. The message tells the agent to use the approval's id if the user already said yes, and otherwise to ask first.
 - **The agent changes the email after the yes.** Refused, because the inputs differ. The approval still works: with no inputs sent, the approved ones run.
 - **The agent asks with inputs the action doesn't have.** Refused before the user sees anything, with the action's real inputs (above).
-- **The app refuses the approved action.** Nothing happens and nothing is charged. The agent may try once more, or ask again with the corrected inputs; the earlier request is then replaced (above).
+- **The app refuses the approved action.** Nothing happens and nothing is charged. The agent is told in the message about the yes. It may try once more, or ask again with the corrected inputs; the earlier request is then replaced (above).
+- **The user approves while Tex is busy.** The action runs at once anyway (on the web and with a Telegram or WhatsApp button). Tex says how it went once its turn in progress is over. A typed "yes" waits for that turn, as any message does.
+- **The worker stops in the middle of an approved action.** It is never run again, and Tex tells the user to check in the app (above).
 - **The account is deleted.** Every approval of the user goes, in any state, with the inputs saved with it. A job that still holds one of their ids finds nothing and does nothing.
 
 ### Approvals for the agent's own actions

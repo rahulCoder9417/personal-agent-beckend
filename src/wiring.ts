@@ -46,7 +46,7 @@ import { decidePushes, setGateCrewHooks } from './modules/orchestrator/gate.ts';
 import { deleteUserByokKeys } from './modules/integrations/byok.ts';
 import { setInboundPriority } from './modules/events/intake.ts';
 import { deleteUserMcpServers, sandboxMcpConfig } from './modules/integrations/mcp-servers.ts';
-import { handleApprovalReply } from './modules/orchestrator/approvals.ts';
+import { handleApprovalReply, setApprovedActionRunner } from './modules/orchestrator/approvals.ts';
 import { queueBrowserSync, setBrowserPlanCheck } from './modules/orchestrator/browser.ts';
 import { setLifecycleHooks } from './modules/orchestrator/lifecycle.ts';
 import { setInboundHooks } from './modules/orchestrator/process-message.ts';
@@ -59,7 +59,7 @@ import {
 } from './modules/orchestrator/routing.ts';
 import { setSandboxConfigProvider } from './modules/orchestrator/sandbox.ts';
 import { connectAiText, setTurnHooks } from './modules/orchestrator/turn.ts';
-import { setAppActionCharger } from './modules/platform-mcp/tools/apps.ts';
+import { runApprovedAppAction, setAppActionCharger } from './modules/platform-mcp/tools/apps.ts';
 import { setPaidToolCharger, setWebSearchPlanCheck } from './modules/platform-mcp/tools/web.ts';
 import { isChannelEnabled } from './shared/config.ts';
 
@@ -116,6 +116,9 @@ export function wireModules(): void {
 
   // 1 credit for each successful app action that changes something (HLD 7.2).
   setAppActionCharger(async (userId, input) => (await chargeAppAction(userId, input)).charged);
+  // An approved app action runs the moment the user approves (the system job), the way
+  // run_app_action runs it: the same connection, charge and result.
+  setApprovedActionRunner(runApprovedAppAction);
   // Web search through Textcrew is a Max feature (HLD 7.1).
   setWebSearchPlanCheck(planHasWebSearch);
   // A paid tool costs its configured cost × 2.5 (HLD 7.2). For Scout's web search that is set

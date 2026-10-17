@@ -10,6 +10,12 @@ export const sandboxTokens = pgTable('sandbox_tokens', {
   createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
 });
 
+/** An approved app action's run (`approvals.run_result`). Times are UTC ISO. */
+export type ApprovedRun =
+  | { state: 'running'; at: string }
+  | { state: 'done'; at: string; data: unknown; note?: string; creditsCharged: number }
+  | { state: 'failed'; at: string; error: string; reason: string };
+
 /** Risky actions wait for the user's ✅ / ❌ (HLD 0.5: approvals never block a turn). */
 export const approvals = pgTable(
   'approvals',
@@ -45,6 +51,13 @@ export const approvals = pgTable(
     decidedVia: text(),
     /** Set when run_app_action consumed it (single use). */
     usedAt: timestamp({ withTimezone: true }),
+    /**
+     * How the approved action's run went. The platform runs an app action the moment the user
+     * approves it, and Tex is told this result (approvals.ts, settleApprovedRun). `running` while
+     * it runs; `done` with its short result; `failed` with why (nothing happened, and `usedAt` is
+     * cleared again). Null: not run yet, or not an app action.
+     */
+    runResult: jsonb().$type<ApprovedRun>(),
     /**
      * Asked for one step of an automation's run with steps: the run (the automations module's
      * `automation_runs`, no foreign key) and the step. Only that step of that run can use it.

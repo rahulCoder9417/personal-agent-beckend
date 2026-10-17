@@ -27,11 +27,21 @@ import {
   handleComposioEvent,
   handleSyncAllowlist,
 } from '../modules/integrations/jobs.ts';
-import { expireApprovals, handleProcessApproval } from '../modules/orchestrator/approvals.ts';
+import {
+  expireApprovals,
+  handleProcessApproval,
+  handleRunApprovedAction,
+  RUN_APPROVED_JOB,
+  withApprovalId,
+} from '../modules/orchestrator/approvals.ts';
 import { handleSyncBrowser } from '../modules/orchestrator/browser.ts';
 import { handleDeleteUser, handleOnboardUser } from '../modules/orchestrator/lifecycle.ts';
 import { handlePrewarm } from '../modules/orchestrator/prewarm.ts';
-import { handleProcessMessage, handleWebMessage } from '../modules/orchestrator/process-message.ts';
+import {
+  handleApprovalButton,
+  handleProcessMessage,
+  handleWebMessage,
+} from '../modules/orchestrator/process-message.ts';
 import type { Processors } from './runner.ts';
 import { handleCleanup } from './schedules.ts';
 
@@ -43,7 +53,8 @@ export function processors(): Processors {
       'web-message': handleWebMessage,
       // A "run the crew job again" answer starts the job; an answer to a step of an automation's
       // run with steps goes on with the run (or stops it); any other wakes the agent with it.
-      'process-approval': async (job) => {
+      'process-approval': async (given) => {
+        const job = await withApprovalId(given);
         const rerun = await handleCrewRerunAnswer(job);
         if (rerun !== undefined) return rerun;
         const step = await handleRunApprovalAnswer(job);
@@ -72,6 +83,9 @@ export function processors(): Processors {
       'composio-event': handleComposioEvent,
       'check-connection': handleCheckConnection,
       'settle-connection': handleSettleConnection,
+      // An approved app action runs at once: this queue never waits for the user's lock.
+      [RUN_APPROVED_JOB]: handleRunApprovedAction,
+      'approval-button': handleApprovalButton,
       'expire-approvals': async () => expireApprovals(),
       'expire-automation-drafts': async () => expireDrafts(),
       'expire-automation-runs': async () => handleExpireRuns(),

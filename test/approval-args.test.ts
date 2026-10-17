@@ -143,6 +143,13 @@ async function gmailUser() {
 const approvalsOf = (userId: string) =>
   db().select().from(approvals).where(eq(approvals.userId, userId));
 
+/** The platform runs an approved app action at once: waits until that run has ended. */
+const ranOnApproval = (id: string) =>
+  waitFor(async () => {
+    const [a] = await db().select().from(approvals).where(eq(approvals.id, id));
+    return a?.runResult && a.runResult.state !== 'running' ? a : null;
+  });
+
 const auditOf = async (userId: string, action: string) =>
   db()
     .select()
@@ -227,6 +234,7 @@ describe('request_approval checks the arguments against the action', () => {
     const [saved] = await approvalsOf(u.id);
     expect(saved!.arguments).toEqual({});
     await decideApproval(u.id, asked.json!.approval_id!, true, 'web');
+    await ranOnApproval(asked.json!.approval_id!);
     // Arguments the user never saw can't ride on it.
     const more = await u.mcp('run_app_action', {
       action: SEND,
@@ -253,24 +261,23 @@ describe('request_approval checks the arguments against the action', () => {
 });
 
 describe('after the yes, the approved arguments run', () => {
-  it('runs the stored arguments when the agent leaves them out, exactly once', async () => {
+  it('runs the stored arguments at once, exactly once; the agent gets their result', async () => {
     const u = await gmailUser();
     const asked = await u.ask({ action: SEND, arguments: RIGHT });
     await decideApproval(u.id, asked.json!.approval_id!, true, 'web');
-
-    const sent = await u.mcp('run_app_action', {
-      action: SEND,
-      approval_id: asked.json!.approval_id,
-    });
-    expect(sent.isError).toBe(false);
+    await ranOnApproval(asked.json!.approval_id!);
     expect(composio.executed).toHaveLength(1);
     expect(composio.executed[0]).toMatchObject({ slug: SEND, userId: u.id, arguments: RIGHT });
 
-    const again = await u.mcp('run_app_action', {
-      action: SEND,
-      approval_id: asked.json!.approval_id,
-    });
-    expect(again.isError).toBe(true);
+    // The agent's call gets the result of that run, and nothing runs again, however often.
+    for (let i = 0; i < 2; i++) {
+      const sent = await u.mcp('run_app_action', {
+        action: SEND,
+        approval_id: asked.json!.approval_id,
+      });
+      expect(sent.isError).toBe(false);
+      expect(JSON.parse(sent.text)).toMatchObject({ ok: true, already_done: true });
+    }
     expect(composio.executed).toHaveLength(1);
   });
 
@@ -278,7 +285,11 @@ describe('after the yes, the approved arguments run', () => {
     const u = await gmailUser();
     const asked = await u.ask({ action: SEND, arguments: RIGHT });
     const id = asked.json!.approval_id!;
+    // The platform's run at the yes fails (nothing is sent), so the agent runs it itself.
+    composio.state.executeFailure = 'try again later';
     await decideApproval(u.id, id, true, 'web');
+    await ranOnApproval(id);
+    expect(composio.executed).toHaveLength(0);
 
     const changed = await u.mcp('run_app_action', {
       action: SEND,
@@ -303,19 +314,35 @@ describe('after the yes, the approved arguments run', () => {
     );
   });
 
-  it('the wake-up after a yes tells the agent to leave the arguments out', async () => {
-    const woken: string[] = [];
+  it('the wake-up after a yes says it is done, with the result; after a failure, why', async () => {
+    // By approval: a turn of an earlier test may still arrive.
+    const woken = new Map<string, string>();
     vm = installFakeVm(async (d) => {
-      if (d.kind === DeliverKind.APPROVAL_ANSWER) woken.push(d.text);
+      if (d.kind === DeliverKind.APPROVAL_ANSWER) woken.set(d.approvalId, d.text);
     });
     const u = await gmailUser();
+    composio.state.executeData.set(SEND, { id: 'msg_123', threadId: 't_1' });
     const asked = await u.ask({ action: SEND, arguments: RIGHT });
     await decideApproval(u.id, asked.json!.approval_id!, true, 'web');
-    const text = await waitFor(async () => woken[0]);
-    expect(text).toContain(
-      `call run_app_action with action "${SEND}" and approval_id "${asked.json!.approval_id}"`,
+    const text = await waitFor(async () => woken.get(asked.json!.approval_id!));
+    expect(text).toContain('The user APPROVED: Email a friend.');
+    expect(text).toContain(`It is DONE: Textcrew ran ${SEND}`);
+    expect(text).toContain("Don't run it again");
+    expect(text).toContain('"id":"msg_123"');
+    expect(text).not.toContain('Go ahead');
+
+    // The app refuses it: nothing was done, and the agent may try once more or ask again.
+    composio.state.executeFailure = 'Invalid request data provided';
+    const refused = await u.ask({ action: SEND, arguments: RIGHT });
+    await decideApproval(u.id, refused.json!.approval_id!, true, 'web');
+    const failed = await waitFor(async () => woken.get(refused.json!.approval_id!));
+    expect(failed).toContain('nothing was done');
+    expect(failed).toContain('Invalid request data provided');
+    expect(failed).toContain(
+      `call run_app_action with action "${SEND}" and approval_id "${refused.json!.approval_id}" (leave arguments out)`,
     );
-    expect(text).toContain('leave arguments out');
+    expect(failed).toContain(`replaces_approval_id "${refused.json!.approval_id}"`);
+    expect(composio.executed).toHaveLength(1);
   });
 });
 
@@ -324,7 +351,10 @@ describe('asking again replaces the earlier request', () => {
     const u = await gmailUser();
     const first = await u.ask({ action: SEND, arguments: RIGHT });
     const firstId = first.json!.approval_id!;
+    // The platform's run at the yes is refused by the app, and so is the agent's one more try.
+    composio.state.executeFailure = 'Invalid request data provided';
     await decideApproval(u.id, firstId, true, 'web');
+    await ranOnApproval(firstId);
 
     composio.state.executeFailure = 'Invalid request data provided';
     const refused = await u.mcp('run_app_action', { action: SEND, approval_id: firstId });
@@ -379,8 +409,9 @@ describe('asking again replaces the earlier request', () => {
     );
     expect(late.error.message).toContain('replaced by a newer one');
 
-    // The new one runs, with its own arguments.
+    // The new one runs at the yes, with its own arguments.
     await decideApproval(u.id, second.json!.approval_id!, true, 'web');
+    await ranOnApproval(second.json!.approval_id!);
     const sent = await u.mcp('run_app_action', {
       action: SEND,
       approval_id: second.json!.approval_id,

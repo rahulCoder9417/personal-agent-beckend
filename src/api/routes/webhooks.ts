@@ -5,6 +5,7 @@ import {
   verifyTelegramSecret,
   type TelegramUpdate,
 } from '../../modules/channels/adapters/telegram.ts';
+import { inboundJobOf } from '../../modules/channels/inbound.ts';
 import { ingestEvent, recordEventOnce } from '../../modules/events/intake.ts';
 import { composio } from '../../modules/integrations/composio.ts';
 import { isChannelEnabled } from '../../shared/config.ts';
@@ -54,8 +55,7 @@ export const webhookRoutes = [
       type: update.callback_query ? 'button' : 'message',
       userId: link?.userId ?? null,
       payload: update as unknown as Record<string, unknown>,
-      queue: 'inbound',
-      jobName: 'process-message',
+      ...inboundJobOf('telegram', update as unknown as Record<string, unknown>),
     });
     return c.body(null, 200);
   }),

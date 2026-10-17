@@ -1,7 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import { eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { db } from '../../../shared/db/client.ts';
 import { newId } from '../../../shared/ids.ts';
 import { logger } from '../../../shared/logger.ts';
 import { getActiveUserCached, type User } from '../../auth/users.ts';
@@ -47,16 +45,22 @@ import {
   appForToolkit,
   prCommentTarget,
 } from '../../integrations/catalog.ts';
+import { audit } from '../../admin/audit.ts';
 import { composio } from '../../integrations/composio.ts';
-import { approvals } from '../../orchestrator/schema.ts';
 import { approvalAskText, channelOfSession } from '../../orchestrator/approval-text.ts';
 import {
   consumeApproval,
+  finishApprovedRun,
   getApproval,
+  releaseApproval,
   replaceApproval,
   requestApproval,
   START_CREW_JOB_ACTION,
+  waitForApprovedRun,
+  type Approval,
+  type ApprovedActionResult,
 } from '../../orchestrator/approvals.ts';
+import type { ApprovedRun } from '../../orchestrator/schema.ts';
 import { userHasCredits } from '../../orchestrator/turn.ts';
 import { actionInputsOf, misplacedInputsNote } from '../misplaced-inputs.ts';
 import { defineTool, ToolError, type FailureEntry } from '../registry.ts';
@@ -73,6 +77,19 @@ export type AppActionCharger = (
 let chargeAppAction: AppActionCharger = async () => 0;
 export function setAppActionCharger(fn: AppActionCharger): void {
   chargeAppAction = fn;
+}
+
+/**
+ * The charge of an action that has already happened: a charge that fails is logged and never
+ * turned into an error (the agent would retry and act twice). `ref` keys it (an approval's id).
+ */
+async function chargeRan(userId: string, action: string, ref: string): Promise<number> {
+  try {
+    return await chargeAppAction(userId, { action, ref });
+  } catch (err) {
+    logger().error({ userId, action, err: String(err) }, 'app action not charged');
+    return 0;
+  }
 }
 
 /** Toolkit of a Composio action slug, e.g. GMAIL_SEND_EMAIL → gmail. */
@@ -175,6 +192,44 @@ const APP_STATE_REASON: Record<string, string> = {
   needs_reconnecting: 'the app needs to be connected again',
   not_finished: "the app's connection was never finished",
 };
+
+/**
+ * The connection an action runs through: the user's newest active connection of the action's app,
+ * when that app is on their plan. An app not found may have finished connecting a moment ago, so
+ * Composio is asked about the connections still pending first. ToolError says why it can't run.
+ */
+async function connectionFor(
+  userId: string,
+  user: User | undefined,
+  read: Connection[],
+  action: string,
+): Promise<{ conn: Connection; toolkit: string }> {
+  let rows = read;
+  let toolkit = toolkitOf(action, allowedToolkits(user, rows));
+  if (!toolkit && (await refreshPendingConnections(userId, rows))) {
+    // It may have finished connecting a moment ago: Composio was asked, so look again.
+    rows = await listConnections(userId);
+    toolkit = toolkitOf(action, allowedToolkits(user, rows));
+  }
+  if (!toolkit) {
+    // Say why, when the app is one the user has a connection for (still connecting, expired…).
+    const app = appOfAction(action);
+    const state =
+      app && user ? agentAppStates(rows, user.plan).find((s) => s.app === app) : undefined;
+    throw new ToolError(state?.note ?? 'That app is not connected or not available on your plan', {
+      reason: (state && APP_STATE_REASON[state.status]) ?? "the app isn't connected",
+    });
+  }
+  const conn = newestActiveConnection(rows, toolkit);
+  if (!conn)
+    throw new ToolError('That app is not connected', { reason: "the app isn't connected" });
+  return { conn, toolkit };
+}
+
+/** What a user out of credits is told (the agent passes it on). */
+const OUT_OF_CREDITS =
+  "Your user is out of credits, so actions that change something can't run (reading still works). " +
+  'Tell them to open the Textcrew web app to top up or upgrade. Do not send a link.';
 
 /**
  * The activity-log entry of an app action or approval request that failed or was refused: the
@@ -380,31 +435,28 @@ defineTool({
     // What runs: the agent's arguments, or with an approval exactly the approved ones (below).
     let runArgs = found.inputs ?? {};
     // One read of the user's connections serves every check below (it was three or four). The
-    // run's limits (an automation's run only) are read at the same time.
-    const [[user, read], limits] = await Promise.all([
+    // run's limits (an automation's run only) and the approval are read at the same time.
+    const [[user, read], limits, approval] = await Promise.all([
       userAndConnections(userId),
       runLimits(userId),
+      args.approval_id ? getApproval(userId, args.approval_id) : undefined,
     ]);
-    let rows = read;
-    let toolkit = toolkitOf(args.action, allowedToolkits(user, rows));
-    if (!toolkit && (await refreshPendingConnections(userId, rows))) {
-      // It may have finished connecting a moment ago: Composio was asked, so look again.
-      rows = await listConnections(userId);
-      toolkit = toolkitOf(args.action, allowedToolkits(user, rows));
+    // The platform ran it the moment the user approved (or runs it now): its result, never a
+    // second run. (A step of a run with steps is always run here, by the agent.)
+    if (approval && !limits?.runId) {
+      const ran = await approvedRunOf(userId, approval, args.action);
+      if (ran) {
+        if (found.inputs && !isDeepStrictEqual(approval.arguments ?? {}, found.inputs))
+          throw new ToolError(
+            'This approval already ran the moment the user approved it, with exactly the approved arguments, and ' +
+              'nothing ran now: the arguments you sent differ from those and were not used. Leave arguments out ' +
+              'to get its result. Something different needs a request_approval of its own.',
+            { reason: 'its details differed from what you approved' },
+          );
+        return ranResult(ran);
+      }
     }
-    if (!toolkit) {
-      // Say why, when the app is one the user has a connection for (still connecting, expired…).
-      const app = appOfAction(args.action);
-      const state =
-        app && user ? agentAppStates(rows, user.plan).find((s) => s.app === app) : undefined;
-      throw new ToolError(
-        state?.note ?? 'That app is not connected or not available on your plan',
-        { reason: (state && APP_STATE_REASON[state.status]) ?? "the app isn't connected" },
-      );
-    }
-    const conn = newestActiveConnection(rows, toolkit);
-    if (!conn)
-      throw new ToolError('That app is not connected', { reason: "the app isn't connected" });
+    const { conn, toolkit } = await connectionFor(userId, user, read, args.action);
     // An automation's run may use only the apps on its canvas.
     const refusal = limits && appRefusal(limits, toolkit, appForToolkit(toolkit)?.name ?? toolkit);
     if (refusal)
@@ -433,11 +485,9 @@ defineTool({
       const next = stepAction
         ? await failStep(userId, stepAction.run.id, stepAction.step.id, 'out of credits')
         : '';
-      throw new ToolError(
-        "Your user is out of credits, so actions that change something can't run (reading still works). " +
-          `Tell them to open the Textcrew web app to top up or upgrade. Do not send a link.${next ? ` ${next}` : ''}`,
-        { reason: 'you were out of credits' },
-      );
+      throw new ToolError(`${OUT_OF_CREDITS}${next ? ` ${next}` : ''}`, {
+        reason: 'you were out of credits',
+      });
     }
 
     let consumedId: string | null = null;
@@ -475,29 +525,29 @@ defineTool({
           },
         );
       // In a run with steps, only an approval asked for this step of this run.
-      const approval = await consumeApproval(
+      const consumed = await consumeApproval(
         userId,
         args.approval_id,
         args.action,
         stepAction ? { runId: stepAction.run.id, stepId: stepAction.step.id } : null,
       );
-      if (!approval)
+      if (!consumed)
         throw new ToolError(
           'No matching approved approval (it must be approved, unused, for this exact action)',
           { reason: 'there was no approved request for it that was still unused' },
         );
-      if (approval.arguments) {
+      if (consumed.arguments) {
         // The approval holds what runs. Arguments sent again must be exactly those.
-        if (found.inputs && !isDeepStrictEqual(approval.arguments, found.inputs)) {
-          await db().update(approvals).set({ usedAt: null }).where(eq(approvals.id, approval.id));
+        if (found.inputs && !isDeepStrictEqual(consumed.arguments, found.inputs)) {
+          await releaseApproval(userId, consumed.id);
           throw new ToolError(
             'The arguments differ from what the user approved. Leave arguments out: the approved ones run.',
             { reason: 'its details differed from what you approved' },
           );
         }
-        runArgs = approval.arguments;
+        runArgs = consumed.arguments;
       }
-      consumedId = approval.id;
+      consumedId = consumed.id;
     }
 
     // Our defaults for actions whose own send far too much (Gmail's fetch: no bodies), never on
@@ -526,15 +576,20 @@ defineTool({
         );
       data = res.data;
     } catch (err) {
-      if (consumedId)
-        await db().update(approvals).set({ usedAt: null }).where(eq(approvals.id, consumedId));
-      if (crewJobId) await releaseCrewJobComment(userId, crewJobId);
       const failed =
         err instanceof ToolError
           ? err
           : new ToolError('The app is unavailable right now; tell the user and try later', {
               reason: "the app couldn't be reached",
             });
+      // Nothing happened: the approval is handed back, for one more try.
+      if (consumedId)
+        await finishApprovedRun(userId, consumedId, {
+          ok: false,
+          error: failed.message,
+          reason: failed.reason ?? 'the app refused it',
+        });
+      if (crewJobId) await releaseCrewJobComment(userId, crewJobId);
       if (!(err instanceof ToolError))
         logger().warn({ userId, action: args.action, err: String(err) }, 'composio execute failed');
       // A step's own action: one more try, then the step fails and the run stops.
@@ -554,25 +609,23 @@ defineTool({
     }
 
     // Only a successful action is charged. The approval id is the charge's key when there is one
-    // (an approval runs once); otherwise an id for this one run. The action has already happened,
-    // so a charge that fails is logged and never turned into a tool error (the agent would retry
-    // and act twice).
-    let creditsCharged = 0;
-    if (changes) {
-      try {
-        creditsCharged = await chargeAppAction(userId, {
-          action: args.action,
-          ref: consumedId ?? newId('act'),
-        });
-      } catch (err) {
-        logger().error({ userId, action: args.action, err: String(err) }, 'app action not charged');
-      }
-    }
+    // (an approval runs once); otherwise an id for this one run.
+    const creditsCharged = changes
+      ? await chargeRan(userId, args.action, consumedId ?? newId('act'))
+      : 0;
     // A file the app gave as a link to Composio's storage: its content, never the link
     // (app-files.ts). Never throws: the action has run, and a file that can't be fetched is a note.
     data = await inlineAppFiles(args.action, data);
     // No more than the agent needs: Gmail's fetch summarised, anything too long cut (app-results.ts).
     const shaped = shapeResult(args.action, runArgs, data);
+    // The approval keeps the result: asked again, it gives this, and never runs twice.
+    if (consumedId)
+      await finishApprovedRun(userId, consumedId, {
+        ok: true,
+        data: shaped.data,
+        ...(shaped.note ? { note: shaped.note } : {}),
+        creditsCharged,
+      });
     // A run with steps: the step's own action is done (its short result saved, the pointer moved
     // on); a look-up leaves it where it is. Either way the answer says what comes next.
     let next: string | null = null;
@@ -594,6 +647,8 @@ defineTool({
     };
   },
   summarize: (args, result) => {
+    if ((result as { already_done?: boolean }).already_done)
+      return `Result of ${args.action} (it ran when the user approved)`;
     const repo = (result as { pr_review?: string }).pr_review;
     if (repo) return `Ran ${args.action} (pull-request review is on for ${repo})`;
     const job = (result as { crew_job?: string }).crew_job;
@@ -617,3 +672,123 @@ defineTool({
     creditsCharged: 0,
   }),
 });
+
+/** How long run_app_action waits for the platform's run of the same approval to end. */
+const TOOL_WAIT_MS = 60_000;
+
+/**
+ * The platform's run of this approval (it runs an approved app action the moment the user
+ * approves): `done`, or still `running` after a wait. Null: run it here (it never ran, or it
+ * failed and the agent tries once more), or it is not an approval for this action.
+ */
+async function approvedRunOf(
+  userId: string,
+  a: Approval,
+  action: string,
+): Promise<ApprovedRun | null> {
+  if (a.status !== 'approved' || a.action !== action || !a.runResult) return null;
+  const run =
+    a.runResult.state === 'running'
+      ? await waitForApprovedRun(userId, a.id, TOOL_WAIT_MS)
+      : a.runResult;
+  return run && run.state !== 'failed' ? run : null;
+}
+
+/** run_app_action's answer for an approval the platform already ran: its result, nothing run. */
+function ranResult(run: ApprovedRun) {
+  if (run.state !== 'done')
+    throw new ToolError(
+      'This approved action was started the moment the user approved, and its result has not come back. ' +
+        "Don't run it again: it may already have happened. Tell the user it was started and that they can " +
+        'check in the app whether it went through.',
+      { reason: 'it was still running from the approval' },
+    );
+  return {
+    ok: true,
+    data: run.data,
+    ...(run.note ? { note: run.note } : {}),
+    // Charged once, when it ran (the activity log has it there).
+    credits_charged: 0,
+    already_done: true,
+    next:
+      'This ran the moment the user approved it (Textcrew runs an approved app action at once), and ' +
+      'nothing ran again now. Tell the user how it went.',
+  };
+}
+
+/**
+ * Runs an approved app action for the platform, the moment the user approves it. approvals.ts
+ * (settleApprovedRun) has claimed the approval, so this runs once. The same as run_app_action with
+ * the approval_id: the stored arguments, the user's newest connection of the app, the same charge
+ * (keyed by the approval), the same result shaping and the same activity-log entry. Never throws for
+ * a refusal: the result says why, in the words the agent passes on.
+ */
+export async function runApprovedAppAction(
+  userId: string,
+  a: Approval,
+): Promise<ApprovedActionResult> {
+  const action = a.action!;
+  const args = a.arguments ?? {};
+  const failed = async (error: string, reason: string): Promise<ApprovedActionResult> => {
+    await audit({
+      userId,
+      actor: 'agent',
+      ...appFailure('app_action_failed', "Couldn't run", action, reason),
+      creditsCharged: 0,
+    });
+    return { ok: false, error, reason };
+  };
+  let conn: Connection;
+  let changes: boolean;
+  try {
+    const [user, read] = await userAndConnections(userId);
+    if (!user) return await failed('User not found', 'the account was not found');
+    ({ conn } = await connectionFor(userId, user, read, action));
+    changes = await appActionChangesSomething(action);
+    if (changes && !(await userHasCredits(userId)))
+      return await failed(OUT_OF_CREDITS, 'you were out of credits');
+  } catch (err) {
+    if (err instanceof ToolError) return failed(err.message, err.reason ?? 'it was refused');
+    logger().error({ userId, action, err: String(err) }, 'approved action could not start');
+    return failed(
+      'Something went wrong on our side before it ran',
+      'something went wrong on our side',
+    );
+  }
+  let data: unknown;
+  try {
+    // The Composio user id is ALWAYS the approval's user.
+    const res = await composio().execute(action, {
+      userId,
+      connectedAccountId: conn.composioAccountId,
+      arguments: args,
+    });
+    // The app's own error may quote the inputs: the log says only that it refused.
+    if (!res.successful)
+      return await failed(
+        `the app refused it: ${res.error ?? 'unknown error'}`,
+        'the app refused the approved request, so nothing was done',
+      );
+    data = res.data;
+  } catch (err) {
+    logger().warn({ userId, action, err: String(err) }, 'composio execute failed');
+    return failed("the app couldn't be reached", "the app couldn't be reached");
+  }
+  const creditsCharged = changes ? await chargeRan(userId, action, a.id) : 0;
+  data = await inlineAppFiles(action, data);
+  const shaped = shapeResult(action, args, data);
+  await audit({
+    userId,
+    actor: 'agent',
+    action: 'run_app_action',
+    summary: `Ran ${action} (approved)`,
+    details: { args: { action, approval_id: a.id }, ran_when_approved: true },
+    creditsCharged,
+  });
+  return {
+    ok: true,
+    data: shaped.data,
+    ...(shaped.note ? { note: shaped.note } : {}),
+    creditsCharged,
+  };
+}

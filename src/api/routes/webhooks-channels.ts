@@ -15,6 +15,7 @@ import {
   whatsappVerifyChallenge,
   type WhatsappWebhook,
 } from '../../modules/channels/adapters/whatsapp.ts';
+import { inboundJobOf } from '../../modules/channels/inbound.ts';
 import { ingestStatusEvent } from '../../modules/channels/status.ts';
 import { ingestEvent } from '../../modules/events/intake.ts';
 import { isChannelEnabled } from '../../shared/config.ts';
@@ -58,8 +59,7 @@ export const channelWebhookRoutes = [
         type: isButton ? 'button' : 'message',
         userId: link?.userId ?? null,
         payload: item as unknown as Record<string, unknown>,
-        queue: 'inbound',
-        jobName: 'process-message',
+        ...inboundJobOf('whatsapp', item as unknown as Record<string, unknown>),
       });
     }
     // Delivery receipts only update message status (outbound/message-status, no agent turn).

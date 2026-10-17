@@ -72,7 +72,7 @@ defineTool({
     'It runs as its own turn right after this one ends: the specialist works in a folder of its own, every program it starts is stopped, the folder is deleted, ' +
     'and the report comes back to this chat. Patch needs pull_number or branch; Byte needs instructions (what to fix or build), and may take branch (to start from), ' +
     'acceptance (what to test for) and finish ("pull_request", the default, or "branch"). commands: how to install, test or start the app. ' +
-    "post_on_pull_request: Patch posts its report as ONE review on the pull request (Byte: the report goes in the pull request it opens). For Patch it needs the user's yes: " +
+    "post_on_pull_request: you post Patch's report as ONE review on the pull request (Patch never posts; Byte: the report goes in the pull request it opens). For Patch it needs the user's yes: " +
     `call request_approval with action "${START_CREW_JOB_ACTION}" and these exact arguments (without approval_id and session_key), end your turn, and call this tool again ` +
     'with the approval_id once they approve. open_issue: also open an issue with the report. Call it once per job, then tell the user the job is queued.',
   input,

@@ -27,6 +27,7 @@ const VERBS = new Set([
   'create',
   'decline',
   'delete',
+  'download',
   'edit',
   'email',
   'force',

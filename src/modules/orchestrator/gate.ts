@@ -25,6 +25,7 @@ import {
   itemApproval,
   releaseApprovals,
 } from './approval-kinds.ts';
+import { commandSummary } from './command-words.ts';
 import { approvals } from './schema.ts';
 import { turnInProgress } from './turn.ts';
 
@@ -81,10 +82,14 @@ const oneLine = (text: string, max: number) => {
   return one.length > max ? `${one.slice(0, max - 1)}…` : one;
 };
 
-/** The card's summary, as Tex's sentence starts it ("I'd like to run this command: …"). */
+/**
+ * The card's summary (its title), as Tex's sentence starts it ("I'd like to download a file from …").
+ * A command in plain words when it is a lone download or upload, else the command with its long
+ * addresses cut to their host (command-words.ts). The exact command is in the card's details.
+ */
 export function gateSummary(call: Pick<GateCall, 'tool' | 'target' | 'why'>): string {
+  if (call.tool === 'Bash') return commandSummary(call.target, call.why);
   const why = call.why ? ` (${oneLine(call.why, 120)})` : '';
-  if (call.tool === 'Bash') return `Run this command: \`${oneLine(call.target, 300)}\`${why}`;
   const verb =
     call.tool === 'Write'
       ? 'Write the file'

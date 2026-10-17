@@ -12,6 +12,7 @@ import {
   describeAppAction,
 } from '../../integrations/agent-apps.ts';
 import { withAccountLabels } from '../../integrations/account-identity.ts';
+import { inlineAppFiles } from '../../integrations/app-files.ts';
 import { shapeResult, withResultDefaults } from '../../integrations/app-results.ts';
 import {
   activeConnectionsOf,
@@ -567,6 +568,9 @@ defineTool({
         logger().error({ userId, action: args.action, err: String(err) }, 'app action not charged');
       }
     }
+    // A file the app gave as a link to Composio's storage: its content, never the link
+    // (app-files.ts). Never throws: the action has run, and a file that can't be fetched is a note.
+    data = await inlineAppFiles(args.action, data);
     // No more than the agent needs: Gmail's fetch summarised, anything too long cut (app-results.ts).
     const shaped = shapeResult(args.action, runArgs, data);
     // A run with steps: the step's own action is done (its short result saved, the pointer moved

@@ -289,7 +289,7 @@ The rules:
 2. Someone opens a pull request there, or pushes new commits to one.
 3. Composio tells our server.
 4. The worker wakes the user's container and tells Tex to have Patch review that pull request.
-5. Patch reads the changes and posts one review with its comments on the pull request.
+5. Patch reads the changes and returns its review; Tex posts it as one review with its comments on the pull request (Patch never posts itself).
 6. The user gets a short verdict in the Automations chat, with a copy on Telegram when it is linked and the user's "Pull-request reviews finish" switch is on (it is at first).
 
 Each commit is reviewed once. Patch never merges and never approves. Turning review on is the user's standing permission for these comments, on that repo only.

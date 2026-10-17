@@ -1005,7 +1005,7 @@ In web chat the answer appears a few words at a time while the agent writes it, 
 
 1. The worker asks for it in the delivery: `stream_text` is true when the turn's answer goes to web chat, false for every other channel. A turn's own data cannot change it.
 2. In the container, the Bridge passes on what the agent writes, about four times a second. Each piece holds the whole text so far, not only the new words. So a piece that gets lost does no harm: the next one has everything.
-3. The agent can start over. It writes "Let me check your calendar.", then calls a tool, then writes the answer. When it goes on to a tool, the Bridge sends an empty text, and the web app shows "Tex is working…" with its progress line again.
+3. The agent can start over. It writes "Let me check your calendar.", then calls a tool, then writes the answer. When it goes on to a tool, the Bridge sends an empty text: the web app keeps what it showed as a step, and the line under the turn says "Tex is working…" again (see "One turn, one line" below).
 4. The worker publishes each piece as `message.draft`, with the turn's conversation, the turn's id and the message it answers. Nothing is saved, and nothing goes to Telegram or another chat app. A piece is cut at 16,000 characters.
 5. The answer itself arrives as always: the Bridge sends it through the tool server (section 10), and the web app gets `message.created`. The web app puts it in the draft's place.
 6. If the turn fails after a draft was shown, the worker first sends an empty draft, then the apology. So the half-written answer goes away before the user is told.
@@ -1014,14 +1014,29 @@ The web app follows four rules:
 
 | Event | What the web app does |
 |---|---|
-| `message.draft` | Shows the latest text of the turn in its conversation, in place of "Tex is working…". An empty text brings "Tex is working…" back |
+| `message.draft` | Shows the latest text of the turn in its conversation, with "Tex is writing…" under it. An empty text keeps the text as a step, and the line under it says "Tex is working…" |
 | `message.created` from the agent | The message takes the draft's place. A later draft of the same turn is dropped. An approval card does not count: the agent may still be writing after it. What the turn showed before the card folds into the card |
-| `agent.status` other than busy, or the incoming message `delivered` or `failed` | The turn is over: the draft goes |
-| The stream reconnects | The draft goes. If the turn still runs, its next piece brings the whole text back |
+| `agent.status` other than busy, or the incoming message `delivered` or `failed` | The turn is over: the draft and the line under the turn go |
+| The stream reconnects | What is on screen stays. If the turn still runs, its next piece brings the whole text back. If the agent turns out not to be busy, the turn ended while the stream was down, and it ends on screen too |
 
 Why the web app has to drop late drafts: the drafts come from the worker, but the answer comes from the api, where the tool server runs. Two senders, so the answer can arrive a moment before the last draft. The drafts and the end of the turn come from the same worker, in order, so no draft comes after the end of its turn.
 
 A slow connection does not fall behind on drafts. Each open stream keeps at most one waiting draft per turn: a newer one takes the older one's place.
+
+### One turn, one line (17 October)
+
+You saw "Tex is working…" go away when Tex paused or wrote, and come back, sometimes several times in one turn, as if the agent had been started again. It had not:
+
+- **The agent ran once per message.** Every one of your turns on 16 and 17 October has one row in `turn_timings`, first try, and every event was handled by one job, with no error and no retry. A turn with two messages from Tex was one turn that wrote twice: a question or a draft card, then a line under it ("Waiting for your approval…", "The draft is ready…").
+- **The web app took the bubble away and put it back.** A turn of yours runs 4 to 15 rounds of the model. The "Tex is working…" bubble gave way to each piece of text Tex wrote and came back each time Tex went on to a tool. It came back once more under the answer, for the half second between the answer and the turn's end (the answer is sent, then the turn ends 0.4 to 0.6 seconds later). After a question, the line Tex writes under the card put "Tex is working…" back in place of "Waiting for your OK".
+
+What the web app does now:
+
+1. Until anything of the turn is on screen, the "Tex is working…" bubble, as before.
+2. From the turn's first step, its first text, or a message Tex sends in the middle of it, one quiet line under the newest thing. It stays in the same place until the turn is over. Only its words change: "Tex is writing…" while text comes in, "Tex is working…" between tools, "Waiting for your OK" once Tex asked.
+3. It goes when the turn is over: the incoming message `delivered` or `failed`, or the agent no longer busy. A line Tex writes after its question still counts as asking, so the chat keeps saying "Waiting for your OK".
+
+Nothing changed in the backend for this: its events already said when a turn starts and ends. The rule is in the web app (`src/lib/turn-line.ts`).
 
 ### What can go wrong
 

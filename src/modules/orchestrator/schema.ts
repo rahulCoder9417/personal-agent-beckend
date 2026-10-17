@@ -116,7 +116,7 @@ export const skipRules = pgTable(
     recipients: jsonb().$type<string[]>().notNull().default([]),
     /** How it was made: `web` (the approval card, with the user's session). */
     createdVia: text().notNull(),
-    /** The approval the card offered it on. No foreign key: approvals go after 24 hours' use. */
+    /** The approval the card offered it on, only as a pointer: the rule holds all it needs itself. */
     approvalId: text(),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },

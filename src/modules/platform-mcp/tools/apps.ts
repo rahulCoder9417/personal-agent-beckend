@@ -131,7 +131,9 @@ defineTool({
     "Your user's apps and the actions you can run in them. `apps` gives each app's status: connected, or not " +
     "ready (still connecting, needs connecting again, not on the user's plan) with a note saying what to tell " +
     'the user. `actions` lists the actions of the connected apps by name with one line each, at most 100, shared ' +
-    'fairly between the apps; filter by app (e.g. "googlecalendar") or by a search word to see more of one app. ' +
+    'fairly between the apps. To find the action you need, filter by app (e.g. "github") and by search words (e.g. ' +
+    '"pull request", "list repositories"): every action of the app is searched, the best matches first. If a ' +
+    'search finds nothing, try other words before you decide the app cannot do it. ' +
     'It has no inputs: call describe_app_action for the inputs of the action you will use. ' +
     'Actions marked requires_approval need request_approval first, then run_app_action with the approval_id ' +
     '(exceptions: a new review or comment on a pull request, in a repo where your user turned on pull-request review, ' +

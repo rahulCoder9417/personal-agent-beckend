@@ -1,5 +1,6 @@
 import { AuthScheme, Composio } from '@composio/core';
 import { config } from '../../shared/config.ts';
+import { logger } from '../../shared/logger.ts';
 
 export interface ComposioTool {
   slug: string;
@@ -149,8 +150,8 @@ export interface ComposioApi {
    */
   accessToken(accountId: string): Promise<string | null>;
   /**
-   * The tools of these toolkits, in one request with one limit (200) for all of them. So ask for
-   * one toolkit at a time (`appActionsFor`): GitHub alone has more than 200.
+   * The tools of these toolkits, in one request with one limit (TOOL_LIST_LIMIT) for all of them.
+   * So ask for one toolkit at a time (`toolkitTools`): GitHub alone has about 900.
    */
   listTools(toolkits: string[]): Promise<ComposioTool[]>;
   /**
@@ -394,7 +395,7 @@ const realApi: ComposioApi = {
     if (toolkits.length === 0) return [];
     const tools = (await sdk().tools.getRawComposioTools({
       toolkits,
-      limit: 200,
+      limit: TOOL_LIST_LIMIT,
     } as never)) as unknown as RawTool[];
     return tools.map(toTool);
   },
@@ -541,6 +542,14 @@ const authConfigCache = new Map<string, AuthConfigInfo>();
  * per app per call. A failed listing is not kept.
  */
 export const TOOL_LIST_TTL_MS = 10 * 60_000;
+/**
+ * The most tools one request to Composio returns: its largest page. The SDK asks for one page only.
+ * Until 17 October 2026 the limit was 200, and Composio lists an app's actions in alphabetical
+ * order, so GitHub's (about 900) stopped in the Cs: every "find", "get", "list" and "search" action
+ * was missing, its pull-request list among them, and a search word was only matched against those
+ * 200. Tex then said GitHub had no action to list pull requests and sent Scout to github.com.
+ */
+export const TOOL_LIST_LIMIT = 1000;
 const toolListCache = new Map<string, { at: number; tools: ComposioTool[] }>();
 /** One action asked by its name (`actionTool`), kept as long as a listing. */
 const toolCache = new Map<string, { at: number; tool: ComposioTool | null }>();
@@ -583,14 +592,18 @@ export async function toolkitTools(toolkit: string, now = Date.now()): Promise<C
   const kept = toolListCache.get(key);
   if (kept && now - kept.at < TOOL_LIST_TTL_MS) return kept.tools;
   const tools = await api.listTools([toolkit]);
+  // A full page may mean Composio has more: the rest would be missing from the agent's list.
+  if (tools.length >= TOOL_LIST_LIMIT)
+    logger().warn({ toolkit: key, tools: tools.length }, 'composio tool list may be cut short');
   toolListCache.set(key, { at: now, tools });
   return tools;
 }
 
 /**
  * One action as Composio describes it, with its input schema. From its app's listing when it is
- * there; otherwise asked by its name, because a listing holds at most 200 actions and GitHub has
- * more. Null: Composio has no action of that name. Throws when Composio can't be asked.
+ * there; otherwise asked by its name, in case a listing ever holds less than the whole app (it
+ * holds at most TOOL_LIST_LIMIT actions). Null: Composio has no action of that name. Throws when
+ * Composio can't be asked.
  */
 export async function actionTool(
   toolkit: string,

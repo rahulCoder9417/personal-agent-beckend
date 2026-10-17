@@ -8,6 +8,7 @@ const made: Array<Record<string, unknown>> = [];
 const executes: Array<{ slug: string; body: Record<string, unknown>; options: unknown }> = [];
 const toolFetches: string[] = [];
 const sdkExecutes: string[] = [];
+const listQueries: Array<Record<string, unknown>> = [];
 
 const GMAIL_SEND = {
   slug: 'GMAIL_SEND_EMAIL',
@@ -33,7 +34,10 @@ vi.mock('@composio/core', async (importOriginal) => {
         toolFetches.push(slug);
         return slug === GMAIL_SEND.slug ? GMAIL_SEND : { ...GMAIL_SEND, slug, inputParameters: {} };
       },
-      getRawComposioTools: async () => [GMAIL_SEND],
+      getRawComposioTools: async (query: Record<string, unknown>) => {
+        listQueries.push(query);
+        return [GMAIL_SEND];
+      },
       execute: async (slug: string) => {
         sdkExecutes.push(slug);
         return { successful: true, data: {}, error: null };
@@ -68,6 +72,7 @@ beforeEach(() => {
   executes.length = 0;
   toolFetches.length = 0;
   sdkExecutes.length = 0;
+  listQueries.length = 0;
 });
 
 const run = (args: Record<string, unknown> = { recipient_email: 'a@b.co' }) =>
@@ -110,6 +115,13 @@ describe('the Composio client', () => {
     await run();
     expect(toolFetches).toEqual([]);
     expect(executes).toHaveLength(1);
+  });
+
+  it("asks for an app's whole list of actions: Composio's largest page, not 200", async () => {
+    // GitHub has about 900 actions, in alphabetical order; at 200 the list stopped in the Cs, and
+    // on 17 October 2026 Tex found no way to list pull requests (app-action-search.test.ts).
+    await toolkitTools('github');
+    expect(listQueries).toEqual([{ toolkits: ['github'], limit: 1000 }]);
   });
 
   it('sends an empty file input as no input, as the SDK does', async () => {

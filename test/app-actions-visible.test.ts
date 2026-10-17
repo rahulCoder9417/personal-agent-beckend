@@ -140,10 +140,10 @@ describe('list_app_actions: every connected app gets its share', () => {
     // At most 100 actions in all; GitHub gets the room Calendar does not need, and is told to narrow.
     expect(res.actions.length).toBeLessThanOrEqual(100);
     expect(res.actions.filter((a) => a.app === 'github')).toHaveLength(97);
-    // Composio answers at most 200 tools for one request (our limit), so GitHub shows 200.
+    // Composio is asked for up to 1,000 tools of one app (one page), so all 320 are counted.
     const github = res.apps.find((a) => a.app === 'github')!;
-    expect(github).toMatchObject({ status: 'connected', actions: 200 });
-    expect(github.note).toMatch(/97 of its 200 actions/);
+    expect(github).toMatchObject({ status: 'connected', actions: 320 });
+    expect(github.note).toMatch(/97 of its 320 actions/);
     expect(github.note).toMatch(/app "github"/);
     expect(res.apps.find((a) => a.app === 'googlecalendar')).toMatchObject({
       name: 'Google Calendar',

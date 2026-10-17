@@ -274,8 +274,9 @@ async function conversation(input: TurnInput) {
  * stop.
  */
 export async function routeTurn(input: TurnInput, ctx: RouteContext = {}): Promise<RouteDecision> {
-  // Only fresh user messages are routed; approval answers, automations and app events are tasks.
-  if (input.kind !== 'message' || input.attachments?.length) return TASK;
+  // Only fresh user messages are routed; approval answers, automations and app events are tasks,
+  // and so is a request from the New automation page (the agent must draft it or say why not).
+  if (input.kind !== 'message' || input.attachments?.length || input.purpose) return TASK;
   const text = input.text.trim();
   if (!text || text.length > MAX_ROUTABLE_CHARS) return TASK;
   const jev = jevOverride ?? sdkClient();

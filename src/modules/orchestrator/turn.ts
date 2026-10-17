@@ -72,6 +72,12 @@ export interface TurnInput {
    * is an automation's run as well.
    */
   automationRunId?: string;
+  /**
+   * The user's web message is a request from the New automation page (`automation_draft`): its
+   * text already holds the note that the agent may only draft it or say why it can't. It always
+   * goes to the agent: never a quick reply.
+   */
+  purpose?: 'automation_draft';
   metadata?: Record<string, unknown>;
 }
 

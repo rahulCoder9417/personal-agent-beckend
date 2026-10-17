@@ -28,6 +28,9 @@ export function toApiMessage(m: MessageRow) {
     automationDraftId: m.automationDraftId ?? null,
     // Only the web app's own messages have one: it matches its optimistic bubble to the saved one.
     ...(m.clientMessageId ? { clientMessageId: m.clientMessageId } : {}),
+    // The turn it belongs to (the user's message: the turn that answers it; the agent's: the turn
+    // it was written in), so a client finds the answer to a message it sent.
+    turnId: m.eventId ?? null,
     createdAt: m.createdAt.toISOString(),
   };
 }

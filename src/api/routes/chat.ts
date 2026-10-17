@@ -127,6 +127,7 @@ export const chatRoutes = [
       clientMessageId: body.clientMessageId,
       ...(body.attachmentIds ? { attachmentIds: body.attachmentIds } : {}),
       ...(body.conversationId ? { conversationId: body.conversationId } : {}),
+      ...(body.purpose ? { purpose: body.purpose } : {}),
     });
     return c.json(toApiMessage(message), 202);
   }),

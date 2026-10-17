@@ -27,7 +27,7 @@ import {
   toApiMessage,
   type MessageRow,
 } from '../channels/messages.ts';
-import { noteMessage } from '../channels/conversations.ts';
+import { automationsChat, findAutomationsChat, noteMessage } from '../channels/conversations.ts';
 import { publish } from '../channels/stream.ts';
 import { queueOutbound, queueRawOutbound } from '../channels/outbound.ts';
 import { sessionKeyFor, type InboundMessage } from '../channels/types.ts';
@@ -319,12 +319,42 @@ async function handleUnlinked(msg: InboundMessage, eventId: string): Promise<voi
 }
 
 /**
+ * What a web message is for, besides an ordinary message. `automation_draft`: the New automation
+ * page's "Ask Tex to set it up". It goes into the Automations chat, and the agent only drafts an
+ * automation from it or says why it can't be one (DRAFT_ASK_NOTE).
+ */
+export type WebMessagePurpose = 'automation_draft';
+
+/**
+ * What the agent is told before a request from the New automation page. It is the turn's text,
+ * so the agent image needn't change: the page waits for a draft, or for a short "why not" with a
+ * request that would work, and the agent must not do the task itself now. In the Automations chat
+ * schedule_reminder is refused anyway, so a one-time reminder becomes a draft too.
+ */
+export const DRAFT_ASK_NOTE =
+  '[Asked from the New automation page of the web app ("Ask Tex to set it up"). The user is ' +
+  'waiting there for a draft, so in this turn do only one of these two things, then end your ' +
+  'turn. If it can run as an automation (at a set time, on a schedule, or when something happens ' +
+  'in a connected app; a one-time reminder too), propose it with propose_automation, filling ' +
+  'anything left open with sensible defaults the user can change on the canvas. If it cannot (no ' +
+  "trigger fits, it needs an app that isn't connected, or it is a one-off question or task rather " +
+  'than something to run later), say why in one or two plain sentences, then on a new line ' +
+  'suggest a request that would work, as: Try: "…". Ask no question, and do not do the task ' +
+  'itself now: no app actions, no messages to anyone, no crew jobs.]';
+
+/** The turn's text for a request from the New automation page: the note, then the user's words. */
+export function draftAskText(text: string): string {
+  return `${DRAFT_ASK_NOTE}\n${text}`;
+}
+
+/**
  * A message the user sends in web chat (POST /v1/messages): the channel must be on, at most 30 a
  * minute, refused at zero credits, saved once per `clientMessageId`, and the turn is queued as an
  * inbound job. It goes into web chat's active conversation, or into the web conversation named,
- * which becomes the active one first. Returns at once; the worker runs the turn. Throws the api's
- * errors (403 channel_disabled, 429, 402 out_of_credits, 400, and for a named conversation 404 or
- * 409).
+ * which becomes the active one first. With `purpose` (the New automation page), into the
+ * Automations chat, started if there is none, and the active conversation stays as it is. Returns
+ * at once; the worker runs the turn. Throws the api's errors (403 channel_disabled, 429, 402
+ * out_of_credits, 400, and for a named conversation 404 or 409).
  */
 export async function sendWebMessage(
   userId: string,
@@ -333,9 +363,14 @@ export async function sendWebMessage(
     clientMessageId: string;
     attachmentIds?: string[];
     conversationId?: string;
+    purpose?: WebMessagePurpose;
   },
 ): Promise<{ message: MessageRow; eventId: string }> {
   if (!isChannelEnabled('web')) throw channelDisabled('web');
+  if (input.purpose && input.conversationId)
+    throw badRequest(
+      'Leave conversationId out: a request for an automation draft goes into the Automations chat',
+    );
   await enforce({ key: `msg:user:${userId}`, max: 30, windowSeconds: 60 });
   const ids = input.attachmentIds ?? [];
   // Every read at once, one round trip to the database (each about 0.26 s on Neon): the credits,
@@ -346,7 +381,10 @@ export async function sendWebMessage(
     userHasCredits(userId),
     getUserAttachments(userId, ids),
     getWebMessage(userId, input.clientMessageId),
-    readWebConversation(userId, input.conversationId).then(
+    (input.purpose
+      ? findAutomationsChat(userId)
+      : readWebConversation(userId, input.conversationId)
+    ).then(
       (row) => ({ row }),
       (error: unknown) => ({ error }),
     ),
@@ -354,10 +392,14 @@ export async function sendWebMessage(
   if (!credits) throw outOfCredits();
   if (files.length !== ids.length) throw badRequest('Unknown attachment');
   // The same message sent again changes nothing, not even which conversation is active.
-  if (sent) return { message: sent, eventId: await queueSavedWebMessage(userId, sent) };
+  if (sent)
+    return { message: sent, eventId: await queueSavedWebMessage(userId, sent, input.purpose) };
   if ('error' in target) throw target.error;
-  // Writes only when the conversation named is not the active one yet, or web chat has none.
-  const conversation = await settleWebConversation(userId, input.conversationId, target.row);
+  // Writes only when the conversation named is not the active one yet, or web chat has none (or,
+  // for the New automation page, the user has no Automations chat yet).
+  const conversation = input.purpose
+    ? (target.row ?? (await automationsChat(userId)))
+    : await settleWebConversation(userId, input.conversationId, target.row);
   // The message first, then its event: an event (so a turn) only ever exists for a message saved.
   // The event's id is made here, so the message is saved with it (no third write to link them).
   const eventId = newId('evt');
@@ -372,14 +414,18 @@ export async function sendWebMessage(
   if (!message) {
     // The same message, sent twice at once, was saved by the other request a moment ago.
     const other = (await getWebMessage(userId, input.clientMessageId))!;
-    return { message: other, eventId: await queueSavedWebMessage(userId, other) };
+    return { message: other, eventId: await queueSavedWebMessage(userId, other, input.purpose) };
   }
   await publish(userId, 'message.created', toApiMessage(message));
   // The event and its job, and beside them the conversation's last message time and title (the
   // order of the chat list), which nothing in the turn waits for: a failure there is logged and
   // never fails a message that is on its way.
   const [queued] = await Promise.all([
-    ingestEvent({ ...webMessageEvent(userId, message), id: eventId, markLater: true }),
+    ingestEvent({
+      ...webMessageEvent(userId, message, input.purpose),
+      id: eventId,
+      markLater: true,
+    }),
     noteMessage(message).catch((err: unknown) =>
       logger().error({ userId, messageId: message.id, err: String(err) }, 'conversation not noted'),
     ),
@@ -389,17 +435,21 @@ export async function sendWebMessage(
   return { message: { ...message, eventId: queued.eventId }, eventId: queued.eventId };
 }
 
-/** The event (and inbound job) of a web message. */
-function webMessageEvent(userId: string, message: MessageRow) {
+/**
+ * The event (and inbound job) of a web message. Both hold the message and what it is for, so a
+ * job added again from the saved event alone (after Redis lost its jobs) still knows them.
+ */
+function webMessageEvent(userId: string, message: MessageRow, purpose?: WebMessagePurpose) {
+  const data = { messageId: message.id, ...(purpose ? { purpose } : {}) };
   return {
     source: 'web',
     externalId: `${userId}:${message.clientMessageId}`,
     type: 'message',
     userId,
-    payload: { messageId: message.id },
+    payload: data,
     queue: 'inbound' as const,
     jobName: 'web-message',
-    jobData: { messageId: message.id },
+    jobData: data,
   };
 }
 
@@ -407,24 +457,37 @@ function webMessageEvent(userId: string, message: MessageRow) {
  * A web message saved before (sent again): its event, made if it is missing and queued again if it
  * never was (the job's id keeps it from running twice), and the message pointed to it.
  */
-async function queueSavedWebMessage(userId: string, message: MessageRow): Promise<string> {
-  const { eventId } = await ingestEvent(webMessageEvent(userId, message));
+async function queueSavedWebMessage(
+  userId: string,
+  message: MessageRow,
+  purpose?: WebMessagePurpose,
+): Promise<string> {
+  const { eventId } = await ingestEvent(webMessageEvent(userId, message, purpose));
   if (message.eventId !== eventId) await setMessageEvent(message.id, eventId);
   return eventId;
 }
 
+type WebMessageJob = { messageId?: string; purpose?: WebMessagePurpose };
+
+/**
+ * The message a web-message job is for, and what it is for. A job added again from its saved event
+ * alone (after Redis lost its jobs) has only the event's id: they are read from the event then.
+ */
+async function webMessageOf(data: WebMessageJob, eventId: string): Promise<WebMessageJob> {
+  if (data.messageId) return data;
+  return ((await getEvent(eventId))?.payload as WebMessageJob | undefined) ?? {};
+}
+
 /** inbound/web-message: a message sent from the web app. */
 export async function handleWebMessage(job: Job): Promise<unknown> {
-  const { messageId, eventId, userId } = job.data as {
-    messageId: string;
-    eventId: string;
-    userId: string;
-  };
-  const msg = await getMessageById(messageId);
+  const { eventId, userId } = job.data as { eventId: string; userId: string };
+  const { messageId, purpose } = await webMessageOf(job.data as WebMessageJob, eventId);
+  const msg = messageId ? await getMessageById(messageId) : undefined;
   if (!msg || msg.userId !== userId) return IGNORED;
   if (msg.status !== 'queued') return null;
   const sessionKey = 'web';
-  if (await inboundHooks.handleText(userId, msg.text, sessionKey)) {
+  // A request from the New automation page is always for the agent (never a coupon code).
+  if (!purpose && (await inboundHooks.handleText(userId, msg.text, sessionKey))) {
     await setMessageStatus(msg.id, 'delivered');
     return null;
   }
@@ -434,11 +497,13 @@ export async function handleWebMessage(job: Job): Promise<unknown> {
     kind: 'message',
     sessionKey,
     channel: 'web',
-    text: msg.text,
+    // From the New automation page: the agent is told to only draft it, or say why it can't.
+    text: purpose === 'automation_draft' ? draftAskText(msg.text) : msg.text,
     attachments: msg.mediaRef ?? [],
     inboundMessageId: msg.id,
     // The message's own conversation, also when the user has opened another one since.
     conversationId: msg.conversationId,
+    ...(purpose ? { purpose } : {}),
   });
   return null;
 }

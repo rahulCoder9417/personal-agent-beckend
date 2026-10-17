@@ -94,17 +94,22 @@ export interface ClaudeCrewChoice {
 }
 export type ClaudeCrew = Record<ClaudeCrewMember, ClaudeCrewChoice>;
 
+/** Byte's and Patch's own Default while Tex is on Default too (crew.py `CLAUDE_CREW_DEFAULTS`). */
+const CREW_OWN_DEFAULT: ClaudeCrewChoice = { model: 'claude-opus-5-5', effort: 'medium' };
+/** In `crewDefaults`, null is "the same as Tex": the member runs on Tex's model at Tex's effort. */
+const SAME_AS_TEX: ClaudeCrewChoice = { model: null, effort: null };
+
 /**
- * What a crew member left on Default runs on Claude Code. This must say what the Bridge does
- * (vm-manager, agent-image/bridge/crew.py `CLAUDE_CREW_DEFAULTS` and `claude_member_model`): Byte
- * and Patch write and review code, where thinking pays, so Opus 5.5 at medium effort whatever Tex
- * runs on; Scout reads the web and runs as Tex does (null: the same as Tex).
+ * What a crew member left on Default runs on Claude Code for this user, said in one place for the
+ * web app's labels. It must say what the Bridge does (vm-manager, agent-image/bridge/crew.py
+ * `claude_member_model`): with a model picked for Tex, Byte and Patch run as Tex does; with Tex on
+ * Default, they write and review code on Opus 5.5 at medium effort, where thinking pays. Scout
+ * reads the web and always runs as Tex does.
  */
-export const CLAUDE_CREW_DEFAULTS: ClaudeCrew = {
-  byte: { model: 'claude-opus-5-5', effort: 'medium' },
-  patch: { model: 'claude-opus-5-5', effort: 'medium' },
-  scout: { model: null, effort: null },
-};
+export function crewDefaultsFor(settings: Pick<AgentSettingsView, 'claudeModel'>): ClaudeCrew {
+  const own = settings.claudeModel ? SAME_AS_TEX : CREW_OWN_DEFAULT;
+  return { byte: own, patch: own, scout: SAME_AS_TEX };
+}
 
 export interface AgentSettingsView {
   /** What the user chose. */
@@ -120,11 +125,12 @@ export interface AgentSettingsView {
   ownKeyProviders: ByokProvider[];
   /**
    * Tex's model and effort on Claude Code (null: Default, which the Bridge runs as Sonnet 5.5 at
-   * low effort). Used only on Claude Code turns.
+   * low effort). A crew member left on Default follows a model picked here. Used only on Claude
+   * Code turns.
    */
   claudeModel: string | null;
   claudeEffort: ClaudeEffort | null;
-  /** Each crew member's model and effort on Claude Code, on its own (null: CLAUDE_CREW_DEFAULTS). */
+  /** Each crew member's model and effort on Claude Code, on its own (null: crewDefaultsFor). */
   claudeCrew: ClaudeCrew;
 }
 
@@ -257,7 +263,7 @@ export interface ClaudeTurnOptions {
  * What a Claude Code turn is told about the models and the efforts (the delivery's `claude`
  * field): Tex's in `model` and `effort`, each crew member's in `crew`. A value left out means
  * Default: the Bridge then runs Tex on Sonnet 5.5 at low effort (vm-manager, claude.py) and the
- * crew as CLAUDE_CREW_DEFAULTS says (crew.py).
+ * crew as crewDefaultsFor says (crew.py).
  */
 export async function claudeTurnOptions(userId: string): Promise<ClaudeTurnOptions> {
   return claudeOptionsOf(claudeChoiceOf(await settingsRow(userId)));

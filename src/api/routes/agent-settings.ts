@@ -1,8 +1,8 @@
 // Agent settings + connecting the user's own Claude plan (openapi tag `agent`).
 import {
-  CLAUDE_CREW_DEFAULTS,
   CLAUDE_EFFORTS,
   CLAUDE_MODELS,
+  crewDefaultsFor,
   getAgentSettings,
   updateAgentSettings,
   type AgentSettingsView,
@@ -37,7 +37,7 @@ function toAgentSettings(s: AgentSettingsView): Schemas['AgentSettings'] {
         ...(m.note ? { note: m.note } : {}),
       })),
       efforts: [...CLAUDE_EFFORTS],
-      crewDefaults: CLAUDE_CREW_DEFAULTS,
+      crewDefaults: crewDefaultsFor(s),
     },
   };
 }

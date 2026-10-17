@@ -45,6 +45,12 @@ type Settings = {
   };
 };
 type CrewMember = 'byte' | 'patch' | 'scout';
+/** `crewDefaults` with a model picked for Tex: every member runs as Tex does. */
+const SAME_AS_TEX = {
+  byte: { model: null, effort: null },
+  patch: { model: null, effort: null },
+  scout: { model: null, effort: null },
+};
 type CrewChoice = { model: string | null; effort: string | null };
 
 const ALL = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -79,7 +85,7 @@ const CLAUDE_CHOICES = {
     { id: 'claude-haiku-4-5', label: 'Haiku 4.5', group: 'older', efforts: [] },
   ],
   efforts: ALL,
-  // What each crew member left on Default runs (null: the same as Tex).
+  // What each crew member left on Default runs while Tex is on Default (null: the same as Tex).
   crewDefaults: {
     byte: { model: 'claude-opus-5-5', effort: 'medium' },
     patch: { model: 'claude-opus-5-5', effort: 'medium' },
@@ -587,7 +593,8 @@ describe('Claude Code model and effort', () => {
       effectiveRuntime: 'hermes',
       claudeModel: 'claude-opus-5-5',
       claudeEffort: 'xhigh',
-      claudeChoices: CLAUDE_CHOICES,
+      // With a model picked for Tex, the crew's Default is the same as Tex.
+      claudeChoices: { ...CLAUDE_CHOICES, crewDefaults: SAME_AS_TEX },
     });
     expect(await settingsOf(u.token)).toMatchObject({
       claudeModel: 'claude-opus-5-5',
@@ -755,6 +762,26 @@ describe('the crew’s own models and efforts (Claude Code)', () => {
     expect(ids).toContain(s.claudeChoices.crewDefaults.patch.model);
   });
 
+  it('Default for Byte and Patch follows a model picked for Tex, and comes back with Tex’s Default', async () => {
+    const u = await createUser();
+    const picked = await expectContract<Settings>(
+      'updateAgentSettings',
+      await patch(u.token, { claudeModel: 'claude-haiku-5-5' }),
+      200,
+    );
+    expect(picked.claudeChoices.crewDefaults).toEqual(SAME_AS_TEX);
+    expect((await settingsOf(u.token)).claudeChoices.crewDefaults).toEqual(SAME_AS_TEX);
+    // Only an effort for Tex: Tex's model is still Default, so Byte and Patch keep Opus 5.5.
+    const back = await expectContract<Settings>(
+      'updateAgentSettings',
+      await patch(u.token, { claudeModel: null, claudeEffort: 'high' }),
+      200,
+    );
+    expect(back.claudeChoices.crewDefaults).toEqual(CLAUDE_CHOICES.crewDefaults);
+    // A member's own pick is still its own.
+    expect(back.claudeCrew).toEqual(allDefault);
+  });
+
   it('PATCH sets one member at a time; only the fields sent change; null goes back to Default', async () => {
     const u = await createUser();
     const set = await expectContract<Settings>(
@@ -788,7 +815,7 @@ describe('the crew’s own models and efforts (Claude Code)', () => {
     });
     expect((await settingsOf(u.token)).claudeCrew).toEqual(next.claudeCrew);
 
-    // Tex's choice changes nothing for the crew.
+    // Tex's choice leaves the crew's own picks as they are.
     const tex = await expectContract<Settings>(
       'updateAgentSettings',
       await patch(u.token, { claudeModel: null, claudeEffort: 'max' }),

@@ -1,5 +1,5 @@
 import { and, eq, gt, inArray } from 'drizzle-orm';
-import { db } from '../../shared/db/client.ts';
+import { db, type Tx } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
 import { runLater } from '../../shared/later.ts';
 import { addJob, type QueueName } from './queues.ts';
@@ -63,6 +63,43 @@ export async function ingestEvent(
   // A crash between insert and enqueue leaves it "received": queue it now (jobId dedupes).
   if (existing?.status === 'received') await enqueueEvent(existing, input.jobData);
   return { eventId: existing!.id, duplicate: true };
+}
+
+/**
+ * Saves the event inside the caller's transaction, so it exists exactly when the caller's own
+ * change does: an approval's answer and its event are one step, so a message the user sends right
+ * after the answer can't be queued before it. Add its job with queueSavedEvent once the transaction
+ * is over. Null: the event was saved before (its job was added then; a worker start adds it again
+ * while it is still `received`).
+ */
+export async function saveEvent(
+  input: Omit<IngestInput, 'jobData' | 'markLater'>,
+  tx: Tx,
+): Promise<EventRow | null> {
+  const [row] = await tx
+    .insert(events)
+    .values({
+      id: input.id ?? newId('evt'),
+      source: input.source,
+      externalId: input.externalId,
+      type: input.type,
+      userId: input.userId ?? null,
+      payload: input.payload,
+      queue: input.queue,
+      jobName: input.jobName,
+      status: 'received',
+    })
+    .onConflictDoNothing({ target: [events.source, events.externalId] })
+    .returning();
+  return row ?? null;
+}
+
+/** Adds the job of an event saved with saveEvent (its id is the job's id, so twice is harmless). */
+export async function queueSavedEvent(
+  row: EventRow,
+  jobData?: Record<string, unknown>,
+): Promise<void> {
+  await enqueueEvent(row, jobData);
 }
 
 /** Plan → inbound priority (HLD 7.1: Max gets priority in the queue). Filled by wiring. */

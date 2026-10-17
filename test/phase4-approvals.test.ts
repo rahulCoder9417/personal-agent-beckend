@@ -158,13 +158,13 @@ describe('Phase 4: approvals + Composio', () => {
       expect.arrayContaining(['approval_requested', 'approval_decided', 'run_app_action']),
     );
 
-    // The approval is single use.
+    // The approval is single use: it ran at the ✅, and asked again it gives that run's result.
     const replay = await mcpCall(vmFake.tokens.get(alice.id)!, 'run_app_action', {
       action: 'GMAIL_SEND_EMAIL',
       arguments: EMAIL_ARGS,
       approval_id: pending.items[0]!.id,
     });
-    expect(replay.isError).toBe(true);
+    expect(JSON.parse(replay.text)).toMatchObject({ ok: true, already_done: true });
     expect(executed).toHaveLength(1);
   });
 
@@ -242,7 +242,14 @@ describe('Phase 4: approvals + Composio', () => {
       userId: bob.id,
     });
     expect(list.isError).toBeFalsy();
-    expect(executed.every((e) => e.userId === alice.id)).toBe(true);
+    // Bob's approved email ran at his ✅, as Bob; everything Alice's container ran, as Alice.
+    await waitFor(async () => executed.find((e) => e.slug === 'GMAIL_SEND_EMAIL'));
+    expect(executed.filter((e) => e.slug === 'GMAIL_SEND_EMAIL').map((e) => e.userId)).toEqual([
+      bob.id,
+    ]);
+    expect(
+      executed.filter((e) => e.slug !== 'GMAIL_SEND_EMAIL').every((e) => e.userId === alice.id),
+    ).toBe(true);
     // Alice can't see or decide Bob's approval over REST either.
     await expectContract(
       'decideApproval',
@@ -287,12 +294,14 @@ describe('Phase 4: approvals + Composio', () => {
       body: { decision: 'approve' },
     });
     const token = vmFake.tokens.get(u.id)!;
+    await waitFor(async () => executed.length > 0);
     const changed = await mcpCall(token, 'run_app_action', {
       action: 'GMAIL_SEND_EMAIL',
       arguments: { ...EMAIL_ARGS, to: 'evil@x.com' },
       approval_id: id,
     });
     expect(changed.isError).toBe(true);
+    expect(changed.text).toContain('were not used');
     const same = await mcpCall(token, 'run_app_action', {
       action: 'GMAIL_SEND_EMAIL',
       arguments: EMAIL_ARGS,

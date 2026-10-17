@@ -16,7 +16,7 @@ import {
 import { isSuspended } from '../auth/users.ts';
 import { getEvent, ingestEvent } from '../events/intake.ts';
 import { getUserAttachments } from '../channels/files.ts';
-import { acknowledgeButton, parseInbound } from '../channels/inbound.ts';
+import { acknowledgeButton, isApprovalButton, parseInbound } from '../channels/inbound.ts';
 import {
   getMessageById,
   getWebMessage,
@@ -85,6 +85,24 @@ export async function handleProcessMessage(job: Job): Promise<unknown> {
   if (!event) return IGNORED;
   const msg = parseInbound(event.source, event.payload);
   if (!msg) return IGNORED;
+  return processInbound(msg, eventId);
+}
+
+/**
+ * system/approval-button: a tap on an approval's ✅ / ❌ button in a chat app. It runs no turn, so
+ * it does not wait for the user's lock (which inbound jobs take): the answer, and an approved app
+ * action with it, goes through while Tex is busy with another message. Anything that is not such a
+ * tap is never handled here (it would run a turn without the lock).
+ */
+export async function handleApprovalButton(job: Job): Promise<unknown> {
+  const { eventId } = job.data as { eventId: string };
+  const event = await getEvent(eventId);
+  const msg = event ? parseInbound(event.source, event.payload) : null;
+  if (!msg || !isApprovalButton(msg)) return IGNORED;
+  return processInbound(msg, eventId);
+}
+
+async function processInbound(msg: InboundMessage, eventId: string): Promise<unknown> {
   // Queued before its channel was switched off: no work, no reply (HLD 0.3).
   if (!isChannelEnabled(msg.channel)) return IGNORED;
 

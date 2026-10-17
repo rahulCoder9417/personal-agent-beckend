@@ -37,11 +37,21 @@ type Settings = {
   ownKeyProviders: string[];
   claudeModel: string | null;
   claudeEffort: string | null;
+  claudeCrew: Record<CrewMember, CrewChoice>;
   claudeChoices: {
     models: Array<{ id: string; label: string; group: string; efforts: string[]; note?: string }>;
     efforts: string[];
+    crewDefaults: Record<CrewMember, CrewChoice>;
   };
 };
+type CrewMember = 'byte' | 'patch' | 'scout';
+/** `crewDefaults` with a model picked for Tex: every member runs as Tex does. */
+const SAME_AS_TEX = {
+  byte: { model: null, effort: null },
+  patch: { model: null, effort: null },
+  scout: { model: null, effort: null },
+};
+type CrewChoice = { model: string | null; effort: string | null };
 
 const ALL = ['low', 'medium', 'high', 'xhigh', 'max'];
 const NO_XHIGH = ['low', 'medium', 'high', 'max'];
@@ -75,6 +85,12 @@ const CLAUDE_CHOICES = {
     { id: 'claude-haiku-4-5', label: 'Haiku 4.5', group: 'older', efforts: [] },
   ],
   efforts: ALL,
+  // What each crew member left on Default runs while Tex is on Default (null: the same as Tex).
+  crewDefaults: {
+    byte: { model: 'claude-opus-5-5', effort: 'medium' },
+    patch: { model: 'claude-opus-5-5', effort: 'medium' },
+    scout: { model: null, effort: null },
+  },
 };
 type Fake = ReturnType<typeof installFakeVm>;
 
@@ -186,6 +202,11 @@ describe('who runs and who pays (effectiveRuntime / aiAccess)', () => {
       ownKeyProviders: [],
       claudeModel: null,
       claudeEffort: null,
+      claudeCrew: {
+        byte: { model: null, effort: null },
+        patch: { model: null, effort: null },
+        scout: { model: null, effort: null },
+      },
       claudeChoices: CLAUDE_CHOICES,
     });
 
@@ -572,7 +593,8 @@ describe('Claude Code model and effort', () => {
       effectiveRuntime: 'hermes',
       claudeModel: 'claude-opus-5-5',
       claudeEffort: 'xhigh',
-      claudeChoices: CLAUDE_CHOICES,
+      // With a model picked for Tex, the crew's Default is the same as Tex.
+      claudeChoices: { ...CLAUDE_CHOICES, crewDefaults: SAME_AS_TEX },
     });
     expect(await settingsOf(u.token)).toMatchObject({
       claudeModel: 'claude-opus-5-5',
@@ -715,6 +737,195 @@ describe('Claude Code model and effort', () => {
     expect(await settingsOf(u.token)).toMatchObject({
       effectiveRuntime: 'claude_code',
       claudeModel: 'claude-fable-5-1',
+    });
+  });
+});
+
+describe('the crew’s own models and efforts (Claude Code)', () => {
+  const patch = (token: string, body: unknown) =>
+    call('/v1/agent/settings', { method: 'PATCH', token, body });
+  const metadataOf = (i = -1) =>
+    JSON.parse((fake.deliveries.at(i) as unknown as { metadataJson: string }).metadataJson) as {
+      claude?: { model?: string; effort?: string; crew?: Record<string, unknown> };
+    };
+  const onDefault = { model: null, effort: null };
+  const allDefault = { byte: onDefault, patch: onDefault, scout: onDefault };
+
+  it('GET: every member on Default, and what Default is for each (as the Bridge runs it)', async () => {
+    const u = await createUser();
+    const s = await settingsOf(u.token);
+    expect(s.claudeCrew).toEqual(allDefault);
+    expect(s.claudeChoices.crewDefaults).toEqual(CLAUDE_CHOICES.crewDefaults);
+    // Default for Byte and Patch is a model on the list.
+    const ids = s.claudeChoices.models.map((m) => m.id);
+    expect(ids).toContain(s.claudeChoices.crewDefaults.byte.model);
+    expect(ids).toContain(s.claudeChoices.crewDefaults.patch.model);
+  });
+
+  it('Default for Byte and Patch follows a model picked for Tex, and comes back with Tex’s Default', async () => {
+    const u = await createUser();
+    const picked = await expectContract<Settings>(
+      'updateAgentSettings',
+      await patch(u.token, { claudeModel: 'claude-haiku-5-5' }),
+      200,
+    );
+    expect(picked.claudeChoices.crewDefaults).toEqual(SAME_AS_TEX);
+    expect((await settingsOf(u.token)).claudeChoices.crewDefaults).toEqual(SAME_AS_TEX);
+    // Only an effort for Tex: Tex's model is still Default, so Byte and Patch keep Opus 5.5.
+    const back = await expectContract<Settings>(
+      'updateAgentSettings',
+      await patch(u.token, { claudeModel: null, claudeEffort: 'high' }),
+      200,
+    );
+    expect(back.claudeChoices.crewDefaults).toEqual(CLAUDE_CHOICES.crewDefaults);
+    // A member's own pick is still its own.
+    expect(back.claudeCrew).toEqual(allDefault);
+  });
+
+  it('PATCH sets one member at a time; only the fields sent change; null goes back to Default', async () => {
+    const u = await createUser();
+    const set = await expectContract<Settings>(
+      'updateAgentSettings',
+      await patch(u.token, {
+        claudeCrew: { patch: { model: 'claude-sonnet-5-5', effort: 'low' } },
+      }),
+      200,
+    );
+    // Tex's own choice is not touched, nor are the other members.
+    expect(set).toMatchObject({ claudeModel: null, claudeEffort: null });
+    expect(set.claudeCrew).toEqual({
+      ...allDefault,
+      patch: { model: 'claude-sonnet-5-5', effort: 'low' },
+    });
+
+    // Only the effort: the model stays. Another member: the first stays.
+    const next = await expectContract<Settings>(
+      'updateAgentSettings',
+      await patch(u.token, {
+        claudeModel: 'claude-opus-5-5',
+        claudeCrew: { patch: { effort: 'high' }, byte: { model: 'claude-haiku-5-5' } },
+      }),
+      200,
+    );
+    expect(next.claudeModel).toBe('claude-opus-5-5');
+    expect(next.claudeCrew).toEqual({
+      byte: { model: 'claude-haiku-5-5', effort: null },
+      patch: { model: 'claude-sonnet-5-5', effort: 'high' },
+      scout: onDefault,
+    });
+    expect((await settingsOf(u.token)).claudeCrew).toEqual(next.claudeCrew);
+
+    // Tex's choice leaves the crew's own picks as they are.
+    const tex = await expectContract<Settings>(
+      'updateAgentSettings',
+      await patch(u.token, { claudeModel: null, claudeEffort: 'max' }),
+      200,
+    );
+    expect(tex.claudeCrew).toEqual(next.claudeCrew);
+
+    // Back to Default.
+    const back = await expectContract<Settings>(
+      'updateAgentSettings',
+      await patch(u.token, {
+        claudeCrew: { patch: { model: null, effort: null }, byte: { model: null } },
+      }),
+      200,
+    );
+    expect(back.claudeCrew).toEqual(allDefault);
+    const [row] = await db().select().from(agentSettings).where(eq(agentSettings.userId, u.id));
+    expect(row?.claudeCrew).toBeNull();
+  });
+
+  it('a wrong model, effort or member → 400 invalid_request, nothing saved', async () => {
+    const u = await createUser();
+    await patch(u.token, { claudeCrew: { scout: { effort: 'high' } } });
+    for (const body of [
+      { claudeCrew: { byte: { model: 'claude-opus-4' } } },
+      { claudeCrew: { byte: { model: 'opus' } } },
+      { claudeCrew: { patch: { model: '' } } },
+      { claudeCrew: { patch: { effort: 'ultra' } } },
+      { claudeCrew: { tex: { model: 'claude-opus-5-5' } } },
+      { claudeCrew: { byte: { model: 'claude-opus-5-5', color: 'red' } } },
+      { claudeCrew: { byte: {} } },
+      { claudeCrew: {} },
+      { claudeCrew: { byte: 'claude-opus-5-5' } },
+    ]) {
+      const err = await expectContract<{ error: { code: string } }>(
+        'updateAgentSettings',
+        await patch(u.token, body),
+        400,
+      );
+      expect(err.error.code, JSON.stringify(body)).toBe('invalid_request');
+    }
+    expect((await settingsOf(u.token)).claudeCrew).toEqual({
+      ...allDefault,
+      scout: { model: null, effort: 'high' },
+    });
+  });
+
+  it('a Claude Code turn carries the members off Default under claude.crew; Hermes turns do not', async () => {
+    const u = await chatUser();
+    await connectClaude(u);
+    // Everyone on Default: no `crew` at all.
+    expect(await webTurn(u.id, 'first')).toBe('done');
+    expect(metadataOf().claude).toEqual({});
+
+    await patch(u.token, {
+      claudeCrew: {
+        patch: { model: 'claude-sonnet-5-5', effort: 'low' },
+        scout: { model: 'claude-haiku-5-5' },
+      },
+    });
+    expect(await webTurn(u.id, 'second')).toBe('done');
+    expect(metadataOf().claude).toEqual({
+      crew: {
+        patch: { model: 'claude-sonnet-5-5', effort: 'low' },
+        scout: { model: 'claude-haiku-5-5' },
+      },
+    });
+
+    // With Tex's own choice next to it.
+    await patch(u.token, {
+      claudeModel: 'claude-opus-5-5',
+      claudeCrew: { scout: { model: null } },
+    });
+    expect(await webTurn(u.id, 'third')).toBe('done');
+    expect(metadataOf().claude).toEqual({
+      model: 'claude-opus-5-5',
+      crew: { patch: { model: 'claude-sonnet-5-5', effort: 'low' } },
+    });
+
+    // Hermes runs: the choices are kept but not sent.
+    await patch(u.token, { runtime: 'hermes' });
+    expect(await webTurn(u.id, 'fourth')).toBe('done');
+    expect(metadataOf()).not.toHaveProperty('claude');
+    expect((await settingsOf(u.token)).claudeCrew.patch).toEqual({
+      model: 'claude-sonnet-5-5',
+      effort: 'low',
+    });
+  });
+
+  it('a stored value that is no longer on offer counts as Default', async () => {
+    const u = await chatUser();
+    await connectClaude(u);
+    await db()
+      .update(agentSettings)
+      .set({
+        claudeCrew: {
+          byte: { model: 'claude-retired-1', effort: 'medium' },
+          patch: { model: 'claude-opus-5-5', effort: 'extreme' },
+          ...({ tex: { model: 'claude-opus-5-5' } } as object),
+        },
+      })
+      .where(eq(agentSettings.userId, u.id));
+    expect((await settingsOf(u.token)).claudeCrew).toEqual({
+      byte: { model: null, effort: 'medium' },
+      patch: { model: 'claude-opus-5-5', effort: null },
+      scout: onDefault,
+    });
+    expect(await webTurn(u.id)).toBe('done');
+    expect(metadataOf().claude).toEqual({
+      crew: { byte: { effort: 'medium' }, patch: { model: 'claude-opus-5-5' } },
     });
   });
 });

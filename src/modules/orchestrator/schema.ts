@@ -59,6 +59,18 @@ export const approvals = pgTable(
 /** Claude Code's thinking effort levels (its `--effort` flag), lowest first. */
 export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 
+/** The crew members whose model and effort a user can choose on Claude Code (Tex has its own). */
+export const CLAUDE_CREW_MEMBERS = ['byte', 'patch', 'scout'] as const;
+
+/**
+ * What a user chose for the crew, as stored: only the members and fields they changed. A field
+ * left out is that member's Default. Read leniently (agent-settings.ts): a value that is no
+ * longer on offer counts as Default.
+ */
+export type StoredClaudeCrew = Partial<
+  Record<(typeof CLAUDE_CREW_MEMBERS)[number], { model?: string; effort?: string }>
+>;
+
 /**
  * Which agent runs for the user: Hermes (API key / platform credits) or Claude Code (the user's
  * own Claude plan). We only store WHEN a Claude plan was connected: never a credential or token.
@@ -77,10 +89,12 @@ export const agentSettings = pgTable('agent_settings', {
     .default('auto'),
   /** Set when the in-container Claude Code sign-in succeeded; null = not connected. */
   claudeConnectedAt: timestamp({ withTimezone: true }),
-  /** The Claude model Claude Code uses (an id from CLAUDE_MODELS); null = Claude Code's default. */
+  /** The Claude model Tex uses on Claude Code (an id from CLAUDE_MODELS); null = Default. */
   claudeModel: text(),
-  /** Claude Code's thinking effort; null = Claude Code's default. */
+  /** Tex's thinking effort on Claude Code; null = Default. */
   claudeEffort: text({ enum: CLAUDE_EFFORTS }),
+  /** Each crew member's model and effort on Claude Code; null or a member left out = Default. */
+  claudeCrew: jsonb().$type<StoredClaudeCrew>(),
   updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
 });
 

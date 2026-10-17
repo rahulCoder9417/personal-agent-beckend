@@ -11,6 +11,7 @@ import { audit } from '../admin/audit.ts';
 import { getActiveUser, type PlanId } from '../auth/users.ts';
 import { publish } from '../channels/stream.ts';
 import {
+  CLAUDE_CREW_MEMBERS,
   getAgentSettings,
   syncRuntimeAfterWake,
   updateAgentSettings,
@@ -213,14 +214,15 @@ export type Resettable = (typeof RESETTABLE)[number];
 
 const RESET_WORDS: Record<Resettable, string> = {
   engine: 'engine (back to Hermes)',
-  model: 'Claude model (back to Default)',
-  effort: 'thinking effort (back to Default)',
+  model: 'Claude models, Tex’s and the crew’s (back to Default)',
+  effort: 'thinking efforts, Tex’s and the crew’s (back to Default)',
   browser: 'browser switch (set again from the plan)',
 };
 
 /**
  * Puts the chosen settings back to their defaults with the orchestrator's own functions: the
- * engine to Hermes, Claude Code's model and effort to Default (Sonnet 5.5, quick), and Scout's
+ * engine to Hermes, Claude Code's model and effort to Default (Sonnet 5.5, quick) for Tex and for
+ * each crew member (Opus 5.5 at medium for Byte and Patch, Tex's for Scout), and Scout's
  * browser switch to what the plan and the deployment say. The settings change is logged as the
  * admin's; the reset itself is audited with the admin's id and the reason. If the browser switch
  * can't be sent, the rest is kept and the call answers 503.
@@ -228,10 +230,19 @@ const RESET_WORDS: Record<Resettable, string> = {
 export async function adminResetAgent(input: AdminAction & { what: Resettable[] }): Promise<void> {
   const user = await activeUser(input.userId);
   const what = RESETTABLE.filter((w) => input.what.includes(w));
+  // The crew's models and efforts go with Tex's: `model` puts every member's model back to
+  // Default, `effort` every member's effort.
+  const crewReset = {
+    ...(what.includes('model') ? { model: null } : {}),
+    ...(what.includes('effort') ? { effort: null } : {}),
+  };
   const patch = {
     ...(what.includes('engine') ? { runtime: 'hermes' as const } : {}),
     ...(what.includes('model') ? { claudeModel: null } : {}),
     ...(what.includes('effort') ? { claudeEffort: null } : {}),
+    ...(Object.keys(crewReset).length
+      ? { claudeCrew: Object.fromEntries(CLAUDE_CREW_MEMBERS.map((m) => [m, crewReset])) }
+      : {}),
   };
   if (Object.keys(patch).length) await updateAgentSettings(user.id, patch, 'admin');
   let browserFailed = false;

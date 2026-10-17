@@ -48,9 +48,41 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 17 October 2026: A model and a thinking effort for each of the crew (Tex, Byte, Patch, Scout)
+
+- **Where it is:** merged to main in the backend, the vm-manager and the web app on 17 October (evening); the server part goes out with the next deploy.
+- **Why:** you said reviews of pull requests take too long, and that Tex, Byte and Patch should each have their own model in Settings, because not every job needs a strong or a weak one. Until now there was one choice for Claude Code. A model picked for Tex also ran for Byte, Patch and Scout, so a deep model picked for chat made every review slow too, and there was no way to give a helper something else.
+- **What the user notices:**
+  - Settings, Agent & AI has a new part, **Crew**, under Engine. One row each: Tex (leads, talks to you), Byte (writes code), Patch (reviews code), Scout (researches and uses the browser). Each row has a model and a thinking effort. "Default" comes first and says what it runs: "Default (Sonnet 5.5, quick)" and "Default (Low)" for Tex as before; for Byte and Patch "Default (same as Tex)" when a model is picked for Tex, else "Default (Opus 5.5)" and "Default (Medium)"; "Default (same as Tex)" for Scout. One quiet line under the heading: "Faster models answer sooner; stronger ones are more careful on hard code." Each change is saved as it is made.
+  - Tex's model and effort are the same control as before, moved into this part.
+  - On Hermes the crew's rows give way to a note: on Hermes the crew shares one model, and each gets its own once Claude Code is the engine. Without a Claude plan the part says the same and links to connecting one. Hermes itself is unchanged.
+  - Nothing changes for anyone until they pick a model for a helper. "Default" means what it meant before: a helper runs on the model picked for Tex, and with Tex on "Default" too, Byte and Patch run on Opus 5.5 at medium and Scout on Tex's. (A first version decoupled Byte and Patch from Tex; you chose to keep the old meaning.)
+  - On a phone the two choices of each row go under the name, each with its caption. Checked at 375 px wide.
+- **Backend:**
+  - The agent settings have a new part for the crew: for Byte, Patch and Scout, a model (one from the same list as Tex's) and an effort, each "Default" until picked. Reading the settings gives every member's choice, and what "Default" is for each for this user right now (it follows whether a model is picked for Tex), so the web app's labels come from one place. That place matches what the Bridge does.
+  - Saving changes only the members and the fields sent. A model not on the list, an unknown effort, or anyone other than Byte, Patch and Scout is refused with "invalid request", and nothing is saved. A saved model later taken off the list counts as "Default".
+  - Every turn that runs on Claude Code tells the Bridge the crew's choices next to Tex's, leaving out every member on "Default". A turn on Hermes carries none of them.
+  - Support's "reset the model" and "reset the effort" put the crew's back to "Default" too, and the activity log says so.
+- **vm-manager (the Bridge, in the agent image):**
+  - The Bridge reads the crew's choices from the turn and puts each into that member's description, which Claude Code reads at the start of the turn (its model and, when picked or by default, its effort). For each member, in order: the user's pick for that member; then a crew model the server may set for all three (`BRIDGE_CLAUDE_CREW_MODEL`, not set today); then Tex's model at Tex's effort, when one is picked for Tex; then the member's default (Byte and Patch: Opus 5.5 at medium; Scout: Tex's model at Tex's effort). Model and effort are picked apart: Patch with only an effort picked runs on its default model at that effort.
+  - A member that is not one of the crew, or a value of the wrong shape, is left out with a warning, and that member keeps its default. Tex's own model and effort are handled as before.
+- **Cost and speed:** the Claude plan pays for Claude Code, so no credits change and no AI cost of ours changes. A quicker model or a lower effort picked for Patch makes reviews come back sooner; how much was not measured. The turn's message to the container grows by at most about 200 bytes.
+- **Contracts:** `openapi.yaml` changed: the agent settings answer has `claudeCrew` (each member's model and effort) and `claudeChoices.crewDefaults` (what "Default" is for each, for this user); the PATCH takes `claudeCrew`. The web app's copy is synced. `vm.proto` is unchanged: the crew's choices go in the turn's metadata, under `claude.crew`, next to Tex's `claude.model` and `claude.effort`.
+- **Database:** one new column on `agent_settings`, `claude_crew` (JSON, empty for everyone today), migration `0033_crew_models`. It only adds a column; nothing is copied or changed.
+- **How it was checked:**
+  - Backend: 6 new tests in `claude-plan.test.ts` (every member on "Default" and what "Default" is, matching the model list; "Default" for Byte and Patch following a model picked for Tex and coming back with Tex's "Default"; saving one member and one field at a time, Tex's choice leaving the crew alone, back to "Default" clearing the column; 9 refused bodies with nothing saved; a Claude Code turn carrying only the members off "Default", and a Hermes turn carrying none; stored values no longer on offer read as "Default"), and the admin reset tests now check the crew goes back with Tex. Lint and type check pass. `claude-plan`, `admin-agent` and `turn-latency`: 61 tests pass; `admin-users`, `crew` and `crew-jobs`: 32 pass. The whole suite was not run here; the main session runs it at merge.
+  - vm-manager: new Bridge tests for reading `claude.crew` (good and bad values, unknown members, nothing bad written to the log), for each member's model and effort in Claude Code's crew description in every order of precedence, for a turn that carries them (with the server crew model set too), and for "a model picked for Tex, Patch on Default: Patch runs Tex's model". The existing tests that a model picked for Tex runs for every member left on "Default" pass unchanged. All 286 Bridge tests pass (1 skipped, the real-browser test, as before). No Go code changed.
+  - Web app: lint, 1217 tests in 99 files, build and type check pass. The Crew part was drawn from the demo account at 900 px and 375 px wide and looked at.
+  - Not tried with the real Claude Code or a real plan. Two things are read in Claude Code's docs only: Scout with only an effort picked (its own effort on top of "same model as Tex"), and what happens when the plan refuses a model picked for one member.
+- **Still open:**
+  - Deploy: all three parts, in any order. The server's deploy script runs the new migration before it starts the api and the worker, and builds the new agent image; containers take it at their next wake. The web app goes out with a push to `main` (Vercel). Before the backend is deployed, the web app shows only Tex's row, as today. An old agent image ignores the crew's choices.
+  - The admin panel does not show the crew's choices yet; support's reset covers them.
+- **Docs updated:** `backend-report.md`: section 30 "The Claude model and the thinking effort" (who has which default, the steps, Byte and Patch keep their own while Tex is on "Default", an example), and one line each in section 20 (which model each one runs on), the admin reset table and its example, and the table of who owns which table. The vm-manager's `README.md`: the metadata table, "The crew" and "The chat default" under "Claude Code runtime", the crew's "Model" line and `BRIDGE_CLAUDE_CREW_MODEL`.
+- **Commits:** backend `b7b591e` (contract), `2f93db2` (settings, turn, admin reset, migration), `6f77d1e` (docs), `07970e7` ("Default" follows Tex, with this entry's update); vm-manager `cdd3a4a`, `0602512` ("Default" follows Tex); web app `4e8a826`, `440c094` (the same).
+
 ### 17 October 2026: Tex hands a web job to Scout at once
 
-- **Where it is:** on the branch `fix/web-straight-to-scout` in the vm-manager and in the backend, not merged or deployed yet.
+- **Where it is:** merged to main in the vm-manager and the backend, and live on the test server since 17 October (evening).
 - **Why:** in your web chat (17 October, 11:13 UTC) you wrote "Run curl -s https://youtube.com in your workspace." Tex answered that web fetching is Scout's domain and asked what you were trying to get from YouTube. You said it should have given it to Scout. Tex was right that the web is Scout's, but it explained that to you and asked back, when it should simply have handed the job over.
 - **What the user notices:** a request to fetch, curl, wget or open an address now goes to Scout straight away, with no explaining whose job it is and no question first. Tex then reports what Scout found in plain words, including when the page shows little because it needs JavaScript. Tex asks you something only when the job cannot start without the answer.
 - **Backend:** nothing, apart from this entry.
@@ -58,7 +90,7 @@ Each entry has a heading with the date and the name of the feature, then the par
 - **Cost and speed:** Tex's instructions grow by about 500 characters, in the part the prompt cache keeps. A fetch request skips one round of talk with you.
 - **Contracts:** none changed. **Database:** none.
 - **How it was checked:** a new test checks that Tex's rules hold the straight-away rule, that fetch, curl, wget and open-an-address count as web jobs, and that Tex asks only when it cannot start. The Bridge's tests all pass (284 run, 1 skipped as before). Not run on the test server yet.
-- **Still open:** merge, deploy, and try the same sentence in the web chat.
+- **Still open:** try the same sentence in the web chat.
 - **Docs updated:** none.
 - **Commits:** vm-manager c6fb9f9 on `fix/web-straight-to-scout`; backend: the commit with this entry on the same branch name.
 

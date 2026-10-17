@@ -814,11 +814,14 @@ async function deliverTurn(
     switch (ev.type) {
       case DeliverEventType.ACCEPTED:
         timer.mark('accepted');
-        if (input.inboundMessageId) await setMessageStatus(input.inboundMessageId, 'processing');
+        // The web app hears "busy" first, at once: it is a note in Redis, while the message's new
+        // state is a write to the database first (about 260 ms from the server). Before, "busy"
+        // waited for that write, and the two came the other way round.
         await publish(userId, 'agent.status', {
           state: 'busy',
           lastActiveAt: new Date().toISOString(),
         });
+        if (input.inboundMessageId) await setMessageStatus(input.inboundMessageId, 'processing');
         break;
       case DeliverEventType.WORKING:
         timer.mark('first_progress');

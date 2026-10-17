@@ -4790,7 +4790,13 @@ components:
             required: [id, status]
             properties:
               id: { type: string }
-              accountLabel: { type: [string, "null"], examples: [work@acme.com] }
+              accountLabel:
+                type: [string, "null"]
+                description: |
+                  Who the connection is signed in as: the email address (Gmail) or the username
+                  (GitHub). The app is asked once, when Tex first looks at the user's apps; null
+                  until then, and for apps that cannot say.
+                examples: [work@acme.com, rahulcoder9417]
               status: { type: string, enum: [active, expired, error] }
 
     McpServer:
@@ -5948,7 +5954,10 @@ components:
         app: { type: string, examples: [gmail] }
         appName: { type: string, examples: [Gmail] }
         status: { type: string, enum: [pending, active, expired, error] }
-        accountLabel: { type: [string, "null"], examples: [work@acme.com] }
+        accountLabel:
+          type: [string, "null"]
+          description: Who the connection is signed in as (an email or a GitHub username), when known
+          examples: [work@acme.com, rahulcoder9417]
         setupSource: { $ref: "#/components/schemas/AdminAppSetupSource" }
         connectable: { type: boolean, description: The app can be connected on this server today }
         connectedAt:

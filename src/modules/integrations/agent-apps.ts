@@ -6,9 +6,11 @@ import type { PlanId } from '../auth/users.ts';
 import {
   appsPageUrl,
   listConnections,
+  newestActiveConnection,
   refreshPendingConnections,
   type Connection,
 } from './apps.ts';
+import { withAccountLabels } from './account-identity.ts';
 import {
   actionChangesSomething,
   actionNeedsApproval,
@@ -32,6 +34,12 @@ export type AgentAppStatus =
 export interface AgentAppState {
   app: CatalogApp;
   status: AgentAppStatus;
+  /**
+   * Who the app is connected as, for `connected` and `not_on_plan`: the account label of the
+   * connection the actions run on (the newest active one), e.g. the GitHub username or the Gmail
+   * address. Null when the app does not say (account-identity.ts).
+   */
+  account?: string | null;
   /** What to tell the user, for every status but `connected`. */
   note?: string;
 }
@@ -68,12 +76,14 @@ export function agentAppStates(
     if (mine.length === 0) continue;
     const name = app.name;
     if (mine.some((r) => r.status === 'active')) {
+      const account = newestActiveConnection(mine, app.toolkit)?.accountLabel ?? null;
       states.push(
         appAllowedOnPlan(app, plan)
-          ? { app, status: 'connected' }
+          ? { app, status: 'connected', account }
           : {
               app,
               status: 'not_on_plan',
+              account,
               note:
                 `${name} is connected, but it is not on your user's ${planName(plan)} plan, so its ` +
                 'actions cannot run. Tell the user it comes with a paid plan.',
@@ -120,13 +130,16 @@ export function agentAppStates(
   return states;
 }
 
-/** The user's app states, after asking Composio about connections that are still pending. */
+/**
+ * The user's app states, after asking Composio about connections that are still pending, and
+ * the apps who an active connection is signed in as when that is not known yet (withAccountLabels).
+ */
 export async function currentAgentAppStates(
   userId: string,
   plan: PlanId,
   rows?: Connection[],
 ): Promise<AgentAppState[]> {
-  return agentAppStates(await currentConnections(userId, rows), plan);
+  return agentAppStates(await withAccountLabels(await currentConnections(userId, rows)), plan);
 }
 
 /**
@@ -193,6 +206,11 @@ export interface ListedApp {
   /** How many actions the app has (matching the search words, when they are given). */
   actions?: number;
   note?: string;
+  /**
+   * Who the app is connected as (connected apps only): the user's username or email in it, e.g.
+   * their GitHub username, the owner of their own repositories. Null: the app does not say.
+   */
+  account?: string | null;
 }
 
 /** Words that narrow nothing in a search for an action. */
@@ -317,7 +335,12 @@ export async function appActionsFor(
   const apps: ListedApp[] = [];
   const actions: ListedAction[] = [];
   states.forEach((s, i) => {
-    const base = { app: s.app.slug, name: s.app.name, status: s.status };
+    const base = {
+      app: s.app.slug,
+      name: s.app.name,
+      status: s.status,
+      ...(s.account !== undefined ? { account: s.account } : {}),
+    };
     const list = lists[i];
     if (list === null || list === undefined) {
       apps.push({ ...base, note: s.note });

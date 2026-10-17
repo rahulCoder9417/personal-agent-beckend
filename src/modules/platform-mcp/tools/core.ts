@@ -102,7 +102,10 @@ defineTool({
 
 defineTool({
   name: 'get_profile',
-  description: "Your user's name, timezone, plan and connected apps.",
+  description:
+    "Your user's name, timezone, plan and connected apps. Each connected app has `account`: who your user is " +
+    'signed in as there (their GitHub username, the owner of their own repositories; their Gmail address). Use ' +
+    'it instead of asking your user. Null: the app does not say.',
   input: {},
   async run({ userId }) {
     // The user from the short-lived copy, and the other parts (connected apps) at the same time.

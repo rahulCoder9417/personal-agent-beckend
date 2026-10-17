@@ -165,6 +165,15 @@ export interface ComposioApi {
     slug: string,
     input: { userId: string; connectedAccountId?: string; arguments: Record<string, unknown> },
   ): Promise<{ successful: boolean; data: unknown; error: string | null }>;
+  /**
+   * Runs an app's own "who am I" action (the catalog's `identity`, e.g. GitHub's authenticated
+   * user) for one connected account. It only reads. The platform runs it, not the agent: it is
+   * neither charged nor logged as the agent's (account-identity.ts). Same call as `execute`.
+   */
+  whoAmI(
+    slug: string,
+    input: { userId: string; connectedAccountId: string; arguments: Record<string, unknown> },
+  ): Promise<{ successful: boolean; data: unknown; error: string | null }>;
   createTrigger(
     userId: string,
     triggerSlug: string,
@@ -435,6 +444,7 @@ const realApi: ComposioApi = {
       );
     return { successful: res.successful, data: res.data, error: res.error ?? null };
   },
+  whoAmI: (slug, input) => realApi.execute(slug, input),
   async createTrigger(userId, triggerSlug, connectedAccountId, triggerConfig) {
     const res = (await sdk().triggers.create(userId, triggerSlug, {
       ...(connectedAccountId ? { connectedAccountId } : {}),

@@ -644,6 +644,7 @@ export async function devUser(argv: string[]): Promise<string[]> {
         ...agent.apps.map(
           (a) =>
             `agent sees ${a.app}: ${a.status}` +
+            `${a.account ? ` as ${shown(a.account, 80)}` : ''}` +
             `${a.actions === undefined ? '' : `, ${a.actions} actions`}` +
             `${a.note ? ` (${a.note})` : ''}`,
         ),

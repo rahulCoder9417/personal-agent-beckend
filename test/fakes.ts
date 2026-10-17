@@ -577,6 +577,15 @@ export async function installFakeComposio() {
     executeFailure: null as string | Error | null,
     /** What execute returns as `data` for an action (default `{ ok: true }`). */
     executeData: new Map<string, unknown>(),
+    /**
+     * What an app's "who am I" action (whoAmI) answers as `data`, by connected account id. Not
+     * set: it succeeds and says nothing, so the connection keeps no account label.
+     */
+    identities: new Map<string, unknown>(),
+    /** whoAmI calls, in order. */
+    whoAmICalls: [] as Array<{ slug: string; userId: string; connectedAccountId: string }>,
+    /** The next whoAmI returns this failure, or throws it (used once). */
+    whoAmIFailure: null as string | Error | null,
     /** The next createTrigger throws this (used once). */
     triggerError: null as Error | null,
     /** The next listTriggers throws this (used once). */
@@ -774,6 +783,22 @@ export async function installFakeComposio() {
       executed.push({ slug, ...input });
       const data = state.executeData.has(slug) ? state.executeData.get(slug) : { ok: true };
       return { successful: true, data, error: null };
+    },
+    async whoAmI(slug, input) {
+      state.whoAmICalls.push({
+        slug,
+        userId: input.userId,
+        connectedAccountId: input.connectedAccountId,
+      });
+      const failure = state.whoAmIFailure;
+      state.whoAmIFailure = null;
+      if (failure instanceof Error) throw failure;
+      if (failure) return { successful: false, data: null, error: failure };
+      return {
+        successful: true,
+        data: state.identities.get(input.connectedAccountId) ?? {},
+        error: null,
+      };
     },
     async createTrigger(userId, slug, connectedAccountId, config) {
       const err = state.triggerError;

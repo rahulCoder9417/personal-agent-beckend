@@ -319,7 +319,9 @@ describe('list_app_actions and get_profile: a connection that is not ready', () 
       { app: 'gmail', status: 'active' },
     ]);
     const res2 = (await b.mcp('list_app_actions')).json as Listing;
-    expect(res2.apps).toEqual([{ app: 'gmail', name: 'Gmail', status: 'connected', actions: 2 }]);
+    expect(res2.apps).toEqual([
+      { app: 'gmail', name: 'Gmail', status: 'connected', account: null, actions: 2 },
+    ]);
     const profile = (await b.mcp('get_profile')).json as { apps_not_ready: unknown[] };
     expect(profile.apps_not_ready).toEqual([]);
   });
@@ -339,6 +341,7 @@ describe('list_app_actions and get_profile: a connection that is not ready', () 
       app: 'linear',
       name: 'Linear',
       status: 'not_on_plan',
+      account: null,
       note: expect.stringMatching(/^Linear is connected, but it is not on your user's Free plan/),
     });
   });
@@ -467,7 +470,8 @@ describe('dev-user: apps, to check a user on the server', () => {
     expect(out).toContain('setup github ac_github (COMPOSIO_AUTH_CONFIGS)');
     expect(text).toMatch(/setup googlecalendar ac_made_googlecalendar_\d+ \(made by the server\)/);
     expect(out).toContain('composio also has ca_stray (gmail, ACTIVE) with no connection here');
-    expect(out).toContain('agent sees github: connected, 2 actions');
+    // Who the app is connected as, as Tex sees it.
+    expect(out).toContain('agent sees github: connected as me@example.com, 2 actions');
     expect(text).toMatch(
       /agent sees googlecalendar: connecting \(Google Calendar is still connecting/,
     );

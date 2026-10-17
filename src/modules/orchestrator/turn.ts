@@ -295,15 +295,17 @@ export async function currentTurn(userId: string, sessionKey: string): Promise<C
  */
 export async function turnInProgress(
   userId: string,
-): Promise<{ sessionKey: string; kind: TurnKind | null } | null> {
+): Promise<{ sessionKey: string; kind: TurnKind | null; turnId: string | null } | null> {
   try {
     const raw = await redis().get(turnConversationKey(userId));
     if (!raw) return null;
-    const record = JSON.parse(raw) as { sessionKey?: unknown; kind?: unknown };
+    const record = JSON.parse(raw) as { sessionKey?: unknown; kind?: unknown; turnId?: unknown };
     if (typeof record.sessionKey !== 'string' || !record.sessionKey) return null;
     return {
       sessionKey: record.sessionKey,
       kind: typeof record.kind === 'string' ? (record.kind as TurnKind) : null,
+      // The turn's delivery id: the same when its job runs again.
+      turnId: typeof record.turnId === 'string' && record.turnId ? record.turnId : null,
     };
   } catch (err) {
     logger().warn({ userId, err: String(err) }, 'turn in progress not readable');

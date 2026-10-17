@@ -6,6 +6,7 @@ import { getActiveUser, scrubDeletedUser } from '../auth/users.ts';
 import { deleteUserChannelData } from '../channels/messages.ts';
 import { deleteAgentSettings } from './agent-settings.ts';
 import { deleteUserApprovals } from './approvals.ts';
+import { deleteUserSkipRules } from './skip-rules.ts';
 import { deleteAllMemories } from './memory.ts';
 import { deleteSandboxRecord, ensureSandbox } from './sandbox.ts';
 import { deleteTurnTimings } from './timings.ts';
@@ -56,6 +57,8 @@ export async function handleDeleteUser(job: Job): Promise<unknown> {
   await deleteTurnTimings(userId);
   // Approvals, with the exact inputs each one was asked for (an email's recipient, say).
   await deleteUserApprovals(userId);
+  // The user's skip rules, with the addresses they hold.
+  await deleteUserSkipRules(userId);
   await deleteUserLinks(userId);
   // Messages, files, conversations and each chat's counter.
   await deleteUserChannelData(userId);

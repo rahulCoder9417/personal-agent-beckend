@@ -1265,7 +1265,7 @@ An approval is the user's yes before the agent does something that other people 
 | Putting an event in a calendar | CREATE_EVENT (other people may be invited) |
 | GitHub comments and reviews | COMMENT or REVIEW, in a GitHub action that writes |
 
-The platform decides by these words in the action's name. There are two exceptions. Pull-request review is one (section 19). A crew job whose brief says "post it on the pull request" is the other (section 20).
+The platform decides by these words in the action's name. There are three exceptions. Pull-request review is one (section 19). A crew job whose brief says "post it on the pull request" is another (section 20). The third is the user's own skip rule for that action ("Don't ask again", below).
 
 ### The life of an approval
 
@@ -1298,6 +1298,49 @@ The platform decides by these words in the action's name. There are two exceptio
 **When it fails.** If the app refuses it, or the user is out of credits, or the app is not connected, nothing was done and nothing is charged. The approval is handed back unused. Tex is told in the same turn what went wrong, that it may try once more with the same approval, or ask again with corrected inputs (next parts). The job does not try again by itself.
 
 **When the result does not come back.** If the worker stops in the middle of the action, nobody knows whether the app did it. The approval stays used, so it is never run again. After 5 minutes it counts as ended without a result, and Tex is told it was started, not to run it again, and to have the user check in the app.
+
+### Skip rules: "Don't ask again" (since 17 October)
+
+**Why.** The founder's decision, 17 October: "a section where it is asked if it wanna be skipped, like skip approval, but have a log in the approvals with auto approved". Approving the same email to yourself every morning is only noise. So risky actions ask, unless the user made a skip rule for that action; deleting and paying always ask; every skip is logged as auto-approved.
+
+**What the user makes.** On the card of a risky action in an app that may be skipped, the web app shows a quiet link, "Don't ask again for this…". It opens a small choice:
+
+- **Only to these** (the default): the request's own recipients. For an email that is its to, cc, bcc and extra recipients; for Slack or Teams the channel or chat; for a calendar event its guests; for a GitHub action the repository, as owner/repo ("Only in acme/web").
+- **Anyone**: wherever it goes, with a one-line warning under it.
+- An action that names nobody (closing an issue, moving an event) gets "This action" instead. It covers the action only while a request names no recipients; one that does name some still asks.
+- A post that everyone who sees it reads (a LinkedIn post) gets only "Anyone".
+
+Picking one saves the rule and approves this card, in that order. A rule is for one action of one app (Send email in Gmail), never for a whole app. A user has at most 50 rules, and a list at most 50 recipients. A second "Only to these" for the same action adds the new recipients to the list already there.
+
+**Who can make one.** Only the user, in the web app, signed in as themselves. The agent has no tool for rules: it can't make, widen, list or remove one, and the rules API refuses a container's token. Inputs the agent sends that look like a rule ("skip_approval", "scope: anyone") do nothing. A rule can only be made from one of the user's own approvals, for that approval's app and action, with a choice its card offered.
+
+**What is never skipped.** Whatever a rule says, also one written straight into the database. The server checks this every time an action is about to run, not only when the rule is made:
+
+- deleting: DELETE, REMOVE, TRASH and ARCHIVE (also DESTROY, PURGE, ERASE and WIPE, should an action be named so);
+- paying: PAY, PAYMENT, TRANSFER, CHARGE, REFUND, PURCHASE and BUY;
+- merging a pull request (MERGE). A merge writes to the target branch, usually the default one, which may put a change live; it can't simply be taken back, and our git gateway never lets the agent write to a default branch by itself either;
+- a GitHub review that approves or asks for changes. Only a plain comment review may be skipped: an approval can start an automatic merge;
+- Tex's own kinds: commands and file changes in its container, pushes, crew jobs and running a crew job again.
+
+The card shows no "Don't ask again" for these, and the API answers `not_skippable`.
+
+**How a matching action runs.**
+
+1. Tex calls `run_app_action` (or `request_approval`) for a risky action, with no approval.
+2. The api looks for the user's rule for that exact action whose choice covers this request. For "Only to these", every recipient of the request must be on the list, and a request that names nobody does not match. One cc to someone else, and it asks as before, with a card.
+3. With a match, the api saves an approval at once with the status `auto_approved`: already marked used and running, with `decided_via` set to "rule:" and the rule's id, and a copy of the rule as it was then (it may be removed later).
+4. It runs the action exactly as an approved one runs (the part above): the user's connection, nothing at zero credits, 1 credit with the approval's id as the charge's key, and the same short result. The result is kept on the approval (`run_result`).
+5. Tex gets the result in the same call, with a line saying it ran without asking because of the user's rule, that it is kept in their Approvals as auto-approved, and not to run it again. Tex tells the user in one short sentence what was done. No card, and no "Waiting for your OK".
+6. The web app gets the approval live. The Approvals page lists it under "Auto-approved", with when it ran, which rule and the result.
+7. The activity log says "Ran … without asking (your skip rule)", charged 1 credit. Making a rule and removing one are logged too: "Don't ask again: Gmail: send email only to rahul@example.com" and "Asks again from now on: …".
+
+**Never twice.** The approval carries a fingerprint of the turn, the action and its exact inputs. The same call again in the same turn (Tex calling twice, two calls at the same moment, the turn's job run again) finds the first and gets its result, charged nothing more. A new message is a new turn, so the same email asked for again then is sent again. If the app refused it, nothing was done, so the same call may try once more.
+
+**Automations.** An automation set to "Ask you first: anything that changes something" stays strict: its run never uses a rule. With the usual setting a rule applies, also to a step whose action is risky. The approval is then tied to that step of that run.
+
+**Removing a rule.** On the Approvals page, "Remove" beside the rule. That action asks again from the next request on. What the rule let through stays in the log.
+
+**Where it is kept.** The table `skip_rules` (the orchestrator module's, migration 0035) and a new column `auto_key` on `approvals` (the fingerprint). The API: `GET` and `POST /v1/skip-rules` and `DELETE /v1/skip-rules/{id}`. An approval in the API now also has `skip` (what its card may offer; empty for one that always asks), `skipRule` (the rule, on an auto-approved one) and `run` (how a run by the platform went, after a yes or by a rule).
 
 ### The same question on Telegram too
 
@@ -1380,7 +1423,10 @@ The agent must name an earlier request of the same user for the same action; any
 - **The app refuses the approved action.** Nothing happens and nothing is charged. The agent is told in the message about the yes. It may try once more, or ask again with the corrected inputs; the earlier request is then replaced (above).
 - **The user approves while Tex is busy.** The action runs at once anyway (on the web and with a Telegram or WhatsApp button). Tex says how it went once its turn in progress is over. A typed "yes" waits for that turn, as any message does.
 - **The worker stops in the middle of an approved action.** It is never run again, and Tex tells the user to check in the app (above).
-- **The account is deleted.** Every approval of the user goes, in any state, with the inputs saved with it. A job that still holds one of their ids finds nothing and does nothing.
+- **A skip rule covers some recipients but not all.** It asks, with a card, as if there were no rule. The card offers to add the others to the list, or "Anyone".
+- **The user removes a rule while Tex is working.** A request after that asks. One already running finishes, and stays in the log as auto-approved.
+- **A rule for a deleting or paying action ends up in the database anyway** (by hand, or an old bug). It is ignored: the action asks.
+- **The account is deleted.** Every approval of the user goes, in any state, with the inputs saved with it, and every skip rule with the addresses it holds. A job that still holds one of their ids finds nothing and does nothing.
 
 ### Approvals for the agent's own actions
 

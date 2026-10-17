@@ -1,4 +1,13 @@
-import { index, integer, jsonb, pgTable, primaryKey, text, timestamp } from 'drizzle-orm/pg-core';
+import {
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
 
 /**
  * Maps a container's Platform MCP token (sha256 hex, from CreateSandbox) to its user.
@@ -34,8 +43,12 @@ export const approvals = pgTable(
     /**
      * `replaced`: the agent asked again for the same action with corrected arguments, naming this
      * one (request_approval's replaces_approval_id). It can no longer be answered or run.
+     * `auto_approved`: nobody was asked. The user's skip rule covered it (`decidedVia` is
+     * `rule:<id>`), so it ran at once; `runResult` says how it went (skip-rules.ts).
      */
-    status: text({ enum: ['pending', 'approved', 'rejected', 'expired', 'replaced'] })
+    status: text({
+      enum: ['pending', 'approved', 'rejected', 'expired', 'replaced', 'auto_approved'],
+    })
       .notNull()
       .default('pending'),
     sessionKey: text().notNull(),
@@ -64,9 +77,50 @@ export const approvals = pgTable(
      */
     automationRunId: text(),
     automationStepId: text(),
+    /**
+     * `auto_approved` only: the turn, the action and its exact inputs, as one fingerprint. The same
+     * action with the same inputs in the same turn (a call made again, a turn run again) finds this
+     * row and its result instead of running a second time.
+     */
+    autoKey: text(),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index().on(t.userId, t.id), index().on(t.status, t.expiresAt)],
+  (t) => [
+    index().on(t.userId, t.id),
+    index().on(t.status, t.expiresAt),
+    uniqueIndex().on(t.userId, t.autoKey),
+  ],
+);
+
+/** What a skip rule covers, for its one action (skip-rules.ts). */
+export const SKIP_SCOPES = ['listed', 'anyone', 'action'] as const;
+export type SkipScope = (typeof SKIP_SCOPES)[number];
+
+/**
+ * The user's "don't ask again" for one risky app action (the founder's decision, 17 October): while
+ * it holds, that action runs without a card and is kept in Approvals as `auto_approved`. Only the
+ * user makes or removes one, in the web app with their session; the agent has no tool for them.
+ * Deleting, paying, merging and the platform's own kinds always ask, whatever is stored here.
+ */
+export const skipRules = pgTable(
+  'skip_rules',
+  {
+    id: text().primaryKey(),
+    userId: text().notNull(),
+    /** The app's slug (gmail). */
+    app: text().notNull(),
+    /** The Composio action slug, upper case (GMAIL_SEND_EMAIL). */
+    action: text().notNull(),
+    scope: text({ enum: SKIP_SCOPES }).notNull(),
+    /** `listed`: who or where it may go, lower case. Empty for the other scopes. */
+    recipients: jsonb().$type<string[]>().notNull().default([]),
+    /** How it was made: `web` (the approval card, with the user's session). */
+    createdVia: text().notNull(),
+    /** The approval the card offered it on, only as a pointer: the rule holds all it needs itself. */
+    approvalId: text(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex().on(t.userId, t.action, t.scope)],
 );
 
 /** Claude Code's thinking effort levels (its `--effort` flag), lowest first. */

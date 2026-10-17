@@ -48,6 +48,39 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 17 October 2026: A model and a thinking effort for each of the crew (Tex, Byte, Patch, Scout)
+
+- **Where it is:** on the branch `feat/crew-models` in the backend, the vm-manager and the web app, not merged or deployed yet.
+- **Why:** you said reviews of pull requests take too long, and that Tex, Byte and Patch should each have their own model in Settings, because not every job needs a strong or a weak one. Until now there was one choice for Claude Code. A model picked for Tex also ran for Byte, Patch and Scout, so a deep model picked for chat made every review slow too, and a quick model for chat made code work careless.
+- **What the user notices:**
+  - Settings, Agent & AI has a new part, **Crew**, under Engine. One row each: Tex (leads, talks to you), Byte (writes code), Patch (reviews code), Scout (researches and uses the browser). Each row has a model and a thinking effort. "Default" comes first and says what it runs: "Default (Sonnet 5.5, quick)" and "Default (Low)" for Tex as before, "Default (Opus 5.5)" and "Default (Medium)" for Byte and Patch, "Default (same as Tex)" for Scout. One quiet line under the heading: "Faster models answer sooner; stronger ones are more careful on hard code." Each change is saved as it is made.
+  - Tex's model and effort are the same control as before, moved into this part.
+  - On Hermes the crew's rows give way to a note: on Hermes the crew shares one model, and each gets its own once Claude Code is the engine. Without a Claude plan the part says the same and links to connecting one. Hermes itself is unchanged.
+  - Nothing changes for anyone who leaves the crew on "Default", with one exception: someone who picked a model for Tex. Before, Byte and Patch ran on that model too; now they stay on Opus 5.5 at medium unless a model is picked for them. Only a pick for a member changes that member.
+  - On a phone the two choices of each row go under the name, each with its caption. Checked at 375 px wide.
+- **Backend:**
+  - The agent settings have a new part for the crew: for Byte, Patch and Scout, a model (one from the same list as Tex's) and an effort, each "Default" until picked. Reading the settings gives every member's choice, and what "Default" is for each, so the web app's labels come from one place. That place matches the Bridge's own defaults.
+  - Saving changes only the members and the fields sent. A model not on the list, an unknown effort, or anyone other than Byte, Patch and Scout is refused with "invalid request", and nothing is saved. A saved model later taken off the list counts as "Default".
+  - Every turn that runs on Claude Code tells the Bridge the crew's choices next to Tex's, leaving out every member on "Default". A turn on Hermes carries none of them.
+  - Support's "reset the model" and "reset the effort" put the crew's back to "Default" too, and the activity log says so.
+- **vm-manager (the Bridge, in the agent image):**
+  - The Bridge reads the crew's choices from the turn and puts each into that member's description, which Claude Code reads at the start of the turn (its model and, when picked or by default, its effort). For each member, in order: the user's pick for that member; then a crew model the server may set for all three (`BRIDGE_CLAUDE_CREW_MODEL`, not set today); then the member's default (Byte and Patch: Opus 5.5 at medium; Scout: Tex's model at Tex's effort). Model and effort are picked apart.
+  - Byte's and Patch's defaults no longer depend on Tex's model (the change for people who picked a model for Tex, above).
+  - A member that is not one of the crew, or a value of the wrong shape, is left out with a warning, and that member keeps its default. Tex's own model and effort are handled as before.
+- **Cost and speed:** the Claude plan pays for Claude Code, so no credits change and no AI cost of ours changes. A quicker model or a lower effort picked for Patch makes reviews come back sooner; how much was not measured. The turn's message to the container grows by at most about 200 bytes.
+- **Contracts:** `openapi.yaml` changed: the agent settings answer has `claudeCrew` (each member's model and effort) and `claudeChoices.crewDefaults` (what "Default" is for each); the PATCH takes `claudeCrew`. The web app's copy is synced. `vm.proto` is unchanged: the crew's choices go in the turn's metadata, under `claude.crew`, next to Tex's `claude.model` and `claude.effort`.
+- **Database:** one new column on `agent_settings`, `claude_crew` (JSON, empty for everyone today), migration `0033_crew_models`. It only adds a column; nothing is copied or changed.
+- **How it was checked:**
+  - Backend: 5 new tests in `claude-plan.test.ts` (every member on "Default" and what "Default" is, matching the model list; saving one member and one field at a time, Tex's choice leaving the crew alone, back to "Default" clearing the column; 9 refused bodies with nothing saved; a Claude Code turn carrying only the members off "Default", and a Hermes turn carrying none; stored values no longer on offer read as "Default"), and the admin reset tests now check the crew goes back with Tex. Lint and type check pass. `claude-plan`, `admin-agent` and `turn-latency`: 60 tests pass; `admin-users`, `crew` and `crew-jobs`: 32 pass. The whole suite was not run here; the main session runs it at merge.
+  - vm-manager: new Bridge tests for reading `claude.crew` (good and bad values, unknown members, nothing bad written to the log), for each member's model and effort in Claude Code's crew description in every order of precedence, and for a turn that carries them (with the server crew model set too). The tests that said a model picked for Tex runs for the whole crew now say Byte and Patch keep their own. All 285 Bridge tests pass (1 skipped, the real-browser test, as before). No Go code changed.
+  - Web app: lint, 1217 tests in 99 files, build and type check pass. The Crew part was drawn from the demo account at 900 px and 375 px wide and looked at.
+  - Not tried with the real Claude Code or a real plan. Two things are read in Claude Code's docs only: Scout with only an effort picked (its own effort on top of "same model as Tex"), and what happens when the plan refuses a model picked for one member.
+- **Still open:**
+  - Deploy: all three parts, in any order. The server's deploy script runs the new migration before it starts the api and the worker, and builds the new agent image; containers take it at their next wake. The web app goes out with a push to `main` (Vercel). Before the backend is deployed, the web app shows only Tex's row, as today. An old agent image ignores the crew's choices.
+  - The admin panel does not show the crew's choices yet; support's reset covers them.
+- **Docs updated:** `backend-report.md`: section 30 "The Claude model and the thinking effort" (who has which default, the steps, Byte and Patch keep their own, an example), and one line each in section 20 (which model each one runs on), the admin reset table and its example, and the table of who owns which table. The vm-manager's `README.md`: the metadata table, "The crew" and "The chat default" under "Claude Code runtime", the crew's "Model" line and `BRIDGE_CLAUDE_CREW_MODEL`.
+- **Commits:** backend `b7b591e` (contract), `2f93db2` (settings, turn, admin reset, migration), and the docs commit with this entry; vm-manager `cdd3a4a`; web app `4e8a826`.
+
 ### 17 October 2026: Code review that reads before it judges (files as text, Patch never posts, plain command cards)
 
 - **Where it is:** on the branch `fix/review-no-guessing` in the backend and in the vm-manager, not merged or deployed yet.

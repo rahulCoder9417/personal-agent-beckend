@@ -2728,12 +2728,16 @@ Where the sign-in lives: only in the user's own volume, the container's disk tha
 
 ### The Claude model and the thinking effort
 
-With a Claude plan, the user also picks which Claude model Claude Code uses, and how hard it thinks. How hard it thinks is called the effort: a higher effort thinks longer before it answers.
+With a Claude plan, the user also picks which Claude model Claude Code uses, and how hard it thinks. How hard it thinks is called the effort: a higher effort thinks longer before it answers. Since 17 October the user picks them for each of the four on their own: Tex, and each of the crew (Byte, Patch and Scout). Not every job needs the same model: a quick model answers chat sooner, a strong one is more careful on hard code.
 
-| Setting | Choices | "Default" means |
-|---|---|---|
-| Model | Every Claude model Claude Code can use: see the list below | Sonnet 5.5, for Tex. The web app says "Default (Sonnet 5.5, quick)" |
-| Thinking effort | low, medium, high, xhigh, max | Low, while the model is on Default too. With a model the user picked: Claude Code's own for that model |
+| Who | Model on "Default" | Effort on "Default" | What the web app says |
+|---|---|---|---|
+| Tex (leads, talks to the user) | Sonnet 5.5 | Low, while the model is on Default too. With a model the user picked: Claude Code's own for that model | "Default (Sonnet 5.5, quick)", "Default (Low)" |
+| Byte (writes code) | Opus 5.5 | Medium | "Default (Opus 5.5)", "Default (Medium)" |
+| Patch (reviews code) | Opus 5.5 | Medium | "Default (Opus 5.5)", "Default (Medium)" |
+| Scout (researches, uses the browser) | Tex's model | Tex's effort | "Default (same as Tex)" |
+
+The choices for each are every Claude model Claude Code can use (the list below) and the five effort levels: low, medium, high, xhigh, max.
 
 The model list, in the order the web app shows it. The current models come first, then the older models Claude still offers. In each part the newest version comes first.
 
@@ -2744,13 +2748,13 @@ The model list, in the order the web app shows it. The current models come first
 | Older | Opus 4.6, Sonnet 4.6 | low, medium, high, max (no xhigh) |
 | Older | Opus 4.5, Haiku 4.5 | none: the effort does not apply to them |
 
-1. The user picks them in the web app's AI settings, in the Claude plan's part. They can do this whatever engine runs now.
-2. The backend saves them with the other agent settings. A model that is not in the list is refused.
-3. Every turn that runs on Claude Code carries both to the container. A choice left at "Default" is left out. A turn on Hermes carries neither.
-4. The Bridge starts Claude Code with that model and effort for the turn. With the model left on "Default" it starts Tex on Sonnet 5.5 (`--model claude-sonnet-5-5`) at low effort (`--effort low`), or at the effort the user picked.
+1. The user picks them in the web app: Settings, Agent & AI, the Crew part. There is one row each for Tex, Byte, Patch and Scout, with a model and an effort, "Default" first. Tex's can be picked whatever engine runs now, as before. The crew's rows show while Claude Code runs; on Hermes a short note says the crew shares one model there.
+2. The backend saves them with the other agent settings: Tex's in two columns, the crew's in one more (only the members and the fields the user moved off "Default"). A model that is not in the list, or a crew member that is not one of the three, is refused. The backend also tells the web app what "Default" is for each crew member, so the labels above come from one place, the same place that matches the Bridge.
+3. Every turn that runs on Claude Code carries them to the container: Tex's model and effort, and the crew's under their names. A choice left at "Default" is left out. A turn on Hermes carries none of them.
+4. The Bridge starts Claude Code with Tex's model and effort for the turn. With the model left on "Default" it starts Tex on Sonnet 5.5 (`--model claude-sonnet-5-5`) at low effort (`--effort low`), or at the effort the user picked. Each crew member's model and effort go into that member's own description, which Claude Code reads at the start of the turn. For each member, in order: the user's pick for that member; then a crew model the server may set for all three (`BRIDGE_CLAUDE_CREW_MODEL`, not set today); then the member's "Default" above. The model and the effort are picked apart: a member with only an effort picked keeps its default model, and the other way round.
 
 - **Why "Default" is Sonnet 5.5 at low effort.** Left to itself, Claude Code picks Opus 5.5 at medium effort on a Max plan. Once it thought for 14 seconds before its first word in chat. Sonnet 5.5 at low effort answers chat quickly. Opus 5.5 at medium is what Claude Code picked with no model given (checked with Claude Code 2.1.301 against a stand-in for Anthropic's API).
-- **Byte and Patch keep their own.** They write and review code, where thinking pays. With the model on "Default" they run on Opus 5.5 at medium effort: what they ran on before, when Claude Code picked for itself. Scout reads the web and runs on Tex's model. With a model the user picked, all three run on it, as before.
+- **Byte and Patch keep their own.** They write and review code, where thinking pays. On "Default" they run on Opus 5.5 at medium effort: what they ran on before, when Claude Code picked for itself. Since 17 October this holds whatever model Tex runs on. Before, a model picked for Tex ran for the whole crew, so a slow, deep model picked for chat also made every review slow. Scout reads the web and runs on Tex's model unless the user picks one for it.
 - **The default is ours.** If Anthropic refused it, that is our fault, not the user's choice: the turn is refunded (section 25).
 
 - **What the list says about each model.** Its group (current or older), the effort levels it takes, and for some a short note. The web app uses these to group the models, to offer only the levels the chosen model takes, and to show the note.
@@ -2762,6 +2766,8 @@ The model list, in the order the web app shows it. The current models come first
 - **Where the list comes from.** Claude has no way to ask which models a plan may use, so the list is kept by hand, in one place in the backend. It was checked on 13 October 2026 against Anthropic's model pages and the model table inside Claude Code 2.1.296, the version the container image installs: each model name and each effort level is one it takes. Haiku 5.5 needs Claude Code 2.1.293 or later. When Anthropic adds or retires a model, the list is changed by hand, and the container image's Claude Code version is raised if the new model needs it.
 
 Example: Rahul picks Opus 5.5 and the effort xhigh. His next Telegram message runs on Claude Code with Opus 5.5, thinking at xhigh. He switches to Hermes for a day, and the choice waits for his return.
+
+Example: reviews of his pull requests take too long, so Rahul picks Sonnet 5.5 at low effort for Patch and leaves the rest on "Default". Tex still chats on Sonnet 5.5, Byte still writes code on Opus 5.5 at medium, and Patch now reviews on Sonnet 5.5 at low effort. If the plan does not allow the model picked for Patch, Claude Code refuses Patch's part of the turn; that case has not been tried with a real plan yet.
 
 ### Textcrew AI
 
@@ -2940,8 +2946,8 @@ The vm-manager does not report when a container woke, so there is no "awake sinc
 | Setting | Goes back to |
 |---|---|
 | The engine | Hermes. A connected Claude plan stays connected, and the user can choose Claude Code again |
-| Claude Code's model | Default: Claude Code's own choice |
-| The thinking effort | Default: Claude Code's own choice |
+| Claude Code's model | Default, for Tex and for each of the crew (section 30) |
+| The thinking effort | Default, for Tex and for each of the crew (section 30) |
 | Scout's browser switch | What the user's plan and the server say, as after a change of plan |
 
 The same functions as the user's own settings make the change, so the vm-manager is told in the same way. If the browser switch cannot be sent, the other settings are still reset, and the admin is told to try again.
@@ -2950,7 +2956,7 @@ The same functions as the user's own settings make the change, so the vm-manager
 
 **Cancelling a crew job.** Only one that waits (section 20). It is marked failed with "Cancelled by Textcrew support." and never runs. The user is told in the job's chat. A job that already runs cannot be stopped on its own: the Bridge has no way to stop one job. The admin is refused, and the job ends by itself within 15 minutes. A stop by force ends it now, as a failure on our side.
 
-**Example.** Rahul writes to support that his agent "keeps using the wrong model". The admin opens his agent: Claude Code, Sonnet 4.6, effort max, the container busy. The admin resets the model and the effort with the reason "user report: wrong model". Rahul's next turn runs on Claude Code's own choice. His activity log shows "Textcrew support reset the agent's Claude model (back to Default), thinking effort (back to Default)".
+**Example.** Rahul writes to support that his agent "keeps using the wrong model". The admin opens his agent: Claude Code, Sonnet 4.6, effort max, the container busy. The admin resets the model and the effort with the reason "user report: wrong model". Rahul's next turn runs on Claude Code's own choice. His activity log shows "Textcrew support reset the agent's Claude models, Tex’s and the crew’s (back to Default), thinking efforts, Tex’s and the crew’s (back to Default)".
 
 ### Jobs
 
@@ -3395,7 +3401,7 @@ The crew is defined once, inside the Bridge, and given to both engines. Tex is t
 
 On Claude Code the tool lists are locks: a tool that is not on a member's list cannot be called. Tex's own calls to a web tool are refused by a small check that runs before each call. On Hermes the tool lists are only instructions, because Hermes cannot give each member its own tools.
 
-Which model each one runs on, on Claude Code: the user's pick, for all four. With the model left on "Default", Tex and Scout run on Sonnet 5.5 at low effort, and Byte and Patch on Opus 5.5 at medium effort (section 30). On Hermes, Tex runs on the model LiteLLM gives `agent-default`, at the low effort for chat, and Byte, Patch and Scout on the one it gives `agent-crew`: the same model at a medium effort (section 30, since 16 October). Hermes has one setting for all its helpers, so Scout is in the crew's group there.
+Which model each one runs on, on Claude Code: the user's pick for that member, each on its own (since 17 October). Left on "Default", Tex runs on Sonnet 5.5 at low effort, Byte and Patch on Opus 5.5 at medium effort whatever Tex runs on, and Scout on Tex's model and effort (section 30). On Hermes, Tex runs on the model LiteLLM gives `agent-default`, at the low effort for chat, and Byte, Patch and Scout on the one it gives `agent-crew`: the same model at a medium effort (section 30, since 16 October). Hermes has one setting for all its helpers, so Scout is in the crew's group there.
 
 Example: the user asks to fix a typo in a repository and have it checked. Tex hands the fix to Byte, who opens a pull request. Tex then hands the pull request to Patch, who returns its review. Tex writes the answer with the review in it.
 
@@ -3687,7 +3693,7 @@ There are three databases: the backend's, the vm-manager's and LiteLLM's. Each p
 | channels | `chat_epochs` | Each chat's counter: the highest conversation number given out in it. It only goes up, so a number is never used twice |
 | channels | `attachments` | Files uploaded in the web app or received in a chat |
 | orchestrator | `sandbox_tokens` | The hash of each container's token and the user it belongs to |
-| orchestrator | `agent_settings` | The chosen engine, the AI choice, when Claude was connected, and Claude Code's model and thinking effort |
+| orchestrator | `agent_settings` | The chosen engine, the AI choice, when Claude was connected, and Claude Code's model and thinking effort for Tex and for each of the crew |
 | orchestrator | `approvals` | Risky actions waiting for a yes or no, with their exact details: an app's action, a crew job, one of Claude Code's commands, a git push, running a crew job again; and the automation whose run asked, if one did (section 15) |
 | orchestrator | `memories` | Short facts about the user that every engine gets |
 | orchestrator | `chat_engines` | Which engine last finished a turn in each conversation |

@@ -219,8 +219,9 @@ describe('the gate hook (/mcp/gate)', () => {
     const ask = await waitFor(async () =>
       tg.sent.find((m) => m.chatId === String(chatId) && m.buttons),
     );
+    // A lone download is said in plain words; the exact command is in the approval's details.
     expect(ask.text).toBe(
-      `I'd like to run this command: ${CURL} (it reaches the internet). Approve or Deny below.`,
+      "I'd like to download data.json from example.com. Approve or Deny below.",
     );
     expect(ask.buttons!.map((b) => b.text)).toEqual(['✅ Approve', '❌ Deny']);
     await waitFor(async () => answers.length >= 2);

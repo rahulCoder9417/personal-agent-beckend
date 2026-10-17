@@ -165,9 +165,123 @@ export function fitResult(data: unknown, maxChars = MAX_RESULT_CHARS): unknown {
   return `${JSON.stringify(data).slice(0, maxChars)}… [cut]`;
 }
 
+// GitHub's answers are mostly links to GitHub's own API: about 5,400 characters for one repository
+// (some 40 links, the owner with 15 more) and 18,000 for one pull request (both its repositories in
+// full, its people, its links). On 17 October 2026 a list of the founder's 28 public repositories
+// was 151,620 characters, so the cut to MAX_RESULT_CHARS left 5 of them; the day before, his
+// pending-PR automation listed his repositories, was shown 5 and checked only those 5. A repository
+// with two open pull requests came back as 30,000 characters of broken JSON holding part of the
+// first. So, before the cut, a GitHub answer loses what only GitHub's API uses: every item keeps its
+// fields and its web link (html_url), a person is their login, and a repository inside another item
+// (a pull request's head and base, a notification's) is its full name, "owner/repo".
+
+/** Links of a GitHub answer that only GitHub's API uses, or copies of html_url. */
+const GITHUB_DROPPED_LINKS = new Set([
+  'avatar_url',
+  'svn_url',
+  'clone_url',
+  'git_url',
+  'ssh_url',
+  'mirror_url',
+]);
+/** Other keys of a GitHub answer that answer nothing a user asks. */
+const GITHUB_NOISE = new Set(['node_id', '_links', 'gravatar_id']);
+/** Keys that hold a GitHub account: kept as its login. */
+const GITHUB_PEOPLE = new Set([
+  'owner',
+  'user',
+  'author',
+  'committer',
+  'assignee',
+  'assignees',
+  'requested_reviewers',
+  'merged_by',
+  'closed_by',
+  'actor',
+  'triggering_actor',
+  'creator',
+  'sender',
+  'organization',
+]);
+/** Keys that hold a repository inside another item: kept as its full name. */
+const GITHUB_INNER_REPOS = new Set([
+  'repo',
+  'repository',
+  'head_repository',
+  'base_repository',
+  'parent',
+  'source',
+  'template_repository',
+]);
+/** A repository's switches and copies of other fields. */
+const GITHUB_REPO_EXTRAS = new Set([
+  'has_issues',
+  'has_projects',
+  'has_downloads',
+  'has_wiki',
+  'has_pages',
+  'has_discussions',
+  'has_pull_requests',
+  'pull_request_creation_policy',
+  'allow_forking',
+  'is_template',
+  'web_commit_signoff_required',
+  'disabled',
+  'forks',
+  'watchers',
+  'watchers_count',
+  'open_issues',
+]);
+
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+
+/** A link to GitHub's API (or a template of one): of no use to the agent. */
+const isApiLink = (v: unknown) =>
+  typeof v === 'string' &&
+  (v.startsWith('https://api.github.com/') ||
+    v.startsWith('https://uploads.github.com/') ||
+    v.includes('{'));
+
+/**
+ * A GitHub answer without what only GitHub's API uses (see above). `key`: the name the value is
+ * under. A notification's subject keeps its `url`: it is the only pointer to its pull request or
+ * issue. An issue's `repository_url` becomes `repository`, "owner/repo".
+ */
+export function slimGithub(value: unknown, key?: string): unknown {
+  if (Array.isArray(value)) return value.map((v) => slimGithub(v, key));
+  if (!isRecord(value)) return value;
+  if (key && GITHUB_PEOPLE.has(key) && typeof value.login === 'string') return value.login;
+  if (key && GITHUB_INNER_REPOS.has(key) && typeof value.full_name === 'string')
+    return value.full_name;
+  const isRepo = typeof value.full_name === 'string' && typeof value.private === 'boolean';
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (GITHUB_NOISE.has(k) || GITHUB_DROPPED_LINKS.has(k)) continue;
+    if (isRepo && GITHUB_REPO_EXTRAS.has(k)) continue;
+    if (k === 'repository_url' && typeof v === 'string') {
+      const repo = /^https:\/\/api\.github\.com\/repos\/([^/]+\/[^/]+)$/.exec(v)?.[1];
+      if (repo && !('repository' in value)) out.repository = repo;
+      continue;
+    }
+    if ((k === 'url' || k.endsWith('_url')) && isApiLink(v) && !(k === 'url' && key === 'subject'))
+      continue;
+    // A commit's signature check: whether it holds, not the signature itself.
+    if (k === 'verification' && isRecord(v)) {
+      out[k] = { verified: v.verified, reason: v.reason };
+      continue;
+    }
+    out[k] = slimGithub(v, k);
+  }
+  return out;
+}
+
+const isGithub = (action: string) => action.toUpperCase().startsWith('GITHUB_');
+
 /**
  * What run_app_action sends back for an action's answer, and a note when it was trimmed:
  * - Gmail's fetch without bodies asked for: a summary of each email;
+ * - GitHub's answers without GitHub's API links (slimGithub);
  * - any answer longer than MAX_RESULT_CHARS: cut to fit, with how to ask for less.
  */
 export function shapeResult(
@@ -176,7 +290,12 @@ export function shapeResult(
   data: unknown,
 ): { data: unknown; note?: string } {
   const isFetch = action.toUpperCase() === FETCH_EMAILS;
-  const shaped = isFetch && !wantsBodies(args) ? (summariseFetch(args, data) ?? data) : data;
+  const shaped =
+    isFetch && !wantsBodies(args)
+      ? (summariseFetch(args, data) ?? data)
+      : isGithub(action)
+        ? slimGithub(data)
+        : data;
   const fitted = fitResult(shaped);
   if (fitted === null) return { data: shaped };
   const size = sizeOf(shaped).toLocaleString('en');
@@ -184,7 +303,11 @@ export function shapeResult(
     data: fitted,
     note:
       `The app's answer was ${size} characters, too long to send whole, so long texts and lists ` +
-      'were cut. To get what you need, ask for less: narrower filters or search words, a smaller ' +
-      `max_results, or one item by its id.${action.toUpperCase().startsWith('GMAIL_') ? ` ${READ_ONE_EMAIL}` : ''}`,
+      'were cut. To get what you need, ask for less: ' +
+      (isGithub(action)
+        ? 'narrower filters or search words, fewer per page (per_page) and then the next page ' +
+          '(page), or one item by its number.'
+        : 'narrower filters or search words, a smaller max_results, or one item by its id.') +
+      (action.toUpperCase().startsWith('GMAIL_') ? ` ${READ_ONE_EMAIL}` : ''),
   };
 }

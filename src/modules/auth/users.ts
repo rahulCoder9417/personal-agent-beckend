@@ -17,6 +17,8 @@ export interface ClerkUserData {
   emailVerified: boolean;
   name: string;
   role: 'user' | 'admin';
+  /** How they signed up, when the payload says: Google or an email sign-in. */
+  via?: 'Google' | 'email';
 }
 
 type ClerkEmail = {
@@ -41,7 +43,14 @@ export function clerkUserFromPayload(u: Record<string, unknown>): ClerkUserData 
     emailVerified: primary?.verification?.status === 'verified',
     name: [first, last].filter(Boolean).join(' '),
     role: meta.role === 'admin' ? 'admin' : 'user',
+    via: signUpVia(u),
   };
+}
+
+/** Google when the account has a Google sign-in linked, else email. */
+function signUpVia(u: Record<string, unknown>): 'Google' | 'email' {
+  const accounts = ((u.external_accounts ?? u.externalAccounts) as { provider?: string }[]) ?? [];
+  return accounts.some((a) => String(a.provider ?? '').includes('google')) ? 'Google' : 'email';
 }
 
 export async function getUser(userId: string, tx: Tx = db()): Promise<User | undefined> {

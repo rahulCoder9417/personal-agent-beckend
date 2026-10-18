@@ -356,6 +356,42 @@ export const configSchema = z.object({
   METRICS_TOKEN: optional,
   /** Optional webhook (e.g. Slack incoming webhook) for alerts. */
   ALERT_WEBHOOK_URL: optional,
+  /**
+   * The founder's Telegram chat ids (comma-separated numbers) for founder alerts: sign-ups,
+   * server usage, paying clients, errors. Empty: they go to the linked Telegram chats of admins.
+   */
+  FOUNDER_TELEGRAM_CHAT_IDS: z
+    .string()
+    .optional()
+    .transform((v) =>
+      (v ?? '')
+        .split(',')
+        .map((x) => x.trim())
+        .filter(Boolean),
+    )
+    .pipe(z.array(z.string().regex(/^-?\d{1,20}$/, 'must be numeric Telegram chat ids'))),
+  /** One switch for each kind of founder alert. Default on; `false` mutes the kind. */
+  FOUNDER_ALERT_SIGNUPS: z
+    .enum(['true', 'false', '1', '0'])
+    .optional()
+    .transform((v) => v !== 'false' && v !== '0'),
+  FOUNDER_ALERT_USAGE: z
+    .enum(['true', 'false', '1', '0'])
+    .optional()
+    .transform((v) => v !== 'false' && v !== '0'),
+  FOUNDER_ALERT_PAYMENTS: z
+    .enum(['true', 'false', '1', '0'])
+    .optional()
+    .transform((v) => v !== 'false' && v !== '0'),
+  FOUNDER_ALERT_ERRORS: z
+    .enum(['true', 'false', '1', '0'])
+    .optional()
+    .transform((v) => v !== 'false' && v !== '0'),
+  /**
+   * How many agent containers may be awake at once: the same number as the vm-manager's own
+   * AWAKE_CAP (20 if not set there). Used only to say "6/8 awake" in a usage alert.
+   */
+  AWAKE_CAP: z.coerce.number().int().positive().default(15),
   /** The deployed commit, passed on by deploy.sh; shown on the admin health page. */
   GIT_COMMIT: optional,
   /** Requests per minute per IP on every endpoint (specific endpoints have stricter limits). */

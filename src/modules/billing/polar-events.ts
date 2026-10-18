@@ -9,6 +9,7 @@ import { newId } from '../../shared/ids.ts';
 import { logger } from '../../shared/logger.ts';
 import { IGNORED } from '../../worker/runner.ts';
 import { audit } from '../admin/audit.ts';
+import { notifyFounder } from '../admin/ops-alerts.ts';
 import { flagUser, getActiveUser, getUser, setPlan } from '../auth/users.ts';
 import { findWaitlistOffer, markWaitlistOfferUsed } from '../auth/waitlist.ts';
 import { getEvent } from '../events/intake.ts';
@@ -136,6 +137,23 @@ async function getPayment(polarOrderId: string) {
 
 const DAY = 24 * 3600 * 1000;
 
+// --- founder alerts (one per event, kept once by the event's id) ------------------------------
+
+const eventIds = new WeakMap<object, string>();
+const dollars = (cents: number) => `$${(cents / 100).toFixed(cents % 100 === 0 ? 0 : 2)}`;
+
+/** One short line to the founder about a paying client. Never throws. */
+async function tellFounder(event: PolarWebhook, what: string, userId: string, extra = '') {
+  try {
+    const user = await getUser(userId);
+    const who = user ? `${user.name || '(no name)'} ${user.email}` : userId;
+    const id = eventIds.get(event) ?? `${event.type}:${event.timestamp}:${userId}`;
+    await notifyFounder('payment', `${what}: ${who}${extra}`, `polar:${id}:${what}`);
+  } catch {
+    // an alert must never break billing
+  }
+}
+
 // --- handlers ---------------------------------------------------------------------------------
 
 /**
@@ -219,6 +237,14 @@ async function startPeriod(
   // A new plan, not a renewal of the same one: what the plan switches on follows (HLD 11.3).
   if (planChanged) await firePlanChanged(userId);
   if (kind === 'activated') await useWaitlistOffer(s, userId);
+  if (granted) {
+    await tellFounder(
+      event,
+      kind === 'activated' ? 'New subscription' : 'Renewal',
+      userId,
+      `, ${PLANS[plan].name} ${dollars(PLANS[plan].priceCents)}/month`,
+    );
+  }
   return { granted };
 }
 
@@ -263,6 +289,7 @@ async function syncSubscription(s: Data, event: PolarWebhook) {
       }),
     );
     await endSubscription(ended);
+    await tellFounder(event, 'Plan ended', sub.userId, `, ${PLANS[sub.plan].name}`);
     return { status, ended: true };
   }
   const plan = planOf(s) ?? sub.plan;
@@ -301,8 +328,22 @@ async function syncSubscription(s: Data, event: PolarWebhook) {
   });
   if (plan !== sub.plan) await afterCreditsAdded(sub.userId);
   if (planChanged) await firePlanChanged(sub.userId);
+  const periodEnd = date(s, 'current_period_end') ?? sub.periodEnd;
+  for (const line of changeLines(sub, status, plan, periodEnd)) {
+    const what = ALERT_WORDS[line.action];
+    if (what) await tellFounder(event, what, sub.userId, `, ${PLANS[plan].name}`);
+  }
   return { status, plan };
 }
+
+/** The audit lines that the founder hears about, in his words. */
+const ALERT_WORDS: Record<string, string> = {
+  plan_cancelled: 'Cancellation',
+  plan_resumed: 'Resumed',
+  plan_past_due: 'Payment failed (past due)',
+  plan_payment_recovered: 'Payment recovered',
+  plan_changed: 'Plan changed',
+};
 
 /** The audit lines for what changed between our stored subscription and Polar's. */
 function changeLines(
@@ -391,7 +432,15 @@ async function orderPaid(d: Data, event: PolarWebhook) {
     }
     return created;
   });
-  if (toppedUp) await afterCreditsAdded(userId);
+  if (toppedUp) {
+    await afterCreditsAdded(userId);
+    await tellFounder(
+      event,
+      'Top-up bought',
+      userId,
+      `, ${dollars(num(d, 'net_amount') ?? num(d, 'total_amount') ?? 0)} (${credits} credits)`,
+    );
+  }
   // An auto top-up's credits are in: its "waiting" marker is lifted (also on a re-run).
   if (isTopUp) await markAutoTopUpCredited(orderId);
   if (newPeriod) {
@@ -472,6 +521,8 @@ async function refund(d: Data, event: PolarWebhook) {
   if (str(d, 'status') !== 'succeeded') return IGNORED;
   // Polar refunds on its own to head off a chargeback (early dispute signal): treat as one.
   if (obj(d, 'dispute') || str(d, 'reason') === 'dispute_prevention') {
+    const owner = (await getPayment(orderId))?.userId;
+    if (owner) await tellFounder(event, 'Chargeback (refund to head one off)', owner);
     return takeBack(
       orderId,
       {
@@ -484,6 +535,10 @@ async function refund(d: Data, event: PolarWebhook) {
     );
   }
   const amount = num(d, 'amount');
+  const owner = (await getPayment(orderId))?.userId;
+  if (owner) {
+    await tellFounder(event, 'Refund', owner, amount === undefined ? '' : `, ${dollars(amount)}`);
+  }
   return takeBack(
     orderId,
     {
@@ -533,5 +588,6 @@ export async function handlePolarEvent(job: Job): Promise<unknown> {
       ? HANDLERS[payload.type as keyof typeof HANDLERS]
       : undefined;
   if (!handler) return IGNORED;
+  eventIds.set(payload, (job.data as { eventId: string }).eventId);
   return handler(payload.data ?? {}, payload);
 }

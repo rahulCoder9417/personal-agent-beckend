@@ -3677,6 +3677,17 @@ Admins can also look from the api, without a server login (section 31): the jobs
 
 An alert is an error line in the log, marked as an alert. If `ALERT_WEBHOOK_URL` is set, the same text is also posted there, for example to a Slack channel. The backend raises an alert in three cases: a job failed after all its tries, the backup failed, or the health check found a problem. The vm-manager writes its alerts only to its own log.
 
+### Founder alerts on Telegram
+
+The log and `ALERT_WEBHOOK_URL` are easy to miss, so the founder also gets short messages on his own Telegram, from the same bot users talk to. Four kinds, each with its own switch (`FOUNDER_ALERT_SIGNUPS`, `_USAGE`, `_PAYMENTS`, `_ERRORS`, all on unless set to `false`):
+
+- **Sign-up.** One message for each new account, once per user: "New sign-up: Nia New nia@example.com, via Google, total users: 42". Name and email only, never anything the person wrote.
+- **Server usage.** A job every minute reads three numbers: the server disk (the disk under the chat-files folder), the memory (`/proc/meminfo`, which inside a container shows the whole server's memory) and the awake agent places out of `AWAKE_CAP` (asked from the vm-manager; `AWAKE_CAP` in the backend's settings must equal the vm-manager's). When a number climbs into a new 10% band it says so once: "Disk 70% (26 of 38 GB), band 70%" or "Agents awake 6/8 = 75% (band 70%)". It says nothing more for that band until the number has fallen below the band under it: from 20% to 15% and back to 20% is quiet, from 20% to 5% and back to 20% speaks again. After a number has been at 80% or more, falling under 50% sends "back to normal". The last band of each number is kept in Redis, so a restart does not repeat messages.
+- **Paying clients.** From the Polar events, one message each: new subscription (plan and price per month), renewal, top-up bought (dollars and credits), cancellation, resumed, payment failed (past due), payment recovered, plan changed, plan ended, refund (dollars), and a refund that heads off a chargeback. Each is kept once by the event's id, so a re-run sends nothing twice.
+- **Errors.** Every alert the backend raises (a job failed after all its tries, the backup failed, the health check found a problem, a turn's refund could not be queued) is also sent, at most once per kind every 10 minutes, with the first line of its details and secrets scrubbed. The vm-manager's disk guard (90% full, agents not waking) sends one too, when a user's message hits it.
+
+How it works: the code only adds a job on the system queue and returns, and the worker sends it, so the api never waits for Telegram. A failed send is logged and never reaches the flow that raised the alert; a job retries only when no chat at all received the message. The chats are `FOUNDER_TELEGRAM_CHAT_IDS` (a comma list of numeric Telegram chat ids). If that is empty, the messages go to the linked, unblocked Telegram chat of every admin account, so linking his own account on Telegram is enough. If neither exists, a warning goes to the log.
+
 ### The nightly backup and the restore test
 
 The backup job runs every night at 02:00 on the worker's clock.
@@ -3901,6 +3912,9 @@ This section lists the backend's settings by group. They are environment setting
 | | `WEB_SEARCH_COST_USD` | The cost a search is charged from | 0.004, which makes one search 1 credit |
 | Backups and alerts | `BACKUP_UPLOAD_CMD` | The command that copies a backup off the server | Backups stay on the same disk as the data |
 | | `ALERT_WEBHOOK_URL` | Where alerts are posted | Alerts are only in the logs |
+| | `FOUNDER_TELEGRAM_CHAT_IDS` | The founder's Telegram chat ids for founder alerts | They go to the linked Telegram chats of admins |
+| | `FOUNDER_ALERT_SIGNUPS`, `_USAGE`, `_PAYMENTS`, `_ERRORS` | Switch off one kind of founder alert with `false` | All on |
+| | `AWAKE_CAP` | The vm-manager's awake cap, for the usage alert | 20 |
 | | `METRICS_TOKEN` | The secret for `/metrics` | `/metrics` answers "not found" |
 | | `GIT_COMMIT` | The deployed commit, shown on the admin health page. `deploy.sh` sets it | The health page shows no commit |
 

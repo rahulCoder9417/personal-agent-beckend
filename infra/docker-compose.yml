@@ -211,6 +211,8 @@ services:
       - attachments:/data/attachments
     environment:
       ATTACHMENTS_DIR: /data/attachments
+      # Same number as the vm-manager's, so usage alerts say "6/8 awake" correctly.
+      AWAKE_CAP: ${AWAKE_CAP:-15}
       DATABASE_URL: ${BACKEND_DATABASE_URL:-postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/agent}
       REDIS_URL: redis://redis:6379
       VM_MANAGER_URL: http://vm-manager:9090
@@ -232,6 +234,8 @@ services:
       - attachments:/data/attachments
     environment:
       ATTACHMENTS_DIR: /data/attachments
+      # Same number as the vm-manager's, so usage alerts say "6/8 awake" correctly.
+      AWAKE_CAP: ${AWAKE_CAP:-15}
       DATABASE_URL: ${BACKEND_DATABASE_URL:-postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/agent}
       REDIS_URL: redis://redis:6379
       VM_MANAGER_URL: http://vm-manager:9090

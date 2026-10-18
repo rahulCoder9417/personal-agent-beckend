@@ -1,9 +1,11 @@
+import { notifyFounder } from '../admin/ops-alerts.ts';
 import { addJob } from '../events/queues.ts';
 import { keepUser, keepUserId } from './user-cache.ts';
 import {
   fetchClerkUser,
   getUserByClerkIdCached,
   upsertUserFromClerk,
+  userCounts,
   type ClerkUserData,
   type User,
 } from './users.ts';
@@ -26,9 +28,26 @@ export async function enqueueUserDeletion(userId: string): Promise<void> {
  */
 export async function provisionUser(data: ClerkUserData): Promise<User> {
   const { user, created } = await upsertUserFromClerk(data);
-  if (created) await enqueueOnboarding(user.id);
+  if (created) {
+    await enqueueOnboarding(user.id);
+    await notifySignUp(user, data.via);
+  }
   await Promise.all([keepUserId(user.clerkId, user.id), keepUser(user)]);
   return user;
+}
+
+/** Tells the founder about a new account, once per user. Never throws. */
+async function notifySignUp(user: User, via: ClerkUserData['via']): Promise<void> {
+  try {
+    const total = (await userCounts()).total;
+    await notifyFounder(
+      'signup',
+      `New sign-up: ${user.name || '(no name)'} ${user.email}, via ${via ?? 'email'}, total users: ${total}`,
+      `signup:${user.id}`,
+    );
+  } catch {
+    // an alert must never break sign-up
+  }
 }
 
 /** Accounts being created from a session in this process, by Clerk id (resolveSessionUser). */

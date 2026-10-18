@@ -48,6 +48,22 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 18 October 2026: Alerts on the founder's Telegram (sign-ups, server usage, paying clients, errors)
+
+- **Where it is:** on branch `feat/founder-alerts`, not merged yet.
+- **Why:** the go-live check found that nothing tells the founder when something breaks (`ALERT_WEBHOOK_URL` is empty), and he wants to know about each new user, each paying-client event and how full the server is, without opening the admin panel.
+- **What the user notices:** nothing. The founder gets short messages from the bot.
+- **Backend:** a small alerts piece in the admin module sends a message to the founder's chats through the existing Telegram bot. The code that raises an alert only adds a job on the system queue; the worker sends it, so the api never waits and a failed alert never breaks the flow that raised it. Chats come from a new setting, `FOUNDER_TELEGRAM_CHAT_IDS`; when it is empty, the linked Telegram chats of admin accounts are used. Four kinds, each with an on/off setting (default on): a new sign-up (name, email, Google or email, total users; once per user); server usage (a job every minute reads disk, memory and awake agent places out of `AWAKE_CAP`, and alerts once per new 10% band, stays quiet until the number falls below the band under it, and says "back to normal" under 50% after 80% or more; the band is kept in Redis); paying clients (new subscription, renewal, top-up, cancellation, resumed, payment failed, payment recovered, plan changed, plan ended, refund, chargeback-prevention refund; once per Polar event, in dollars); errors (every existing ops alert, at most one per kind every 10 minutes, scrubbed, plus a new one when the disk guard stops agents waking). Messages carry no secrets and never a user's chat contents.
+- **Cost and speed:** one cheap job a minute; reading the disk and memory costs nothing, the awake count is one call to the vm-manager.
+- **Contracts:** none.
+- **Database:** none.
+- **How it was checked:** new test file `test/founder-alerts.test.ts` (10 tests): each kind sends once to every configured chat, a repeated key sends once, the fallback to admins' linked chats, a muted kind, a failed send, the band rules (10 to 20 alerts, 20 to 15 to 20 does not, 20 to 5 to 20 does, back to normal), sign-up once per user, every Polar event, error rate limit with a planted secret scrubbed. The Polar, auto top-up, admin and webhook tests, lint and type check pass.
+- **Still open:** set `FOUNDER_TELEGRAM_CHAT_IDS` (or link the founder's account on Telegram while it is an admin) and `AWAKE_CAP` equal to the vm-manager's on the server. The vm-manager's own alert lines still go only to its log; only the backend's disk-guard hit is sent.
+- **Docs updated:** backend-report section 37 (Founder alerts on Telegram) and its settings table; `.env.example`.
+- **Commits:** the commits on `feat/founder-alerts`.
+
+---
+
 ### 18 October 2026: the user is told when the server is full
 
 - **Where it is:** on the branch `fix/launch-ux` of the backend, not merged.
@@ -59,7 +75,6 @@ Each entry has a heading with the date and the name of the feature, then the par
 - **Database:** none.
 - **How it was checked:** a new test (`test/server-busy.test.ts`): after 5 failed wakes exactly one busy reply, the message failed, one audit line, and a re-run adds neither. `test/storage-full.test.ts` still passes. Lint and typecheck pass. Not run on the test server.
 - **Docs updated:** `backend-report.md`, the failure lists in sections 9 and 43.
-
 
 ### 18 October 2026: Chat files now survive a restart or a deploy
 

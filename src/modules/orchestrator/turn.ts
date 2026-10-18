@@ -5,6 +5,7 @@ import { currentJob } from '../../shared/job-context.ts';
 import { logger } from '../../shared/logger.ts';
 import { redis } from '../../shared/redis.ts';
 import { alert } from '../admin/alerts.ts';
+import { notifyFounderError } from '../admin/ops-alerts.ts';
 import { audit } from '../admin/audit.ts';
 import { getActiveUserCached, isSuspended } from '../auth/users.ts';
 import { conversationFor, isAutomationsChat } from '../channels/conversations.ts';
@@ -686,11 +687,13 @@ async function wakeContainer(
   } catch (err) {
     if (err instanceof ConnectError && err.code === Code.ResourceExhausted) {
       if (err.rawMessage.startsWith(DISK_LIMIT_MARKER)) throw new StorageFullError(err.rawMessage);
-      if (err.rawMessage.startsWith(DISK_GUARD_MARKER))
+      if (err.rawMessage.startsWith(DISK_GUARD_MARKER)) {
         logger().error(
           { userId, err: err.rawMessage },
           'server disk nearly full: sandbox not woken, will retry',
         );
+        void notifyFounderError('Disk guard: server disk nearly full, agents are not waking');
+      }
     }
     if (
       err instanceof ConnectError &&

@@ -15,7 +15,7 @@ import { db } from '../../shared/db/client.ts';
 import { channelDisabled } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
 import { audit } from '../admin/audit.ts';
-import { channelLinks, linkCodes } from './schema.ts';
+import { channelLinks, linkCodes, users } from './schema.ts';
 
 export type ChannelLink = typeof channelLinks.$inferSelect;
 export type LinkChannel = ChannelLink['channel'];
@@ -315,4 +315,21 @@ export async function cleanupLinkCodes(): Promise<number> {
     .where(lt(linkCodes.expiresAt, new Date(Date.now() - 86400_000)))
     .returning({ id: linkCodes.id });
   return rows.length;
+}
+
+/** The linked Telegram chat ids of live admins (the founder's alerts go there by default). */
+export async function adminTelegramChatIds(): Promise<string[]> {
+  const rows = await db()
+    .select({ externalId: channelLinks.externalId })
+    .from(channelLinks)
+    .innerJoin(users, eq(users.id, channelLinks.userId))
+    .where(
+      and(
+        eq(channelLinks.channel, 'telegram'),
+        eq(channelLinks.blocked, false),
+        eq(users.role, 'admin'),
+        isNull(users.deletedAt),
+      ),
+    );
+  return [...new Set(rows.map((r) => r.externalId))];
 }

@@ -290,43 +290,176 @@ export function appAllowedOnPlan(app: CatalogApp, plan: 'free' | 'pro' | 'max'):
 }
 
 /**
- * Actions that act on the outside world (send, delete, pay, share…). They only run with an
- * approved approval (HLD 10.2: approvals before sending to others, deleting or paying).
+ * Words of actions that act on the outside world or change what is there (send, delete, pay,
+ * share, update…). Composio names some actions with the verb's -s form ("SLACK_DELETES_A_MESSAGE…",
+ * "SLACK_SENDS_A_MESSAGE…"), so those are here too.
  */
 const RISKY =
-  /(^|_)(SEND|REPLY|FORWARD|DELETE|REMOVE|TRASH|ARCHIVE|PAY|PAYMENT|TRANSFER|CHARGE|REFUND|INVITE|SHARE|POST|PUBLISH|TWEET|MERGE|CLOSE|CANCEL|MOVE|UPDATE|CREATE_EVENT|ACCEPT|DECLINE)(_|$)/;
+  /(^|_)(SEND|SENDS|REPLY|FORWARD|DELETE|DELETES|REMOVE|REMOVES|TRASH|ARCHIVE|PAY|PAYMENT|TRANSFER|CHARGE|REFUND|INVITE|SHARE|POST|PUBLISH|TWEET|MERGE|CLOSE|CANCEL|MOVE|UPDATE|CREATE_EVENT|ACCEPT|DECLINE)(_|$)/;
 
-export function actionNeedsApproval(actionSlug: string): boolean {
-  const slug = actionSlug.toUpperCase();
-  return RISKY.test(slug) || writesGithubComment(slug);
+// --- Which actions ask first (founder's decision, 18 October 2026) -----------------------------
+//
+// Until 18 October an action asked only when its name had a word such as SEND or DELETE. The
+// Composio audit of 17 October counted about 900 actions that change or share things and did not
+// ask (deleting every event of a calendar, sharing a Drive file with anyone, adding a collaborator
+// to a GitHub repository, committing straight to the main branch…). Now it is the other way round:
+//   1. an action on the short list below (SAFE_CHANGES) runs without asking: it only adds something
+//      new and private, or tidies the user's own mail, and can be undone;
+//   2. every other action whose name has a word that changes (send, create, update, delete, add,
+//      share…) asks first;
+//   3. an action whose name only reads (GET, LIST, SEARCH…) does not ask;
+//   4. a name that says neither asks, unless Composio's own description of the action marks it
+//      `readOnlyHint` and not `destructiveHint`. When Composio can't be asked, it asks.
+// So an action we can't place asks, never the other way round.
+
+/** The tag Composio puts on tools that only read (the MCP `readOnlyHint` annotation). */
+export const READ_ONLY_TAG = 'readOnlyHint';
+/** The tag Composio puts on tools that delete or overwrite (the MCP `destructiveHint` annotation). */
+export const DESTRUCTIVE_TAG = 'destructiveHint';
+
+/** Gmail's system labels that move mail: out of the inbox (archive), to Trash or to Spam. */
+const MAIL_MOVING_LABELS = new Set(['INBOX', 'TRASH', 'SPAM']);
+
+/** The label ids an input holds (one id, a list, or ids separated by commas), upper case. */
+function labelIds(v: unknown): string[] {
+  const list = Array.isArray(v) ? v : typeof v === 'string' ? v.split(',') : [];
+  return list.filter((x): x is string => typeof x === 'string').map((x) => x.trim().toUpperCase());
 }
 
-// --- Which risky actions a skip rule may cover (founder's decision, 17 October) -----------------
+/**
+ * Only labels that don't move mail: read or unread, starred, important, a category, the user's own
+ * labels. Archiving (taking INBOX off), Trash and Spam ask, like moving to Trash does.
+ */
+function labelsOnly(args: Record<string, unknown>): boolean {
+  const keys = ['add_label_ids', 'remove_label_ids', 'addLabelIds', 'removeLabelIds', 'label_ids'];
+  return keys.every((k) => labelIds(args[k]).every((id) => !MAIL_MOVING_LABELS.has(id)));
+}
+
+/** A harmless change: why it needs no OK, and, when its inputs matter, which inputs keep it so. */
+interface SafeChange {
+  why: string;
+  /** False: with these inputs it is not harmless, and it asks like any other change. */
+  safeWith?: (args: Record<string, unknown>) => boolean;
+}
+
+/**
+ * The changes that run without asking, by exact name. Kept short on purpose; anything not here
+ * that changes something asks. Each one adds something new that only the user sees, or tidies the
+ * user's own mail, and can be undone in the app. Each still costs 1 credit when it runs.
+ */
+export const SAFE_CHANGES: Readonly<Record<string, SafeChange>> = {
+  GMAIL_CREATE_EMAIL_DRAFT: {
+    why: 'A draft stays in the Drafts folder: nothing is sent. Sending it (GMAIL_SEND_DRAFT) asks.',
+  },
+  GMAIL_CREATE_LABEL: { why: 'A new, empty label in the mailbox: no mail moves.' },
+  GMAIL_ADD_LABEL_TO_EMAIL: {
+    why: 'Marks one email read or unread, starred, or adds a label. Archiving, Trash and Spam ask.',
+    safeWith: labelsOnly,
+  },
+  GMAIL_MODIFY_THREAD_LABELS: {
+    why: 'The same for one conversation. Archiving, Trash and Spam ask.',
+    safeWith: labelsOnly,
+  },
+  GOOGLEDOCS_CREATE_DOCUMENT: { why: 'A new document, private to the user: nothing changes.' },
+  GOOGLEDOCS_CREATE_DOCUMENT_MARKDOWN: { why: 'The same, written from Markdown.' },
+  GOOGLESHEETS_CREATE_GOOGLE_SHEET1: { why: 'A new, empty spreadsheet, private to the user.' },
+  GOOGLEDRIVE_CREATE_FOLDER: { why: 'A new, empty folder: no file moves or is shared.' },
+  TODOIST_CREATE_TASK: {
+    why: "A new task in the user's own list, ticked off or deleted any time.",
+  },
+};
+
+/** Whether this action, with these inputs (when known), is on the short list of harmless changes. */
+export function isSafeChange(actionSlug: string, args?: Record<string, unknown>): boolean {
+  const slug = actionSlug.toUpperCase();
+  const safe = Object.hasOwn(SAFE_CHANGES, slug) ? SAFE_CHANGES[slug] : undefined;
+  if (!safe) return false;
+  return !args || !safe.safeWith || safe.safeWith(args);
+}
+
+/**
+ * Whether the action asks the user first (the rules above). `tags`: its Composio tags, when known
+ * (they only decide for a name that says nothing). `args`: the
+ * request's inputs, when known: a change on the short list asks when its inputs make it more than
+ * harmless (Gmail labels that archive, trash or mark as spam).
+ */
+export function actionNeedsApproval(
+  actionSlug: string,
+  opts: { tags?: readonly string[]; args?: Record<string, unknown> } = {},
+): boolean {
+  const slug = actionSlug.toUpperCase();
+  if (isSafeChange(slug, opts.args)) return false;
+  const kind = actionKindByName(slug);
+  if (kind !== 'unknown') return kind === 'changes';
+  const tags = opts.tags ?? [];
+  return !tags.includes(READ_ONLY_TAG) || tags.includes(DESTRUCTIVE_TAG);
+}
+
+// --- Which actions a skip rule may never cover (founder's decisions, 17 and 18 October) --------
 //
-// The user may say "don't ask again" for a risky action (orchestrator/skip-rules.ts). Never for
-// these, whatever a rule says, also one written straight into the database:
+// The user may say "don't ask again" for an action that asks (orchestrator/skip-rules.ts). Never
+// for these, whatever a rule says, also one written straight into the database:
 //   - deleting: DELETE, REMOVE, TRASH, and ARCHIVE (our own approvals table counts it as deleting);
-//     DESTROY, PURGE, ERASE and WIPE too, should an action be named so;
+//     DESTROY, PURGE, ERASE and WIPE too, should an action be named so; CLEAR (a calendar's events,
+//     a sheet's cells); a harmless Gmail label change whose labels archive, trash or mark as spam;
 //   - paying: PAY, PAYMENT, TRANSFER, CHARGE, REFUND, PURCHASE, BUY;
 //   - MERGE: a merge writes to the target branch, usually the default one, which may deploy to
 //     production; it can't simply be taken back, and the git gateway never lets the agent write to
-//     a default branch by itself either;
+//     a default branch by itself either. Writing files or moving a branch straight through GitHub's
+//     API (a commit, a file's contents, a branch reference) is the same, so it never skips either;
+//   - giving someone access to the account or its things, or sending its data elsewhere for good:
+//     collaborators, members, invitations, permissions and ACLs, sharing, keys, secrets, tokens,
+//     webhooks, mail forwarding, delegates and filters (a filter can delete or forward every mail
+//     that matches); on GitHub, an email address and anything else on the user's own account
+//     (`…_AUTHENTICATED_USER`);
+//   - making something public: PUBLIC and VISIBILITY in the name, or inputs that make it public
+//     (a gist with `public` true, a repository with `private` false or `visibility` "public",
+//     a share with `type` "anyone");
 //   - the platform's own (TEXTCREW_…): Tex's commands and file changes, pushes, crew jobs and
 //     running a crew job again;
 //   - a GitHub review that approves or requests changes (`event` other than COMMENT): an approval
 //     can set off an auto-merge.
 const NEVER_SKIPPED =
-  /(^|_)(DELETE|REMOVE|TRASH|ARCHIVE|DESTROY|PURGE|ERASE|WIPE|PAY|PAYMENT|TRANSFER|CHARGE|REFUND|PURCHASE|BUY|MERGE)(_|$)/;
+  /(^|_)(DELETE|DELETES|REMOVE|REMOVES|TRASH|ARCHIVE|ARCHIVES|DESTROY|PURGE|ERASE|WIPE|CLEAR|CLEARS|PAY|PAYMENT|TRANSFER|CHARGE|REFUND|PURCHASE|BUY|MERGE)(_|$)/;
+const NEVER_SKIPPED_ACCESS =
+  /(^|_)(COLLABORATOR|COLLABORATORS|MEMBER|MEMBERS|MEMBERSHIP|MEMBERSHIPS|INVITATION|INVITATIONS|PERMISSION|PERMISSIONS|ACL|SHARE|SHARES|SHARING|KEY|KEYS|SECRET|SECRETS|TOKEN|TOKENS|WEBHOOK|WEBHOOKS|HOOK|HOOKS|FORWARDING|DELEGATE|DELEGATES|FILTER|FILTERS|ADMIN|ADMINS|OWNER|OWNERS|PUBLIC|VISIBILITY)(_|$)/;
+/** GitHub: the user's own account, its email addresses, and writing files or branches directly. */
+const NEVER_SKIPPED_GITHUB =
+  /(^|_)(AUTHENTICATED_USER|EMAIL|EMAILS|COMMIT|COMMITS|FILE|FILES|CONTENTS|REFERENCE|REFERENCES|REF|TREE|BLOB)(_|$)/;
+
+const isTrue = (v: unknown) => v === true || (typeof v === 'string' && v.toLowerCase() === 'true');
+const isFalse = (v: unknown) =>
+  v === false || (typeof v === 'string' && v.toLowerCase() === 'false');
+const lowerText = (v: unknown) => (typeof v === 'string' ? v.trim().toLowerCase() : '');
+
+/** Inputs that make something public or open to anyone. */
+function makesPublic(args: Record<string, unknown>): boolean {
+  if (isTrue(args.public) || isFalse(args.private)) return true;
+  if (lowerText(args.visibility) === 'public') return true;
+  if (lowerText(args.type) === 'anyone' || lowerText(args.type) === 'domain') return true;
+  const scope = args.scope as Record<string, unknown> | undefined;
+  return Boolean(scope && typeof scope === 'object' && lowerText(scope.type) === 'default');
+}
+
+/** Whether a rule may never cover this action (the list above), whatever the user said. */
+function neverSkipped(slug: string, args?: Record<string, unknown>): boolean {
+  if (slug.startsWith('TEXTCREW_')) return true;
+  if (NEVER_SKIPPED.test(slug) || NEVER_SKIPPED_ACCESS.test(slug)) return true;
+  if (slug.startsWith('GITHUB_') && NEVER_SKIPPED_GITHUB.test(slug)) return true;
+  // A harmless change that asks because of its inputs: archive, Trash or Spam.
+  if (Object.hasOwn(SAFE_CHANGES, slug)) return true;
+  return Boolean(args && makesPublic(args));
+}
 
 /**
- * Whether a skip rule may let this risky action run without asking. False for one that is not
- * risky (it never asks: there is nothing to skip) and for the kinds above. `args`, when given, are
- * the request's inputs: a GitHub review is skippable only as a plain comment.
+ * Whether a skip rule may let this action run without asking. False for one that does not ask
+ * (there is nothing to skip) and for the kinds above. `args`, when given, are the request's
+ * inputs: a GitHub review is skippable only as a plain comment, and inputs that make something
+ * public never are.
  */
 export function approvalSkippable(actionSlug: string, args?: Record<string, unknown>): boolean {
   const slug = actionSlug.toUpperCase();
-  if (slug.startsWith('TEXTCREW_') || !actionNeedsApproval(slug) || NEVER_SKIPPED.test(slug))
-    return false;
+  if (neverSkipped(slug, args) || !actionNeedsApproval(slug, args ? { args } : {})) return false;
   if (slug.startsWith('GITHUB_') && GITHUB_COMMENT.test(slug) && args && given(args.event)) {
     return typeof args.event === 'string' && args.event.toUpperCase() === 'COMMENT';
   }
@@ -355,8 +488,8 @@ export function actionWords(actionSlug: string): string {
 
 // --- Does an action change something? (HLD 7.2: 1 credit if it does, reading is free) ----------
 //
-// Decided from the action's name, word by word like the risky check above:
-//   1. it needs approval, or its name has a write word        → it changes something
+// Decided from the action's name, word by word:
+//   1. its name has a risky or a write word (or it writes a GitHub comment) → it changes something
 //   2. its name has a read word and no write word             → it only reads
 //   3. its name has neither: Composio's `readOnlyHint` tag    → it only reads
 //   4. anything else                                          → it changes something
@@ -364,14 +497,11 @@ export function actionWords(actionSlug: string): string {
 
 /** Write words that aren't already in RISKY. */
 const WRITES =
-  /(^|_)(CREATE|ADD|INSERT|UPSERT|SET|EDIT|MODIFY|PATCH|PUT|WRITE|APPEND|SAVE|UPLOAD|IMPORT|COPY|DUPLICATE|RENAME|REPLACE|CLEAR|RESET|MARK|ASSIGN|UNASSIGN|ENABLE|DISABLE|RESTORE|UNTRASH|UNARCHIVE|SUBMIT|APPROVE|REJECT|RESOLVE|COMPLETE|REOPEN|LOCK|UNLOCK|SUBSCRIBE|UNSUBSCRIBE|JOIN|LEAVE|REVOKE|GRANT)(_|$)/;
+  /(^|_)(CREATE|CREATES|ADD|ADDS|INSERT|UPSERT|SET|EDIT|EDITS|MODIFY|PATCH|PUT|WRITE|APPEND|SAVE|UPLOAD|UPLOADS|IMPORT|COPY|DUPLICATE|RENAME|REPLACE|CLEAR|CLEARS|RESET|MARK|ASSIGN|UNASSIGN|ENABLE|DISABLE|RESTORE|UNTRASH|UNARCHIVE|SUBMIT|APPROVE|REJECT|RESOLVE|COMPLETE|REOPEN|LOCK|UNLOCK|SUBSCRIBE|UNSUBSCRIBE|JOIN|LEAVE|REVOKE|GRANT)(_|$)/;
 
 /** Words that only ever read. Ambiguous ones (CHECK: "check off a task") are left out. */
 const READS =
   /(^|_)(GET|LIST|SEARCH|FIND|FETCH|READ|RETRIEVE|QUERY|LOOKUP|COUNT|DESCRIBE|VIEW|SHOW|DOWNLOAD|EXPORT|PREVIEW)(_|$)/;
-
-/** The tag Composio puts on tools that only read (the MCP `readOnlyHint` annotation). */
-export const READ_ONLY_TAG = 'readOnlyHint';
 
 export type ActionKind = 'changes' | 'reads' | 'unknown';
 

@@ -16,12 +16,19 @@ import { shapeResult, withResultDefaults } from '../../integrations/app-results.
 import {
   activeConnectionsOf,
   appActionChangesSomething,
+  appActionNeedsApproval,
+  connectionTroubleNote,
   listConnections,
   newestActiveConnection,
   refreshPendingConnections,
   type Connection,
 } from '../../integrations/apps.ts';
-import { claimCrewJobComment, releaseCrewJobComment } from '../../automations/crew-jobs.ts';
+import {
+  claimCrewJobComment,
+  claimCrewJobGithubAction,
+  releaseCrewJobComment,
+  releaseCrewJobGithubAction,
+} from '../../automations/crew-jobs.ts';
 import {
   appRefusal,
   currentRunLimits,
@@ -41,14 +48,15 @@ import {
 } from '../../automations/runs.ts';
 import { appOfAction, checkActionInputs } from '../../integrations/action-inputs.ts';
 import {
-  actionNeedsApproval,
   actionWords,
   appAllowedOnPlan,
   appForToolkit,
+  isSafeChange,
   prCommentTarget,
 } from '../../integrations/catalog.ts';
 import { audit } from '../../admin/audit.ts';
 import { composio } from '../../integrations/composio.ts';
+import { approvalFacts } from '../../orchestrator/approval-facts.ts';
 import { approvalAskText, channelOfSession } from '../../orchestrator/approval-text.ts';
 import {
   autoApprovedText,
@@ -162,9 +170,11 @@ defineTool({
     '"pull request", "list repositories"): every action of the app is searched, the best matches first. If a ' +
     'search finds nothing, try other words before you decide the app cannot do it. ' +
     'It has no inputs: call describe_app_action for the inputs of the action you will use. ' +
-    'Actions marked requires_approval need request_approval first, then run_app_action with the approval_id ' +
-    '(exceptions: a new review or comment on a pull request, in a repo where your user turned on pull-request review, ' +
-    "and the one review a crew job's brief asks you to post on its pull request). " +
+    'Every action that changes something is marked requires_approval, except a few harmless ones (a draft, a label, ' +
+    'marking an email read, a new private document, folder or task). Those marked need request_approval first, then ' +
+    'run_app_action with the approval_id (exceptions: a new review or comment on a pull request, in a repo where your ' +
+    "user turned on pull-request review, and what a crew job's brief asks for: its one review on the pull request, " +
+    "Byte's pull request from the job's own branch, and the report as a new issue). " +
     'costs_credits is what a successful run costs your user: 1 for an action that changes something, 0 for reading.',
   input: { app: z.string().optional(), search: z.string().optional() },
   async run({ userId }, args) {
@@ -277,9 +287,12 @@ const approvalInputs = (args: Record<string, unknown>) =>
 defineTool({
   name: 'request_approval',
   description:
-    'Ask your user to approve a risky action (sending to others, deleting, paying…) before you run it. ' +
+    'Ask your user to approve an action before you run it: every app action marked requires_approval (anything that changes ' +
+    'something, but a few harmless ones), or anything else you want their OK for. ' +
     'The user is shown your summary as "I\'d like to <summary>." with Approve and Deny buttons, so write the summary as what you will do, ' +
     'starting with the verb, with what they need to decide. Example: Send an email to priya@acme.com with subject "Notes". ' +
+    'Under it they also see what will really run, written by Textcrew from the arguments (the app and action, who it goes to, ' +
+    'which repository, calendar or file, the subject or first words), so your summary must say the same as the arguments. ' +
     "Pass the exact action and its arguments, named as in the action's input_schema from describe_app_action. An app action's " +
     'arguments are checked against it: a name the action does not have, a missing required input or a wrong kind of value is ' +
     'refused before the user sees anything, with the right names. After the yes, run_app_action with the approval_id runs exactly ' +
@@ -353,8 +366,8 @@ defineTool({
     if (
       app &&
       action &&
-      actionNeedsApproval(action) &&
       limits?.askFirst !== 'changes' &&
+      (await appActionNeedsApproval(action, approved ?? {})) &&
       (await matchingSkipRule(userId, action, approved ?? {}))
     ) {
       const ran = await runAppAction(
@@ -389,7 +402,7 @@ defineTool({
       approval_id: a.id,
       status: 'pending',
       expires_at: a.expiresAt.toISOString(),
-      shown_to_user: approvalAskText(a.summary, channelOfSession(sessionKey)),
+      shown_to_user: approvalAskText(a.summary, channelOfSession(sessionKey), approvalFacts(a)),
       ...(step ? { step_id: step.stepId } : {}),
       ...(inputsNote ? { inputs_note: inputsNote } : {}),
       ...(replaced
@@ -452,11 +465,12 @@ function approvedRunFailed(approvalId: string, error: string | null): string {
 defineTool({
   name: 'run_app_action',
   description:
-    "Run an action in one of your user's connected apps (from list_app_actions; its inputs from describe_app_action). Risky actions need approval_id from an APPROVED request_approval " +
+    "Run an action in one of your user's connected apps (from list_app_actions; its inputs from describe_app_action). An action marked " +
+    'requires_approval (every one that changes something, but a few harmless ones) needs approval_id from an APPROVED request_approval ' +
     'for the same action: it runs exactly the arguments the user approved, so leave arguments out (any you pass must be the approved ones). ' +
     "During an automation's run only that automation's apps can be used, and one set to ask first before any change needs " +
     'request_approval for every action that changes something. ' +
-    'If your user made a rule to skip approval for a risky action, it runs without approval_id and the answer says ' +
+    'If your user made a rule to skip approval for an action, it runs without approval_id and the answer says ' +
     'auto_approved: tell the user what was done. ' +
     'Posting a new review or comment on a pull request needs no approval in a repo where your user turned on ' +
     'pull-request review (a review must use event "COMMENT"); merging, approving and comments on other repos still do. ' +
@@ -478,7 +492,7 @@ defineTool({
     const repo = (result as { pr_review?: string }).pr_review;
     if (repo) return `Ran ${args.action} (pull-request review is on for ${repo})`;
     const job = (result as { crew_job?: string }).crew_job;
-    if (job) return `Ran ${args.action} (the review the user asked for in crew job ${job})`;
+    if (job) return `Ran ${args.action} (the brief of crew job ${job} asked for it)`;
     return `Ran ${args.action}${args.approval_id ? ' (approved)' : ''}`;
   },
   // The log keeps the inputs as they ran, and says when they were sent beside `action`.
@@ -596,9 +610,18 @@ async function runAppAction(userId: string, args: RunArgs, opts: { summary?: str
   // or comment on its pull requests, and nothing else (HLD 0.8).
   let prReviewRepo: string | null = null;
   // A crew job whose brief says "post it on the pull request": the user's yes for ONE review or
-  // comment on that pull request, during that job (docs/backend-report.md, "The crew").
+  // comment on that pull request, during that job (docs/backend-report.md, "The crew"). Or for
+  // Byte's pull request from the job's own branch, or the report as a new issue (`crewOpened`).
   let crewJobId: string | null = null;
-  const risky = actionNeedsApproval(args.action);
+  let crewOpened: string | null = null;
+  // Every action that changes something asks, but a few harmless ones (catalog.ts). Decided on the
+  // inputs that would run: an approval's own when the agent sends only its id.
+  const risky = await appActionNeedsApproval(
+    args.action,
+    !found.inputs && approval?.action === args.action && approval.arguments
+      ? approval.arguments
+      : runArgs,
+  );
   // The automation's "ask me first" set to every change: an action that changes something
   // waits for the user's yes too, not only a risky one. A step set to ask first: its action.
   const askedFirst =
@@ -610,6 +633,10 @@ async function runAppAction(userId: string, args: RunArgs, opts: { summary?: str
     if (target && (await prCommentAllowed(userId, target)))
       prReviewRepo = `${target.owner}/${target.repo}`;
     else if (target) crewJobId = await claimCrewJobComment(userId, target);
+    else {
+      crewOpened = await claimCrewJobGithubAction(userId, args.action, runArgs);
+      crewJobId = crewOpened;
+    }
   }
   if ((risky && !prReviewRepo && !crewJobId) || askedFirst) {
     // No approval, but the user's skip rule covers exactly this: it runs now, with no card, the
@@ -636,8 +663,9 @@ async function runAppAction(userId: string, args: RunArgs, opts: { summary?: str
           askedFirst
             ? `The automation "${limits!.title}" asks the user first ${stepAction ? `at step ${stepAction.index + 1}` : 'before anything that changes something'}. ` +
                 'Call request_approval for this action and end your turn; run it with that approval_id after the yes.'
-            : "This action needs the user's approval. If the user already approved it, call run_app_action again " +
-                'with that approval_id. Otherwise call request_approval and end your turn.',
+            : `This action needs the user's approval${isSafeChange(args.action) ? ' with these labels (archiving, Trash and Spam ask first)' : ''}. ` +
+                'If the user already approved it, call run_app_action again with that approval_id. Otherwise call ' +
+                'request_approval and end your turn.',
           {
             reason: askedFirst
               ? 'the automation asks you first, and no approval was given'
@@ -701,12 +729,20 @@ async function runAppAction(userId: string, args: RunArgs, opts: { summary?: str
       );
     data = res.data;
   } catch (err) {
-    const failed =
+    const plainFailure =
       err instanceof ToolError
         ? err
         : new ToolError('The app is unavailable right now; tell the user and try later', {
             reason: "the app couldn't be reached",
           });
+    // Maybe the connection itself stopped working (an expired sign-in): Composio is asked, the
+    // connection is marked so ("Reconnect needed"), and Tex is told to send the user there.
+    const trouble = await connectionTroubleNote(conn);
+    const failed = trouble
+      ? new ToolError(`${plainFailure.message} ${trouble}`, {
+          reason: 'the app needs to be connected again',
+        })
+      : plainFailure;
     // Nothing happened: the approval is handed back, for one more try.
     if (consumedId)
       await finishApprovedRun(userId, consumedId, {
@@ -715,7 +751,8 @@ async function runAppAction(userId: string, args: RunArgs, opts: { summary?: str
         reason: failed.reason ?? 'the app refused it',
       });
     if (byRule && consumedId) await publishApproval(userId, consumedId);
-    if (crewJobId) await releaseCrewJobComment(userId, crewJobId);
+    if (crewOpened) await releaseCrewJobGithubAction(crewOpened, args.action);
+    else if (crewJobId) await releaseCrewJobComment(userId, crewJobId);
     if (!(err instanceof ToolError))
       logger().warn({ userId, action: args.action, err: String(err) }, 'composio execute failed');
     // A step's own action: one more try, then the step fails and the run stops.
@@ -974,15 +1011,24 @@ export async function runApprovedAppAction(
       arguments: args,
     });
     // The app's own error may quote the inputs: the log says only that it refused.
-    if (!res.successful)
+    if (!res.successful) {
+      // Maybe the connection stopped working: then it is marked so, and Tex is told.
+      const trouble = await connectionTroubleNote(conn);
       return await failed(
-        `the app refused it: ${res.error ?? 'unknown error'}`,
-        'the app refused the approved request, so nothing was done',
+        `the app refused it: ${res.error ?? 'unknown error'}${trouble ? `. ${trouble}` : ''}`,
+        trouble
+          ? 'the app needs to be connected again, so nothing was done'
+          : 'the app refused the approved request, so nothing was done',
       );
+    }
     data = res.data;
   } catch (err) {
     logger().warn({ userId, action, err: String(err) }, 'composio execute failed');
-    return failed("the app couldn't be reached", "the app couldn't be reached");
+    const trouble = await connectionTroubleNote(conn);
+    return failed(
+      `the app couldn't be reached${trouble ? `. ${trouble}` : ''}`,
+      trouble ? 'the app needs to be connected again' : "the app couldn't be reached",
+    );
   }
   const creditsCharged = changes ? await chargeRan(userId, action, a.id) : 0;
   data = await inlineAppFiles(action, data);

@@ -23,7 +23,7 @@ const pickerAction = (t: ComposioTool, toolkit: string): PickerAction => ({
   slug: t.slug,
   name: t.name && t.name !== t.slug ? t.name : actionTitle(t.slug, toolkit),
   description: t.description,
-  requiresApproval: actionNeedsApproval(t.slug),
+  requiresApproval: actionNeedsApproval(t.slug, { tags: t.tags }),
   changesSomething: actionChangesSomething(t.slug, t.tags),
   inputs: settingsOf(t.inputParameters ?? {}),
 });

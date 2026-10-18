@@ -22,6 +22,7 @@ import {
   channelOfSession,
   DENY_TITLE,
 } from './approval-text.ts';
+import { approvalFacts } from './approval-facts.ts';
 import { approvals, type ApprovedRun, type SkipScope } from './schema.ts';
 import { scopeWords, skipOfferOf, type SkipRule } from './skip-rules.ts';
 import { runTurn, turnForAutomation, turnMessageFields } from './turn.ts';
@@ -285,6 +286,7 @@ export function toApiApproval(a: Approval) {
     summary: a.summary,
     app: a.app,
     action: a.action,
+    facts: approvalFacts(a),
     details: { ...details, ...(a.arguments ? { arguments: a.arguments } : {}) },
     createdAt: a.createdAt.toISOString(),
     expiresAt: a.expiresAt.toISOString(),
@@ -441,6 +443,8 @@ export async function requestApproval(input: {
     })
     .returning();
   const a = row!;
+  // What will really run, from the inputs, under Tex's sentence (approval-facts.ts).
+  const facts = approvalFacts(a);
   const buttons = [
     { id: `apr:${a.id}:yes`, title: APPROVE_TITLE },
     { id: `apr:${a.id}:no`, title: DENY_TITLE },
@@ -452,7 +456,7 @@ export async function requestApproval(input: {
     ...(input.conversationId !== undefined
       ? { conversationId: input.conversationId }
       : await turnMessageFields(input.userId, input.sessionKey)),
-    text: approvalAskText(a.summary, channelOfSession(input.sessionKey)),
+    text: approvalAskText(a.summary, channelOfSession(input.sessionKey), facts),
     approvalId: a.id,
     template: 'approval',
     buttons,
@@ -462,7 +466,7 @@ export async function requestApproval(input: {
   await copyApprovalQuestion(
     input.userId,
     asked,
-    { text: approvalAskText(a.summary, 'telegram'), buttons },
+    { text: approvalAskText(a.summary, 'telegram', facts), buttons },
     a.automationId,
   );
   await publish(input.userId, 'approval.created', toApiApproval(a));

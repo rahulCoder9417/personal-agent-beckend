@@ -5,9 +5,12 @@
 // active:
 //   1. the new connection must still be active;
 //   2. the user's older connections of the same app to the same account are found: the same account
-//      label (the email Composio gives for the account), in any letter case. A label we don't have
-//      is asked of Composio first. With no label on either side nothing is replaced: a second
-//      account of the same app ("Add account") must never be removed;
+//      label, in any letter case. A label we don't have is asked of Composio first, and when
+//      Composio has none (it never gave one on the server), of the app itself, with its own "who am
+//      I" action (account-identity.ts), for a connection that still works. Until 18 October the
+//      app was asked only when Tex looked at the apps, after this job had run, so a reconnect never
+//      found the old connection (the audit's M1). With no label on either side nothing is
+//      replaced: a second account of the same app ("Add account") must never be removed;
 //   3. for each: the user's app-event automations move to the new connection (the automations
 //      module), then the old connection is removed at Composio, then here.
 // Safe to re-run: a connection already gone is skipped, and moving automations is safe to repeat.
@@ -18,6 +21,7 @@ import { db } from '../../shared/db/client.ts';
 import { logger } from '../../shared/logger.ts';
 import { redis } from '../../shared/redis.ts';
 import { moveAppTriggers } from '../automations/automations.ts';
+import { lookUpAccountLabel } from './account-identity.ts';
 import { getConnection, listConnections, type Connection } from './apps.ts';
 import { findApp } from './catalog.ts';
 import { composio } from './composio.ts';
@@ -41,11 +45,14 @@ const olderThan = (a: Connection, b: Connection) =>
   a.createdAt.getTime() < b.createdAt.getTime() ||
   (a.createdAt.getTime() === b.createdAt.getTime() && a.id < b.id);
 
-/** The connection's account label: ours, or asked of Composio and kept. Null when nobody knows. */
+/**
+ * The connection's account label: ours, or asked of Composio and kept, or for a working
+ * connection asked of the app itself and kept. Null when nobody knows.
+ */
 async function labelOf(row: Connection): Promise<string | null> {
   if (row.accountLabel) return row.accountLabel;
   const acc = await composio().account(row.composioAccountId);
-  if (!acc?.label) return null;
+  if (!acc?.label) return lookUpAccountLabel(row);
   await db()
     .update(connections)
     .set({ accountLabel: acc.label })

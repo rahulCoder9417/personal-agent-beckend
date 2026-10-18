@@ -377,7 +377,7 @@ export async function appActionsFor(
         action: t.slug,
         app: s.app.slug,
         description: oneLine(t.description),
-        requires_approval: actionNeedsApproval(t.slug),
+        requires_approval: actionNeedsApproval(t.slug, { tags: t.tags }),
         costs_credits: actionChangesSomething(t.slug, t.tags) ? 1 : 0,
       });
   });
@@ -430,7 +430,7 @@ export async function describeAppAction(action: string): Promise<DescribedAction
     action: tool.slug,
     app: app.slug,
     description: tool.description,
-    requires_approval: actionNeedsApproval(tool.slug),
+    requires_approval: actionNeedsApproval(tool.slug, { tags: tool.tags }),
     costs_credits: actionChangesSomething(tool.slug, tool.tags) ? 1 : 0,
     input_schema: tool.inputParameters,
   };

@@ -1,7 +1,9 @@
 // What the user is shown when the agent asks for their OK (docs/backend-report.md, "Approvals"):
-// the approval's own summary, written as Tex's sentence, and how to answer. It is made from the
-// summary the agent gave, so it is there at once and costs nothing: no model is asked.
+// the approval's own summary, written as Tex's sentence, then for an app action what will really
+// run, written by the server from the action's inputs (approval-facts.ts), and how to answer. No
+// model is asked, so it is there at once and costs nothing.
 import type { Channel } from '../channels/types.ts';
+import { factsLine, type ApprovalFact } from './approval-facts.ts';
 
 /** The buttons under the question, where the chat has buttons. */
 export const APPROVE_TITLE = '✅ Approve';
@@ -78,21 +80,32 @@ export function channelOfSession(sessionKey: string): Channel {
   return sessionKey === 'web' ? 'web' : (sessionKey.split(':')[0] as Channel);
 }
 
+/** The line under Tex's sentence that says what will really run, from the action's inputs. */
+export const FACTS_LEAD = 'What will run:';
+
 /**
  * The question, as Tex says it: what it wants to do, then how to answer. Example: the summary
  * `Send an email to priya@acme.com with subject "Test"` in web chat or on Telegram becomes
  * `I'd like to send an email to priya@acme.com with subject "Test". Approve or Deny below.`
  * A summary that doesn't start with a verb is kept as written: `I'd like your OK for this: …`.
+ * With `facts` (an app action's), a line of its own between the two says what will really run,
+ * whatever Tex wrote: `What will run: Gmail – send email · To: priya@acme.com · Subject: Test`.
  * iMessage has no buttons: its sender adds "Reply YES to approve or NO to deny." itself.
  */
-export function approvalAskText(summary: string, channel: Channel): string {
+export function approvalAskText(
+  summary: string,
+  channel: Channel,
+  facts: ApprovalFact[] = [],
+): string {
   let what = summary.trim().replace(/[\s.]+$/u, '') || summary.trim();
   const first = /^[A-Za-z]+/.exec(what)?.[0] ?? '';
   const isVerb = VERBS.has(first.toLowerCase()) && /^\s/u.test(what.slice(first.length));
   if (isVerb) what = `${first.toLowerCase()}${what.slice(first.length)}`;
   const sentence = isVerb ? `I'd like to ${what}` : `I'd like your OK for this: ${what}`;
   const ended = /[!?]$/u.test(sentence) ? sentence : `${sentence}.`;
-  return HAS_BUTTONS.has(channel) ? `${ended} Approve or Deny below.` : ended;
+  if (!facts.length) return HAS_BUTTONS.has(channel) ? `${ended} Approve or Deny below.` : ended;
+  const asked = `${ended}\n${FACTS_LEAD} ${factsLine(facts)}`;
+  return HAS_BUTTONS.has(channel) ? `${asked}\nApprove or Deny below.` : asked;
 }
 
 /** Where an answer came from (`decidedVia`: `web`, `telegram:button`, …), as the user says it. */

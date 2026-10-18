@@ -114,8 +114,11 @@ describe('asking in web chat', () => {
     const asked = await sayInWeb(user.id, 'email priya a test');
     await waitFor(async () => seen.some((e) => e.type === 'approval.created')).finally(stop);
 
+    // Tex's sentence, then what will really run, written by the server from the inputs.
     const expected =
-      'I\'d like to send an email to priya@acme.com with subject "Test". Approve or Deny below.';
+      'I\'d like to send an email to priya@acme.com with subject "Test".\n' +
+      'What will run: Gmail – send email · To: priya@acme.com · Subject: Test · Text: Hello\n' +
+      'Approve or Deny below.';
     // Saved as Tex's message in the conversation, carrying the approval (the web app draws the card).
     const [question] = await db()
       .select()

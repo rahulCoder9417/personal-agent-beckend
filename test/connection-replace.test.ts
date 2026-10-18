@@ -188,6 +188,39 @@ describe('the same account connected again', () => {
   });
 });
 
+describe('after Reconnect, the app says who the new account is', () => {
+  it('Composio gives no name, so the app is asked: the expired one is replaced and its automation moves', async () => {
+    const user = await chatUser({ plan: 'max' });
+    // Tex had looked once, so the old connection's account is known.
+    const old = await connection(user.id, { label: 'me@example.com', minutesAgo: 60 });
+    const a = await emailAutomation(user.id);
+    await db().update(connections).set({ status: 'expired' }).where(eq(connections.id, old.id));
+    // Reconnected: Composio names nobody, as on the server.
+    const fresh = await connection(user.id, { label: null, composioLabel: null, minutesAgo: 1 });
+    composio.state.identities.set(fresh.accountId, { emailAddress: 'Me@Example.com' });
+
+    expect(await settleConnection(user.id, fresh.id)).toEqual({
+      replaced: [old.id],
+      automationsMoved: 1,
+    });
+    expect(composio.state.whoAmICalls.map((c) => c.connectedAccountId)).toEqual([fresh.accountId]);
+    const moved = await getAutomation(user.id, a.id);
+    expect(triggerOf(moved!.triggerRef)?.connectedAccountId).toBe(fresh.accountId);
+    // The name is kept, so the Apps page shows it at once.
+    expect(await rowsOf(user.id)).toMatchObject([{ id: fresh.id, accountLabel: 'Me@Example.com' }]);
+  });
+
+  it('the app names another account: nothing is replaced', async () => {
+    const user = await chatUser();
+    const old = await connection(user.id, { label: 'work@example.com', minutesAgo: 60 });
+    await db().update(connections).set({ status: 'expired' }).where(eq(connections.id, old.id));
+    const fresh = await connection(user.id, { label: null, composioLabel: null, minutesAgo: 1 });
+    composio.state.identities.set(fresh.accountId, { emailAddress: 'me@example.com' });
+    expect((await settleConnection(user.id, fresh.id))?.replaced).toEqual([]);
+    expect(await rowsOf(user.id)).toHaveLength(2);
+  });
+});
+
 describe('what is never removed', () => {
   it('a second account of the same app ("Add account")', async () => {
     const user = await chatUser({ plan: 'max' });

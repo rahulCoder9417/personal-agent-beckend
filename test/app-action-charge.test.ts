@@ -339,6 +339,7 @@ describe('app-action charge', () => {
     expect(usage.totals).toEqual({
       aiCredits: 0,
       awakeCredits: 1,
+      wakeCredits: 0,
       appActionCredits: 2,
       browserCredits: 0,
       toolCredits: 0,

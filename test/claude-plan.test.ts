@@ -546,7 +546,9 @@ describe('turns', () => {
     // The turn only queued its billing, marked as a Claude plan turn (LiteLLM is not asked).
     expect(await db().select().from(usagePeriods).where(eq(usagePeriods.userId, u.id))).toEqual([]);
     const job = await queue('system').getJob(billTurnJobId(fake.deliveries[0]!.deliveryId));
-    expect(job!.data).toEqual({ userId: u.id, turnId: fake.deliveries[0]!.deliveryId, ai: false });
+    const turnId = fake.deliveries[0]!.deliveryId;
+    // The turn woke the container: it pays that wake's fee, named after the turn.
+    expect(job!.data).toEqual({ userId: u.id, turnId, ai: false, wakePeriod: `turn:${turnId}` });
     await handleBillTurn(job!);
 
     const periods = await db().select().from(usagePeriods).where(eq(usagePeriods.userId, u.id));

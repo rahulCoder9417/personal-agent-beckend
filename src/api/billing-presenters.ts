@@ -62,13 +62,14 @@ export function toLedgerEntry(r: LedgerRow): Schemas['LedgerEntry'] {
 }
 
 /**
- * `appActionCredits` and `paidToolCredits`: what app actions and paid tools cost in this period
- * (they are charged when they run, apart from the sync). Browser time has its own number.
+ * `appActionCredits`, `paidToolCredits` and `wakeCredits`: what app actions, paid tools and wake
+ * fees cost in this period (they are charged apart from the sync). Browser time has its own number.
  */
 export function toUsagePeriod(
   p: UsagePeriod,
   appActionCredits: number,
   paidToolCredits = 0,
+  wakeCredits = 0,
 ): Schemas['UsagePeriod'] {
   const toolCredits = p.toolCredits + paidToolCredits;
   return {
@@ -77,11 +78,18 @@ export function toUsagePeriod(
     aiCredits: p.aiCredits,
     awakeSeconds: p.awakeSeconds,
     awakeCredits: p.awakeCredits,
+    wakeCredits,
     appActionCredits,
     browserSeconds: p.browserSeconds,
     browserCredits: p.browserCredits,
     toolCredits,
-    totalCredits: p.aiCredits + p.awakeCredits + appActionCredits + p.browserCredits + toolCredits,
+    totalCredits:
+      p.aiCredits +
+      p.awakeCredits +
+      wakeCredits +
+      appActionCredits +
+      p.browserCredits +
+      toolCredits,
   };
 }
 

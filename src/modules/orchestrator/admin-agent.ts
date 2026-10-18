@@ -6,6 +6,7 @@
 import { Code, ConnectError } from '@connectrpc/connect';
 import type { Sandbox } from '../../../proto-gen/vm/v1/vm_pb.ts';
 import { conflict, notFound, unavailable } from '../../shared/errors.ts';
+import { newId } from '../../shared/ids.ts';
 import { logger } from '../../shared/logger.ts';
 import { audit } from '../admin/audit.ts';
 import { getActiveUser, type PlanId } from '../auth/users.ts';
@@ -18,6 +19,7 @@ import {
   type AgentSettingsView,
   type RuntimeName,
 } from './agent-settings.ts';
+import { noteWake } from './awake-periods.ts';
 import { browserAvailable, browserWanted, syncBrowser, syncBrowserAfterWake } from './browser.ts';
 import { agentStateOf, ensureSandbox, type AgentState } from './sandbox.ts';
 import { userHasCredits } from './turn.ts';
@@ -192,6 +194,8 @@ export async function adminWakeContainer(
   } catch (err) {
     throw vmError(err, 'wake it');
   }
+  // No wake fee for this wake: the first message while it is awake pays it.
+  await noteWake(user.id, woke.wasStopped, `admin:${newId('wake')}`);
   await syncRuntimeAfterWake(user.id, woke.sandbox);
   await syncBrowserAfterWake(user.id, user.plan, woke.sandbox);
   await audit({

@@ -22,6 +22,7 @@ import {
   type AgentSettingsView,
   type RuntimeName,
 } from './agent-settings.ts';
+import { markAwakePeriodPaid, noteWake, unpaidAwakePeriod } from './awake-periods.ts';
 import { syncBrowserAfterWake } from './browser.ts';
 import { crewOfProgress } from './crew.ts';
 import { ensureSandbox, hasSandbox } from './sandbox.ts';
@@ -109,6 +110,11 @@ export interface EndedTurn {
   id: string;
   /** The engine the turn ran on. Null: no container ran it (a quick reply). */
   engine: RuntimeName | null;
+  /**
+   * The awake period whose wake fee this turn pays: it was the first work in that period (and
+   * did not fail on our side). Null or left out: no wake fee.
+   */
+  wakePeriod?: string | null;
 }
 
 /** Filled in by other modules (billing, Jev routing). Defaults keep a turn working without them. */
@@ -622,6 +628,7 @@ interface Woken {
  */
 async function wakeContainer(
   userId: string,
+  deliveryId: string,
   timer: TurnTimer,
   created: Promise<boolean>,
 ): Promise<Woken | null> {
@@ -652,6 +659,8 @@ async function wakeContainer(
   }
   timer.mark('woken');
   timer.noteWake(woke);
+  // A sleeping container woke for this turn: a new awake period, named after the turn.
+  await noteWake(userId, woke.wasStopped, `turn:${deliveryId}`);
   return { plan: user.plan, woke };
 }
 
@@ -705,7 +714,7 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
   // The container may start waking while the route is decided (routing.ts calls `wakeEarly` once
   // the message is one Jev will judge), so a task does not wait for both one after the other.
   let wakeOnce: Promise<Woken | null> | undefined;
-  const wake = () => (wakeOnce ??= wakeContainer(userId, timer, createdRead));
+  const wake = () => (wakeOnce ??= wakeContainer(userId, input.deliveryId, timer, createdRead));
   const decision = await hooks.route(input, {
     wakeEarly: () => {
       // A wake nobody waits for (the route said simple) must not end as an unhandled error.
@@ -780,9 +789,13 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
     ...(input.forAutomation ? { forAutomation: input.forAutomation } : {}),
     ...(input.automationRunId ? { automationRunId: input.automationRunId } : {}),
   });
+  // The wake fee: if no work has run yet in this awake period, this turn is its first (one Redis
+  // read). It is charged by the turn's billing job, unless the turn fails on our side.
+  const wakePeriod = await unpaidAwakePeriod(userId);
+  const faults = { platform: false };
   const outcome = await deliverTurn(
     input,
-    { text, apps: decision.apps, metadata, engine, log },
+    { text, apps: decision.apps, metadata, engine, log, faults },
     timer,
   ).finally(() => Promise.all([clearTurnEngine(userId), clearTurnConversation(userId)]));
 
@@ -792,7 +805,10 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
   // saved before the lock goes: this engine now has the conversation up to here (a failed turn
   // is not recorded: it gets the recap again), and the message's last state. The two writes don't
   // depend on each other, so they go at once.
-  await hooks.afterTurn(userId, outcome, { id: input.deliveryId, engine });
+  const feePeriod = faults.platform ? null : wakePeriod;
+  await hooks.afterTurn(userId, outcome, { id: input.deliveryId, engine, wakePeriod: feePeriod });
+  // Its fee is in the billing job now: the next turn in this awake period pays none.
+  if (feePeriod) await markAwakePeriodPaid(userId, feePeriod);
   await Promise.all([
     outcome === 'done'
       ? recordEngineTurn(userId, conversation, engine).catch((err: unknown) =>
@@ -841,6 +857,8 @@ async function deliverTurn(
     /** The engine the turn runs on (its refund needs it). */
     engine: RuntimeName;
     log: ReturnType<typeof logger>;
+    /** Set here when the turn failed on our side (it pays no wake fee then). */
+    faults?: { platform: boolean };
   },
   timer: TurnTimer,
 ): Promise<TurnOutcome | null> {
@@ -908,6 +926,7 @@ async function deliverTurn(
           // The user is told first. The refund is a job of its own (retried, given once): it
           // never holds back the reply or the message's last state.
           const endedAt = new Date();
+          if (turn.faults) turn.faults.platform = true;
           await queueOutbound({ userId, ...turnSays(input), text: PLATFORM_FAULT_TEXT });
           await refundFailedTurn(userId, {
             startedAt,

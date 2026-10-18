@@ -243,7 +243,7 @@ describe('dev-user script: a turn without Telegram or the web app', () => {
     expect(withPrefix(out, 'reply')).toEqual(['You said: what is new in Hono?']);
     expect(out.find((l) => l.startsWith('turn '))).toMatch(/^turn done after \d+\.\d s$/);
     expect(out).toContain('message delivered');
-    expect(field(out, 'balance')).toBe('2100');
+    expect(field(out, 'balance')).toBe('2099'); // the turn woke the agent: its 1-credit wake fee
   });
 
   it('send: at zero credits it is refused like the api refuses it, and nothing is queued', async () => {
@@ -639,9 +639,11 @@ describe('dev-user script: approvals, pull-request review, memory, the browser',
     const out = await devUser(['timings', '--email', email, '--last', '5']);
     const turns = out.filter((l) => l.startsWith('turn '));
     expect(turns).toHaveLength(2);
+    // Newest first: the second turn found the container awake; the first one woke it.
     expect(turns[0]).toMatch(
-      /^turn evt_\S+ at \S+ \(web message\): route task, engine hermes, wake cold, done$/,
+      /^turn evt_\S+ at \S+ \(web message\): route task, engine hermes, wake warm, done$/,
     );
+    expect(turns[1]).toMatch(/wake cold, done$/);
     const stageNames = out
       .filter(
         (l) =>

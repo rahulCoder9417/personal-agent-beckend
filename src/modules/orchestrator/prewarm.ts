@@ -7,7 +7,9 @@ import { redis } from '../../shared/redis.ts';
 import { getActiveUserCached } from '../auth/users.ts';
 import { publish } from '../channels/stream.ts';
 import { addJob } from '../events/queues.ts';
+import { newId } from '../../shared/ids.ts';
 import { getAgentSettings } from './agent-settings.ts';
+import { noteWake } from './awake-periods.ts';
 import { ensureSandbox, getAgentStatus } from './sandbox.ts';
 import { userHasCredits } from './turn.ts';
 import { planPriority, vm } from './vm.ts';
@@ -90,6 +92,8 @@ export async function prewarmNow(userId: string): Promise<'woken' | 'already_awa
   try {
     await ensureSandbox(userId);
     const woke = await vm().wakeSandbox({ userId, priority: planPriority(user.plan) });
+    // A new awake period with no work yet: no wake fee now; the first message in it pays it.
+    await noteWake(userId, woke.wasStopped, `prewarm:${newId('wake')}`);
     if (!woke.wasStopped) return 'already_awake';
     await publish(userId, 'agent.status', {
       state: 'awake',

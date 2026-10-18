@@ -130,8 +130,11 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
           bridgeReadyMs: bigint;
         }
       | undefined,
-    /** WakeSandbox's `was_stopped` (a cold start). */
-    wasStopped: true,
+    /**
+     * WakeSandbox's `was_stopped` (a cold start). Null (the default): like a real container, a
+     * user's first wake is cold and the ones after it are warm, until `asleep(userId)`.
+     */
+    wasStopped: null as boolean | null,
     /** Called at each WakeSandbox before it answers (a test can hold the wake there). */
     onWake: undefined as ((req: { userId: string }) => Promise<void>) | undefined,
     /** The Bridge's stage-times report on the turn's last event (`timings_json`). */
@@ -144,7 +147,7 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
      */
     sleepModel: null as { coldWakeMs: number } | null,
   };
-  /** Containers awake under `sleepModel`. */
+  /** Containers awake (under `sleepModel`, and for the default `wasStopped`). */
   const awake = new Set<string>();
   // Agent runtime + the in-container Claude Code sign-in (the code Anthropic shows the user).
   const runtimes = new Map<string, AgentRuntime>();
@@ -211,9 +214,11 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
           },
         };
       }
+      const wasStopped = state.wasStopped ?? !awake.has(req.userId);
+      awake.add(req.userId);
       return {
         sandbox: sandboxView(req.userId, SandboxState.AWAKE),
-        wasStopped: state.wasStopped,
+        wasStopped,
         ...(state.wakeTimings ? { timings: state.wakeTimings } : {}),
       };
     },

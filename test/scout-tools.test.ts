@@ -980,6 +980,8 @@ async function turnReading(
 ): Promise<{ outcome: TurnOutcome; reads: McpResult[]; engine: string | null }> {
   const reads: McpResult[] = [];
   let engine: string | null = null;
+  // The container is awake already: no wake fee, so a balance shows only what reading cost.
+  vm.state.wasStopped = false;
   vm.state.agent = async (_d, mcp) => {
     await during?.();
     engine = await turnEngine(userId);
@@ -1344,6 +1346,7 @@ describe('web_search: part of the Max plan', () => {
         session_key: d.sessionKey,
       });
     });
+    vm.state.wasStopped = false; // awake already: no wake fee
     const u = await agent({ plan: 'pro' });
     await expectContract(
       'sendMessage',
@@ -1702,6 +1705,7 @@ describe('web_search: charging (1 credit per search)', () => {
     expect(usage.totals).toEqual({
       aiCredits: 0,
       awakeCredits: 1,
+      wakeCredits: 0,
       appActionCredits: 0,
       browserCredits: 2,
       toolCredits: 4, // four searches, 1 credit each
@@ -1757,6 +1761,7 @@ describe('web_search: charging (1 credit per search)', () => {
       };
       await mcp('send_message', { text: `Found: ${page.text}`, session_key: d.sessionKey });
     });
+    vm.state.wasStopped = false; // awake already: no wake fee, so the balance shows the search
     const u = await maxAgent();
     await expectContract(
       'sendMessage',

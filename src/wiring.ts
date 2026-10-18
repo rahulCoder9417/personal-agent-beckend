@@ -107,7 +107,12 @@ export function wireModules(): void {
     hasCredits,
     settleBeforeTurn: settleUnbilledTurns,
     afterTurn: (userId, _outcome, turn) =>
-      queueTurnBilling(userId, { turnId: turn.id, ai: aiThroughLiteLLM(turn.engine) }),
+      queueTurnBilling(userId, {
+        turnId: turn.id,
+        ai: aiThroughLiteLLM(turn.engine),
+        // The first work in an awake period pays its wake fee (1 credit), once.
+        wakePeriod: turn.wakePeriod ?? null,
+      }),
     onPlatformFault: (userId, { engine, ...turn }) =>
       queueTurnRefund(userId, { ...turn, ai: aiThroughLiteLLM(engine) }),
   });

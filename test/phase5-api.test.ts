@@ -217,6 +217,7 @@ describe('contract: credits', () => {
     expect(body.totals).toEqual({
       aiCredits: 2,
       awakeCredits: 2,
+      wakeCredits: 0,
       appActionCredits: 0,
       browserCredits: 2,
       toolCredits: 0,

@@ -4,6 +4,7 @@
 // and the reason.
 import { getActiveUser, type User } from '../../modules/auth/users.ts';
 import { listUsagePeriods } from '../../modules/billing/usage.ts';
+import { wakeCreditsBetween } from '../../modules/billing/wake-fee.ts';
 import {
   cancelQueuedCrewJob,
   listCrewJobs,
@@ -61,9 +62,10 @@ const utcMidnight = (now: Date) =>
 async function agentOf(user: User): Promise<Schemas['AdminAgent']> {
   const now = new Date();
   const since = utcMidnight(now);
-  const [view, periods] = await Promise.all([
+  const [view, periods, wakeCredits] = await Promise.all([
     adminAgentView(user.id, user.plan),
     listUsagePeriods(user.id, since, new Date(now.getTime() + 1)),
+    wakeCreditsBetween(user.id, since, new Date(now.getTime() + 1)),
   ]);
   const s = view.settings;
   const sum = (pick: (p: (typeof periods)[number]) => number) =>
@@ -88,6 +90,7 @@ async function agentOf(user: User): Promise<Schemas['AdminAgent']> {
       awakeSeconds: sum((p) => p.awakeSeconds),
       browserSeconds: sum((p) => p.browserSeconds),
       creditsCharged: sum((p) => p.creditsCharged),
+      wakeCredits,
     },
   };
 }

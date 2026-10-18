@@ -391,7 +391,7 @@ export const configSchema = z.object({
    * How many agent containers may be awake at once: the same number as the vm-manager's own
    * AWAKE_CAP (20 if not set there). Used only to say "6/8 awake" in a usage alert.
    */
-  AWAKE_CAP: z.coerce.number().int().positive().default(20),
+  AWAKE_CAP: z.coerce.number().int().positive().default(15),
   /** The deployed commit, passed on by deploy.sh; shown on the admin health page. */
   GIT_COMMIT: optional,
   /** Requests per minute per IP on every endpoint (specific endpoints have stricter limits). */

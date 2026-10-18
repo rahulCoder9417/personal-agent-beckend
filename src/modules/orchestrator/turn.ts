@@ -178,6 +178,43 @@ const KIND: Record<TurnKind, DeliverKind> = {
 /** Retryable: the job waits (server full, vm-manager down). */
 export class RetryableTurnError extends Error {}
 
+/** The vm-manager's fixed prefixes on a ResourceExhausted wake (its grpcserver). Never match a sentence. */
+export const DISK_LIMIT_MARKER = 'disk_limit:';
+export const DISK_GUARD_MARKER = 'disk_guard:';
+
+/** The user's folder is over its size limit: retrying cannot help, so the turn ends and the user is told. */
+export class StorageFullError extends Error {}
+
+const STORAGE_FULL_NOTICE_SECONDS = 3600;
+
+export function storageFullText(): string {
+  return "Your agent's storage is full (over 2 GB), so Tex can't start. Write to support@textcrew.in and we'll help clear it.";
+}
+
+/** Tells the user once an hour that their storage is full, and leaves an audit line each time. */
+async function storageFullNotice(
+  input: TurnInput,
+  said: ReturnType<typeof turnSays>,
+): Promise<void> {
+  const { userId } = input;
+  if (input.inboundMessageId) await setMessageStatus(input.inboundMessageId, 'failed');
+  await audit({
+    userId,
+    actor: 'system',
+    action: 'storage_full',
+    summary: "The agent was not started: the user's storage is over the limit",
+    details: { deliveryId: input.deliveryId, channel: input.channel },
+  });
+  const first = await redis().set(
+    `storage-full-notice:${userId}`,
+    '1',
+    'EX',
+    STORAGE_FULL_NOTICE_SECONDS,
+    'NX',
+  );
+  if (first === 'OK') await queueOutbound({ userId, ...said, text: storageFullText() });
+}
+
 // --- the engine of the turn in progress (HLD 5.1) ----------------------------------------------
 // read_page opens any public address only while the user's turn runs on Claude Code. Every call
 // from a container carries the same token, so the platform can't ask the caller: the worker
@@ -597,6 +634,14 @@ async function wakeContainer(
   try {
     woke = await vm().wakeSandbox({ userId, priority: planPriority(user.plan) });
   } catch (err) {
+    if (err instanceof ConnectError && err.code === Code.ResourceExhausted) {
+      if (err.rawMessage.startsWith(DISK_LIMIT_MARKER)) throw new StorageFullError(err.rawMessage);
+      if (err.rawMessage.startsWith(DISK_GUARD_MARKER))
+        logger().error(
+          { userId, err: err.rawMessage },
+          'server disk nearly full: sandbox not woken, will retry',
+        );
+    }
     if (
       err instanceof ConnectError &&
       [Code.ResourceExhausted, Code.Unavailable, Code.DeadlineExceeded].includes(err.code)
@@ -690,7 +735,15 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
   // The settings (read above, while the container woke) say which engine it must run.
   if (!timer.has('woken'))
     await publish(userId, 'agent.status', { state: 'waking', lastActiveAt: null });
-  const awake = await wake();
+  let awake: Woken | null;
+  try {
+    awake = await wake();
+  } catch (err) {
+    if (!(err instanceof StorageFullError)) throw err;
+    timer.route = 'storage_full';
+    await storageFullNotice(input, said);
+    return 'error';
+  }
   // Suspended while the route was decided: the same as suspended before it.
   if (!awake) return (await isSuspended(userId)) ? 'suspended' : 'error';
   const { woke } = awake;

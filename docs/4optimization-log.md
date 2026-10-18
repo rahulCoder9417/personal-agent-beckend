@@ -48,6 +48,22 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 18 October 2026: The wake fee is removed; waking the agent costs nothing extra
+
+- **Where it is:** `main` in the backend, the web app, the landing page and the admin panel; deployed to the test server.
+- **Why:** a few hours earlier the same day a wake fee went live at 1 credit each time the agent woke to do work. The founder meant a tiny amount (0.0025 credit per wake, which is 1 credit per 400 wakes), then chose no fee at all: waking costs us almost nothing (about 3 seconds to start the container), and the awake time, now 1 credit per 5 minutes, already pays for the awake place a wake holds.
+- **What the user notices:** no "Waking your agent" line any more in the credit costs, the pricing box, Help, automations or the usage list. A typical active day now uses about 12 to 14 credits instead of 18 to 22, so the 100 free credits last about 7 to 8 days of real use. Example: a 1-minute chat after the agent slept now costs about 0.2 credit of running time, not 1.2.
+- **Backend:** the fee's amount is one number in the code, now 0; at 0 nothing is charged and no ledger row is written. The parts that find each awake period stay, so a fee could come back by changing that number. The usage report keeps `wakeCredits`; it is 0 except for the hours the fee was live.
+- **Refund:** a new script, `scripts/refund-wake-fees.ts`, gives back every wake charge made while the fee was live: one admin grant per charge, keyed by the charge's own id, so running it twice gives nothing twice. Without `--apply` it only lists what it would give back.
+- **Contracts:** `openapi.yaml` descriptions only (the prewarm, the admin wake, the Claude sign-in, `wakeCredits`); no field removed.
+- **Database:** none.
+- **How it was checked:** the wake-fee tests now check that no wake charge is written for a work wake, a second wake after sleep, or a prewarm then a message. The billing, browser, pull-request review and dev-user tests expect one credit less where the fee used to be. Backend full suite (two unrelated flaky tests passed on a re-run), lint and type check; web lint, tests, build and type check; landing lint and build; admin panel lint, type check and tests.
+- **Still open:** run the refund script on the server after the deploy.
+- **Docs updated:** hld-mvp sections 7 (cost table, the 18 October decision); backend-report sections 24 to 26 (the wake fee marked removed, the example without it).
+- **Commits:** the commit that adds this entry, in each repo.
+
+---
+
 ### 18 October 2026: Free credits last 14 days, awake time costs more, a fee for each wake, and two free-credit loopholes closed
 
 - **Where it is:** merged to `main` in the backend, the vm-manager and the web app; deployed to the test server with the disk limit below.

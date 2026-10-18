@@ -512,7 +512,7 @@ describe('a pull request is opened or gets new commits', () => {
         arguments: { owner: 'acme', repo: 'website', pull_number: 12 },
       },
     ]);
-    expect(await getBalance(u.id)).toBe(998); // the review, and the wake fee of Patch's turn
+    expect(await getBalance(u.id)).toBe(999); // the review (no wake fee since 18 Oct 2026)
     // Everything else risky in the same turn still waits for the user.
     for (const k of ['otherRepo', 'merge', 'approve', 'email'] as const) {
       expect(tried[k]!.isError, k).toBe(true);

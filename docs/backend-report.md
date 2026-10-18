@@ -2240,7 +2240,7 @@ An idempotency key is a unique name for one change. The ledger refuses a second 
 | Change | The key is built from |
 |---|---|
 | Sign-up credits | The user |
-| Wake fee | The user and the awake period |
+| Wake fee (removed 18 Oct 2026; amount now 0) | The user and the awake period |
 | Monthly credits | The subscription and the start of the paid period |
 | Top-up, refund, chargeback | The order id or refund id from Polar, the payment company |
 | Coupon | The coupon and the user |
@@ -2257,7 +2257,6 @@ This section lists everything that is charged, its price, and how it is measured
 |---|---|---|
 | Textcrew AI | Real cost × 2.5, rounded up | LiteLLM's cost for the user's key |
 | Awake time | 1 credit per 5 minutes | Seconds the container was awake |
-| Waking the agent (the wake fee) | 1 credit each time the container wakes from sleep to do work | Once per awake period, when its first work starts |
 | App action that changes something | 1 credit per successful action | Counted when the action runs |
 | Browser time (Max only) | 2 credits per minute | Seconds the browser was in use |
 | Web search through Textcrew (Max only) | 1 credit per successful search | Counted when the search runs |
@@ -2265,7 +2264,7 @@ This section lists everything that is charged, its price, and how it is measured
 
 - **Textcrew AI** is the AI that Textcrew rents and sells on. LiteLLM is the gateway all model calls go through. Example: a turn uses $0.031 of AI. That is 7.75 credits, charged as 8.
 - **Awake time** counts every second the user's container runs. The container is the closed-off computer the agent lives in. The idle minutes after a turn, before it is stopped, count too. It was 1 credit per 10 minutes until 18 October 2026.
-- **The wake fee** is 1 credit each time the container wakes from sleep to do work: a message (web or Telegram), an automation or reminder run, a crew job, the turn that tells Tex an approved action ran. It is paid once per awake period: more messages while the container is awake pay none. A wake with no work pays only its awake time: the web app waking the container ahead of a message that never comes, or connecting a Claude plan. If such a wake is followed by a message while the container is still awake, that message pays the fee, once. A turn that fails because of us pays no fee. It started on 18 October 2026.
+- **No wake fee.** Waking the container costs nothing extra; only its awake time is charged. From the morning of 18 October 2026 to the afternoon of the same day there was a fee of 1 credit each time the container woke to do work. It was removed because the awake time already pays for the place a wake holds.
 - **An app action** is one thing the agent does in a connected app, such as sending an email.
 - **Browser time** is charged on top of awake time. Both run while the browser is open.
 - **Quick replies.** A simple message can be answered by the cheap model without the container. Its cost is part of the AI cost.
@@ -2361,18 +2360,9 @@ Full example: a Pro user on Textcrew AI sends a message while the container is a
 
 **The change from 10 to 5 minutes (18 October 2026).** The charge of each sync is "the blocks the new seconds complete", worked out at one rate: the total before the period is only the starting mark. So time charged at the old rate is never charged again, whatever the total. Seconds left over at the old rate, never charged, count on at the new rate: up to 4 minutes 59 seconds of them carry over and the rest are dropped. And the seconds not yet charged when the new code starts (at most the 5 minutes since the last sync) are charged at the new rate. Each of these is at most 1 credit, once per user.
 
-### The wake fee
+### The wake fee (removed)
 
-1 credit each time the container wakes to do work (section 24). How it is found and charged:
-
-1. The vm-manager's answer to a wake says whether the container was asleep (`was_stopped`). Each wake the backend asks for writes down, in Redis, that a new awake period began, under a name: the turn's own event when a turn woke it, or a fresh name for the web app's prewarm or an admin's wake.
-2. When a turn is about to hand its work to the container, it looks whether the current period has paid its fee. If not, this turn is its first work: the turn's billing job gets the period's name, and the period is marked paid.
-3. The billing job charges 1 credit first, with the idempotency key "the user and the period", then the usage. The ledger row reads "Waking your agent". A second run of the job, a second job naming the same period, or a turn tried again after the container slept meanwhile (its wake has the same name: the turn's event) charges nothing more.
-4. The check before a turn sees the fee too: when two earlier turns still wait for their billing, the worker charges their fees with their usage.
-5. A turn that fails because of us passes no period. The period stays unpaid, so the next work in it pays the fee.
-6. Any grant may pay it, like awake time. The usage report shows it apart, as `wakeCredits`, and the admin's view of a user shows today's.
-
-What it can miss: when Redis is down or loses the note, no fee is charged (never two). A wake the vm-manager makes by itself, for a Claude sign-in or sign-out, writes nothing down: a message in such an awake period pays the fee only if the period before it ended unpaid.
+There is no wake fee. For a few hours on 18 October 2026 it was 1 credit each time the container woke to do work, then the founder removed it. The parts that found each awake period stay in place (the vm-manager says whether the container was asleep, and the backend names each awake period in Redis), and the fee's amount is a single number in the code, now 0. At 0 nothing is charged and no ledger row is written. The usage report still has `wakeCredits`: it is 0, except for the few hours the fee was live.
 
 ### Why a re-run cannot charge twice
 
@@ -2441,7 +2431,7 @@ Connecting a Claude plan wakes the container too, so it needs credits the same w
 - In web chat the api's own check does not see an unbilled turn. When it lets a message through that the worker then refuses, the out-of-credits reply comes in the chat.
 - The look at the waiting turns is one read in Redis: it adds no trip to the database to a turn.
 
-Example: Asha has 1 credit, and each of her turns keeps the container awake 5 minutes, which is 1 credit. Her first message runs and wakes her container: 1 credit more, the wake fee. Her second, sent right after, runs too: the first turn is not billed yet, and the balance still shows 1. Before her third message the worker bills the first two turns itself: 3 credits (2 for the time, 1 for the wake). Her balance is -2, and she gets the out-of-credits reply. The two billing jobs run later and charge nothing more.
+Example: Asha has 1 credit, and each of her turns keeps the container awake 5 minutes, which is 1 credit. Her first message runs. Her second, sent right after, runs too: the first turn is not billed yet, and the balance still shows 1. Before her third message the worker bills the first two turns itself: 2 credits for the time. Her balance is -1, and she gets the out-of-credits reply. The two billing jobs run later and charge nothing more.
 
 ### A turn that is already running
 

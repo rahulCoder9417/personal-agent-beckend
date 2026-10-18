@@ -347,7 +347,7 @@ describe('browser time and credits', () => {
     const sync = await syncUsageForUser(u.id);
     fake.state.usage.delete(u.id);
     expect(sync.charged).toBe(20);
-    expect(sync.balance).toBe(-11); // and 1 for the wake that turn made
+    expect(sync.balance).toBe(-10); // no wake fee (removed 18 Oct 2026)
     expect(await turn(u.id)).toBe('out_of_credits');
     expect(fake.wakes.filter((id) => id === u.id)).toHaveLength(1);
   });

@@ -1,10 +1,9 @@
-// The wake fee (decided 18 Oct 2026): 1 credit each time the agent's container wakes from sleep
-// to do work, on top of its awake time. It is charged once per awake period that runs work: the
-// orchestrator names the period (orchestrator/awake-periods.ts, from the vm-manager's
-// `was_stopped`), the turn passes it to its billing job, and the charge is keyed by it, so a
-// second turn in the same period, a re-run job or a second job of the same turn charges nothing
-// more. Like app actions it is its own ledger row (`meta.kind = wake`), so the usage report and
-// the admin can show it apart from awake time. Any grant may pay it, like awake time.
+// The wake fee. On 18 Oct 2026 it was briefly 1 credit each time the agent's container woke from
+// sleep to do work; the same day the founder removed it: waking costs nothing extra, and the agent
+// pays only its awake time (1 credit per 5 minutes), which already covers the awake place a wake
+// holds. The plumbing stays (the orchestrator still names each awake period, and `wakeCredits` in
+// usage reads past charges) so the fee can come back by changing WAKE_FEE_CREDITS; at 0 nothing is
+// charged and no ledger row is written.
 import { db } from '../../shared/db/client.ts';
 import { getBalance, spendInTx } from './credits.ts';
 import { maybeQueueAutoTopUp } from './auto-topup.ts';
@@ -13,8 +12,8 @@ import { itemCreditsFor, listItemCharges } from './item-charges.ts';
 
 /** `meta.kind` of a wake-fee charge in the ledger. */
 export const WAKE_KIND = 'wake';
-/** 1 credit each time the container wakes to do work. */
-export const WAKE_FEE_CREDITS = 1;
+/** No wake fee (removed 18 Oct 2026). Was 1 credit each time the container woke to do work. */
+export const WAKE_FEE_CREDITS = 0;
 export const WAKE_FEE_DESCRIPTION = 'Waking your agent';
 
 const wakeKey = (userId: string, period: string) => `wake:${userId}:${period}`;
@@ -28,6 +27,7 @@ export async function chargeWakeFee(
   input: { period: string; turnId: string },
   now = new Date(),
 ): Promise<{ charged: number }> {
+  if (WAKE_FEE_CREDITS <= 0) return { charged: 0 };
   const { charged } = await db().transaction((tx) =>
     spendInTx(
       tx,

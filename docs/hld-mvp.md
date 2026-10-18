@@ -385,7 +385,6 @@ The launch prices were set on 16 October, to be looked at again later. A checkou
 | Thing | Price |
 |---|---|
 | Textcrew AI | Its real cost times 2.5 |
-| The container waking to do work | 1 credit each time |
 | The container being awake | 1 credit per 5 minutes |
 | An app action that changes something | 1 credit |
 | Scout's browser | 2 credits per minute |
@@ -426,7 +425,7 @@ When it is on:
 - After 2 declined cards in a row it turns itself off, and the user is told in the web chat and on Telegram. With no saved card, or when Polar refuses for another reason, it turns off at once and says so.
 - With the setting on, Pricing and Help no longer say that nothing is ever charged at zero.
 
-**Decided on 18 October:** sign-up credits last 14 days (they lasted 90), awake time costs 1 credit per 5 minutes (it was 10), and each time the container wakes to do work costs 1 more credit. A typical active day now uses about 18 to 22 credits, so the 100 free credits last about 4 to 6 days of real use.
+**Decided on 18 October:** sign-up credits last 14 days (they lasted 90), and awake time costs 1 credit per 5 minutes (it was 10). Waking the container costs nothing extra: a 1-credit wake fee was live for a few hours the same day and then removed, because the time charge already pays for the awake place a wake holds. A typical active day uses about 12 to 14 credits, so the 100 free credits last about 7 to 8 days of real use.
 
 ---
 

@@ -119,7 +119,7 @@ const periodsOf = (userId: string) =>
 
 const usageCharges = async (userId: string) =>
   (await ledgerOf(userId)).filter((l) => l.description.startsWith('Usage:'));
-/** The wake fees charged (1 credit each time the container woke to do work). */
+/** Wake-fee charges: none since the fee was removed (18 Oct 2026). */
 const wakeFees = async (userId: string) =>
   (await ledgerOf(userId)).filter((l) => l.description === 'Waking your agent').map((l) => l.delta);
 
@@ -154,21 +154,21 @@ describe('the reply and the lock come first', () => {
     expect(await periodsOf(u.id)).toEqual([]); // one turn waiting was allowed: no billing in turn 2
     expect(Object.keys(await unbilledTurns(u.id)).sort()).toEqual([turn1, turn2].sort());
 
-    // Billing runs: both turns charged, once, and the web app gets the new balance. The first
-    // turn woke the container: its wake fee too; the second ran while it was awake: none.
+    // Billing runs: both turns charged, once, and the web app gets the new balance. No wake fee
+    // (removed 18 Oct 2026): waking costs nothing extra.
     const balances: number[] = [];
     const stop = await subscribe(u.id, (e) => {
       if (e.type === 'credits.updated') balances.push((e.data as { balance: number }).balance);
     });
     startBilling();
     await turnsBilled(u.id);
-    await waitFor(async () => balances.includes(97));
+    await waitFor(async () => balances.includes(98));
     stop();
     expect(await jobState(turn1!)).toBe('completed');
     expect(await jobState(turn2)).toBe('completed');
-    expect(await getBalance(u.id)).toBe(97);
+    expect(await getBalance(u.id)).toBe(98);
     expect((await usageCharges(u.id)).reduce((n, l) => n + l.delta, 0)).toBe(-2);
-    expect(await wakeFees(u.id)).toEqual([-1]);
+    expect(await wakeFees(u.id)).toEqual([]);
     expect(await ledgerMatchesGrants(u.id)).toBe(true);
   });
 });
@@ -224,9 +224,9 @@ describe('the billing job', () => {
     expect(state).toBe('completed');
     expect(job.attemptsMade).toBe(2);
     expect((await usageCharges(u.id)).map((l) => l.delta)).toEqual([-9]);
-    // The wake fee was charged on the first try; the second try charged it no more.
-    expect(await wakeFees(u.id)).toEqual([-1]);
-    expect(await getBalance(u.id)).toBe(90);
+    // No wake fee (removed 18 Oct 2026).
+    expect(await wakeFees(u.id)).toEqual([]);
+    expect(await getBalance(u.id)).toBe(91);
     expect(await ledgerMatchesGrants(u.id)).toBe(true);
   });
 
@@ -240,13 +240,12 @@ describe('the billing job', () => {
     await turnOver(u, id);
     await syncAllUsage();
     expect(await getBalance(u.id)).toBe(99);
-    // Its job runs after all, later: the usage is not charged again; only the wake fee, which
-    // only the turn's job charges.
+    // Its job runs after all, later: the usage is not charged again, and there is no wake fee.
     startBilling();
     await turnsBilled(u.id);
-    expect(await getBalance(u.id)).toBe(98);
+    expect(await getBalance(u.id)).toBe(99);
     expect(await usageCharges(u.id)).toHaveLength(1);
-    expect(await wakeFees(u.id)).toEqual([-1]);
+    expect(await wakeFees(u.id)).toEqual([]);
     expect(await ledgerMatchesGrants(u.id)).toBe(true);
   });
 });
@@ -282,9 +281,9 @@ describe('what a turn costs, by who pays for the AI', () => {
       (await usageCharges(userId)).map((l) => [l.delta, l.description]);
     expect(await charge(before.id)).toEqual([[-9, 'Usage: AI 8, awake time 1']]);
     expect(await charge(now.id)).toEqual(await charge(before.id));
-    // And the real turn woke the container: its wake fee.
-    expect(await wakeFees(now.id)).toEqual([-1]);
-    expect(await getBalance(now.id)).toBe(90);
+    // The real turn woke the container: no wake fee (removed 18 Oct 2026).
+    expect(await wakeFees(now.id)).toEqual([]);
+    expect(await getBalance(now.id)).toBe(91);
   });
 
   it("the user's Claude plan: LiteLLM is never asked; awake time is still charged", async () => {
@@ -304,7 +303,7 @@ describe('what a turn costs, by who pays for the AI', () => {
     await turnsBilled(u.id);
     const turnId = fake.deliveries[0]!.deliveryId;
     expect((await queue('system').getJob(billTurnJobId(turnId)))!.data.ai).toBe(false);
-    expect(await getBalance(u.id)).toBe(97); // 2 for awake time, 1 for the wake
+    expect(await getBalance(u.id)).toBe(98); // 2 for awake time, no wake fee
     const [period] = await periodsOf(u.id);
     expect(period).toMatchObject({ aiCostMicroUsd: 0, aiCredits: 0, awakeCredits: 2 });
 
@@ -322,7 +321,7 @@ describe('what a turn costs, by who pays for the AI', () => {
     expect(state).toBe('completed');
     expect(refund.returnvalue).toEqual({ restored: 1 });
     await turnsBilled(u.id);
-    expect(await getBalance(u.id)).toBe(97);
+    expect(await getBalance(u.id)).toBe(98);
 
     expect(llm.keySpendReads).toBe(0);
     expect(llm.spendLogReads).toBe(0);
@@ -342,21 +341,21 @@ describe('out of credits still holds', () => {
     await turnOver(u, await send(u, 'one')); // balance 1: runs
     await turnOver(u, await send(u, 'two')); // one turn unbilled: runs
     expect(fake.deliveries).toHaveLength(2);
-    await turnOver(u, await send(u, 'three')); // two unbilled: billed first (with the wake fee), then refused
+    await turnOver(u, await send(u, 'three')); // two unbilled: billed first, then refused
 
     expect(fake.deliveries).toHaveLength(2);
     expect(await repliesOf(u.id)).toEqual(
       ['echo: one', 'echo: two', outOfCreditsText('web')].sort(),
     );
-    expect(await getBalance(u.id)).toBe(-2); // 2 for awake time, 1 for the first turn's wake
+    expect(await getBalance(u.id)).toBe(-1); // 2 for awake time, no wake fee
     expect(await unbilledTurns(u.id)).toEqual({});
 
     // The two billing jobs run later and charge nothing more.
     startBilling();
     for (const d of fake.deliveries)
       await waitFor(async () => (await jobState(d.deliveryId)) === 'completed');
-    expect(await getBalance(u.id)).toBe(-2);
-    expect(await wakeFees(u.id)).toEqual([-1]);
+    expect(await getBalance(u.id)).toBe(-1);
+    expect(await wakeFees(u.id)).toEqual([]);
     expect(await ledgerMatchesGrants(u.id)).toBe(true);
   });
 });

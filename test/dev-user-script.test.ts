@@ -243,7 +243,7 @@ describe('dev-user script: a turn without Telegram or the web app', () => {
     expect(withPrefix(out, 'reply')).toEqual(['You said: what is new in Hono?']);
     expect(out.find((l) => l.startsWith('turn '))).toMatch(/^turn done after \d+\.\d s$/);
     expect(out).toContain('message delivered');
-    expect(field(out, 'balance')).toBe('2099'); // the turn woke the agent: its 1-credit wake fee
+    expect(field(out, 'balance')).toBe('2100'); // no wake fee (removed 18 Oct 2026)
   });
 
   it('send: at zero credits it is refused like the api refuses it, and nothing is queued', async () => {

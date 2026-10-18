@@ -278,7 +278,7 @@ describe('charging', () => {
 
     // On the own key: only awake time.
     llm.spend(u.id, ownModel, 0.04);
-    vm.add(u.id, 600);
+    vm.add(u.id, 300);
     expect((await syncUsageForUser(u.id)).charged).toBe(1);
     expect(await getBalance(u.id)).toBe(89);
 

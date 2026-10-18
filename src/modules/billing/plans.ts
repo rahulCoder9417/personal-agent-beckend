@@ -34,15 +34,26 @@ export interface PlanDef {
 
 export const SIGNUP_CREDITS = 100;
 /**
- * Every credit lasts 90 days from the day it's granted, whatever the source (sign-up, monthly,
- * top-up, coupon). Unused monthly credits therefore carry over for up to 90 days.
+ * Credits last 90 days from the day they're granted (monthly, top-up, admin; a coupon's default).
+ * Unused monthly credits therefore carry over for up to 90 days. The sign-up credits are the one
+ * exception: SIGNUP_CREDIT_EXPIRY_DAYS.
  */
 export const CREDIT_EXPIRY_DAYS = 90;
+/**
+ * The 100 sign-up credits last 14 days (decided 18 Oct 2026; they lasted 90 before). Grants
+ * already made keep their own date.
+ */
+export const SIGNUP_CREDIT_EXPIRY_DAYS = 14;
 const DAY_MS = 24 * 3600 * 1000;
 
 /** When a grant made at `from` expires. */
 export function creditExpiry(from: Date = new Date()): Date {
   return new Date(from.getTime() + CREDIT_EXPIRY_DAYS * DAY_MS);
+}
+
+/** When the sign-up grant made at `from` expires. */
+export function signupCreditExpiry(from: Date = new Date()): Date {
+  return new Date(from.getTime() + SIGNUP_CREDIT_EXPIRY_DAYS * DAY_MS);
 }
 /** Total Composio apps in the catalogue ("All 25"). */
 export const ALL_APPS = 25;
@@ -71,7 +82,7 @@ export const PLANS: Record<PlanId, PlanDef> = {
       '10 apps',
       '1 automation',
       'Bring your own key',
-      'Credits last 90 days',
+      'Sign-up credits last 14 days',
     ],
   },
   pro: {
@@ -208,7 +219,12 @@ export function keyModelsForPlan(plan: PlanId): string[] {
 /** 1 credit = $0.01 of price, prices are 2.5× real cost → 1 credit = $0.004 of real cost. */
 export const MARKUP = 2.5;
 const CREDITS_PER_USD = MARKUP * 100; // 250
-export const AWAKE_SECONDS_PER_CREDIT = 600; // 1 credit per 10 minutes awake
+/**
+ * 1 credit per 5 minutes awake (from 18 Oct 2026; 10 minutes before). The sync charges the blocks
+ * the new seconds complete, so a change of rate never charges time already charged again
+ * (usage.ts, `blocks`).
+ */
+export const AWAKE_SECONDS_PER_CREDIT = 300;
 export const BROWSER_SECONDS_PER_CREDIT = 30; // 2 credits per minute
 
 /** Real AI cost (micro-USD) → credits, rounded up. */

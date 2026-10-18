@@ -119,7 +119,7 @@ describe('the refund job', () => {
     const u = await member(100);
     const startedAt = new Date(Date.now() - 30_000);
     llm.spend(u.id, 'cheap', 0.02, Date.now() - 20_000); // 5 credits inside the turn
-    vm.add(u.id, 600, 0, Date.now() - 10_000); // 1 credit inside the turn
+    vm.add(u.id, 300, 0, Date.now() - 10_000); // 1 credit inside the turn
     const endedAt = new Date();
     await syncUsageForUser(u.id);
     expect(await getBalance(u.id)).toBe(94);
@@ -151,7 +151,7 @@ describe('the refund job', () => {
     const u = await member(100, 'max');
     const startedAt = new Date(Date.now() - 30_000);
     llm.spend(u.id, 'cheap', 0.02, Date.now() - 20_000); // 5 credits of AI: not given back
-    vm.add(u.id, 600, 90, Date.now() - 10_000); // 1 awake + 3 browser: given back
+    vm.add(u.id, 300, 90, Date.now() - 10_000); // 1 awake + 3 browser: given back
     const endedAt = new Date();
     await syncUsageForUser(u.id);
     expect(await getBalance(u.id)).toBe(91);

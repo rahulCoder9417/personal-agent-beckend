@@ -6,7 +6,13 @@ import { afterCreditsAdded } from '../src/modules/billing/enforce.ts';
 import { onBalanceDepleted, onCreditsAdded } from '../src/modules/billing/hooks.ts';
 import { syncLiteLLMKey } from '../src/modules/billing/litellm.ts';
 import { usagePeriods } from '../src/modules/billing/schema.ts';
-import { reverseTurn, syncAllUsage, syncUsageForUser } from '../src/modules/billing/usage.ts';
+import { AWAKE_SECONDS_PER_CREDIT } from '../src/modules/billing/plans.ts';
+import {
+  blocks,
+  reverseTurn,
+  syncAllUsage,
+  syncUsageForUser,
+} from '../src/modules/billing/usage.ts';
 import { setByokKey } from '../src/modules/integrations/byok.ts';
 import { db } from '../src/shared/db/client.ts';
 import { installFakes, member, type FakeLiteLLM, type FakeVm } from './billing-fakes.ts';
@@ -20,31 +26,31 @@ describe('sync-usage', () => {
   it('usage lowers the balance correctly (AI × 2.5 rounded up, awake, browser)', async () => {
     const u = await member(100);
     llm.spend(u.id, 'cheap', 0.0201); // → ceil(5.025) = 6 credits
-    vm.add(u.id, 25 * 60, 90); // 25 min awake → 2 credits; 90 s browser → 3 credits
+    vm.add(u.id, 27 * 60, 90); // 27 min awake → 5 credits; 90 s browser → 3 credits
     const res = await syncUsageForUser(u.id);
-    expect(res.charged).toBe(11);
-    expect(res.balance).toBe(89);
-    expect(await getBalance(u.id)).toBe(89);
+    expect(res.charged).toBe(14);
+    expect(res.balance).toBe(86);
+    expect(await getBalance(u.id)).toBe(86);
     const [period] = await db().select().from(usagePeriods).where(eq(usagePeriods.userId, u.id));
     expect(period).toMatchObject({
       aiCostMicroUsd: 20100,
       aiCredits: 6,
-      awakeSeconds: 1500,
-      awakeCredits: 2,
+      awakeSeconds: 1620,
+      awakeCredits: 5,
       browserSeconds: 90,
       browserCredits: 3,
       toolCredits: 0,
-      creditsCharged: 11,
+      creditsCharged: 14,
     });
-    // Budget follows the balance: $0.356 of real cost left on top of what was spent.
-    expect(llm.remainingBudget(u.id)).toBeCloseTo(89 / 250, 6);
+    // Budget follows the balance: $0.344 of real cost left on top of what was spent.
+    expect(llm.remainingBudget(u.id)).toBeCloseTo(86 / 250, 6);
     expect(await ledgerMatchesGrants(u.id)).toBe(true);
   });
 
   it('re-running a sync does not double-charge (same window, later window, in parallel)', async () => {
     const u = await member(100);
     llm.spend(u.id, 'cheap', 0.004); // 1 credit
-    vm.add(u.id, 600); // 1 credit
+    vm.add(u.id, 300); // 1 credit
     const now = new Date();
     const runs = await Promise.all([1, 2, 3, 4].map(() => syncUsageForUser(u.id, now)));
     expect(runs.map((r) => r.charged).sort()).toEqual([0, 0, 0, 2]);
@@ -58,12 +64,12 @@ describe('sync-usage', () => {
     ).toHaveLength(1);
   });
 
-  it('carries partial 10-minute blocks between syncs', async () => {
+  it('carries partial 5-minute blocks between syncs', async () => {
     const u = await member(100);
-    vm.add(u.id, 300, 0, Date.now() - 1000);
+    vm.add(u.id, 150, 0, Date.now() - 1000);
     expect((await syncUsageForUser(u.id)).charged).toBe(0);
     await new Promise((r) => setTimeout(r, 5));
-    vm.add(u.id, 300);
+    vm.add(u.id, 150);
     expect((await syncUsageForUser(u.id, new Date(Date.now() + 1))).charged).toBe(1);
   });
 
@@ -137,7 +143,7 @@ describe('sync-usage', () => {
     await syncLiteLLMKey(u.id);
     expect(llm.remainingBudget(u.id)).toBeNull();
     llm.spend(u.id, 'cheap', 1); // $1 of AI on their own key
-    vm.add(u.id, 600);
+    vm.add(u.id, 300);
     expect((await syncUsageForUser(u.id)).charged).toBe(1);
     expect(await getBalance(u.id)).toBe(99);
   });
@@ -151,6 +157,62 @@ describe('sync-usage', () => {
     expect(res.failed).toBe(0);
     expect(await getBalance(a.id)).toBe(99);
     expect(await getBalance(b.id)).toBe(98);
+  });
+});
+
+// Awake time went from 1 credit per 10 minutes to 1 credit per 5 minutes on 18 Oct 2026. The sync
+// charges only the blocks that the new seconds complete, so time charged at the old rate is never
+// charged again, and the part-credit left over at the old rate costs at most 1 credit, once.
+describe('awake time: 1 credit per 5 minutes, and the change from 10 minutes', () => {
+  /** Awake time charged before the change: one period of `seconds`, charged at 600 s a credit. */
+  async function chargedAtOldRate(userId: string, seconds: number) {
+    const end = new Date(Date.now() - 10_000);
+    await db()
+      .insert(usagePeriods)
+      .values({
+        id: `use_old_${userId}`,
+        userId,
+        periodStart: new Date(end.getTime() - 3600_000),
+        periodEnd: end,
+        awakeSeconds: seconds,
+        awakeCredits: Math.floor(seconds / 600),
+        creditsCharged: Math.floor(seconds / 600),
+      });
+  }
+  const sync = async (userId: string, awake: number) => {
+    await new Promise((r) => setTimeout(r, 5));
+    vm.add(userId, awake);
+    return (await syncUsageForUser(userId, new Date(Date.now() + 1))).charged;
+  };
+
+  it('is 300 seconds a credit', () => {
+    expect(AWAKE_SECONDS_PER_CREDIT).toBe(300);
+    expect(blocks(0, 300, AWAKE_SECONDS_PER_CREDIT)).toBe(1);
+    expect(blocks(0, 3600, AWAKE_SECONDS_PER_CREDIT)).toBe(12);
+  });
+
+  it('time charged at the old rate is not charged again; new time is charged at the new rate', async () => {
+    const u = await member(100);
+    await chargedAtOldRate(u.id, 1200); // 20 minutes, 2 credits at the old rate
+    // Charged again at the new rate, the whole history would be 4 more; only the new time counts.
+    expect(await sync(u.id, 300)).toBe(1);
+    expect(await sync(u.id, 600)).toBe(2);
+    expect(await getBalance(u.id)).toBe(97);
+    expect(await ledgerMatchesGrants(u.id)).toBe(true);
+  });
+
+  it('the part-credit left at the old rate costs at most 1 credit, once', async () => {
+    // 15 minutes at the old rate: 1 credit charged, 5 minutes left over that were never charged.
+    const a = await member(100);
+    await chargedAtOldRate(a.id, 900);
+    expect(await sync(a.id, 100)).toBe(0); // the 5 minutes left over are dropped
+    expect(await sync(a.id, 200)).toBe(1); // 300 new seconds: 1 credit
+    // 19 minutes 59 seconds at the old rate: 1 credit charged, 599 seconds left over.
+    const b = await member(100);
+    await chargedAtOldRate(b.id, 1199);
+    expect(await sync(b.id, 1)).toBe(1); // the old rate would have charged it too (1,200 s)
+    expect(await sync(b.id, 299)).toBe(0);
+    expect(await sync(b.id, 300)).toBe(1);
   });
 });
 
@@ -169,8 +231,8 @@ describe('browser time: 2 credits per minute, charged once by the usage sync', (
     vm.add(u.id, 0, 60);
     expect((await syncUsageForUser(u.id)).charged).toBe(2);
     await new Promise((r) => setTimeout(r, 5));
-    // A five-minute browser session in a container that was awake for ten minutes.
-    vm.add(u.id, 600, 300);
+    // A five-minute browser session in a container that was awake for five minutes.
+    vm.add(u.id, 300, 300);
     const res = await syncUsageForUser(u.id, new Date(Date.now() + 1));
     expect(res.charged).toBe(11); // 10 for the browser, 1 for the awake time
     expect(res.balance).toBe(87);
@@ -218,7 +280,7 @@ describe('browser time: 2 credits per minute, charged once by the usage sync', (
 
   it('shows in usage as browserSeconds and browserCredits, apart from paid tools', async () => {
     const u = await member(100, 'max');
-    vm.add(u.id, 600, 120);
+    vm.add(u.id, 300, 120);
     await syncUsageForUser(u.id);
     const from = new Date(Date.now() - DAY).toISOString();
     const to = new Date(Date.now() + DAY).toISOString();
@@ -230,7 +292,7 @@ describe('browser time: 2 credits per minute, charged once by the usage sync', (
     expect(body.items[0]).toMatchObject({
       browserSeconds: 120,
       browserCredits: 4,
-      awakeSeconds: 600,
+      awakeSeconds: 300,
       awakeCredits: 1,
       toolCredits: 0,
       totalCredits: 5,
@@ -251,7 +313,7 @@ describe('browser time: 2 credits per minute, charged once by the usage sync', (
   it('a turn reversed as our fault gives its browser credits back, once', async () => {
     const u = await member(100, 'max');
     const startedAt = new Date(Date.now() - 30_000);
-    vm.add(u.id, 600, 90, Date.now() - 10_000); // 1 for awake time, 3 for the browser
+    vm.add(u.id, 300, 90, Date.now() - 10_000); // 1 for awake time, 3 for the browser
     const endedAt = new Date();
     await syncUsageForUser(u.id);
     expect(await getBalance(u.id)).toBe(96);
@@ -278,7 +340,7 @@ describe('reverseTurn (failed turns caused by us are not charged)', () => {
     const u = await member(100);
     const startedAt = new Date(Date.now() - 30_000);
     llm.spend(u.id, 'cheap', 0.02, Date.now() - 20_000); // 5 credits inside the turn
-    vm.add(u.id, 600, 0, Date.now() - 10_000); // 1 credit inside the turn
+    vm.add(u.id, 300, 0, Date.now() - 10_000); // 1 credit inside the turn
     const endedAt = new Date();
     await syncUsageForUser(u.id);
     expect(await getBalance(u.id)).toBe(94);
@@ -294,7 +356,7 @@ describe('reverseTurn (failed turns caused by us are not charged)', () => {
   it('never gives back more than was charged', async () => {
     const u = await member(100);
     const startedAt = new Date(Date.now() - 30_000);
-    vm.add(u.id, 600, 0, Date.now() - 10_000);
+    vm.add(u.id, 300, 0, Date.now() - 10_000);
     await syncUsageForUser(u.id);
     // A second failed turn in the same window can't restore the same credits again.
     await reverseTurn(u.id, { startedAt, endedAt: new Date(), idempotencyKey: 'a' + u.id });

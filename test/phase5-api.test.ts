@@ -203,7 +203,7 @@ describe('contract: credits', () => {
 
   it('GET /v1/usage', async () => {
     const u = await member(100);
-    vm.add(u.id, 1200, 60);
+    vm.add(u.id, 600, 60);
     llm.spend(u.id, 'cheap', 0.008);
     await syncUsageForUser(u.id);
     const from = new Date(Date.now() - DAY).toISOString();

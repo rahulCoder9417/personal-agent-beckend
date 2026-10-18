@@ -127,9 +127,9 @@ async function jobState(turnId: string) {
 describe('the reply and the lock come first', () => {
   it("a second message starts while the first turn's billing still waits", async () => {
     const u = await customer(100);
-    // Each turn keeps the container awake 10 minutes: 1 credit.
+    // Each turn keeps the container awake 5 minutes: 1 credit.
     fake.state.agent = async (d, mcp) => {
-      usage.add(d.userId, 600);
+      usage.add(d.userId, 300);
       await mcp('send_message', { text: `echo: ${d.text}`, session_key: d.sessionKey });
     };
 
@@ -172,7 +172,7 @@ describe('the billing job', () => {
   it('runs twice, charges once; queued twice, runs once', async () => {
     const u = await customer(100);
     llm.spend(u.id, 'claude', 0.02, Date.now() - 2000); // 5 credits
-    usage.add(u.id, 600, 0, Date.now() - 2000); // 1 credit
+    usage.add(u.id, 300, 0, Date.now() - 2000); // 1 credit
     const job = fakeJob({ userId: u.id, turnId: 'evt_twice', ai: true });
 
     expect((await handleBillTurn(job)).charged).toBe(6);
@@ -195,7 +195,7 @@ describe('the billing job', () => {
     const u = await customer(100);
     fake.state.agent = async (d, mcp) => {
       llm.spend(d.userId, 'claude', 0.031); // 7.75 → 8 credits
-      usage.add(d.userId, 600); // 1 credit
+      usage.add(d.userId, 300); // 1 credit
       await mcp('send_message', { text: 'done', session_key: d.sessionKey });
     };
     // The vm-manager doesn't answer the first time the billing asks.
@@ -226,7 +226,7 @@ describe('the billing job', () => {
   it('never runs (the worker died after the reply): the 5-minute sync charges the turn, once', async () => {
     const u = await customer(100);
     fake.state.agent = async (d, mcp) => {
-      usage.add(d.userId, 600);
+      usage.add(d.userId, 300);
       await mcp('send_message', { text: 'done', session_key: d.sessionKey });
     };
     const id = await send(u, 'work');
@@ -244,24 +244,24 @@ describe('the billing job', () => {
 
 describe('what a turn costs, by who pays for the AI', () => {
   it('Textcrew AI: charged exactly what the sync after the turn charged before', async () => {
-    // Backend report section 25's example: AI $0.031 is 8 credits; 400 awake seconds carried
-    // over and 300 more reach one block of 10 minutes: 1 credit. 9 in all.
+    // Backend report section 25's example: AI $0.031 is 8 credits; 200 awake seconds carried
+    // over and 150 more reach one block of 5 minutes: 1 credit. 9 in all.
     const before = await customer(100);
     const now = await customer(100);
     for (const u of [before, now]) {
-      usage.add(u.id, 400, 0, Date.now() - 5000);
-      await syncUsageForUser(u.id); // 400 s carried over, nothing charged
+      usage.add(u.id, 200, 0, Date.now() - 5000);
+      await syncUsageForUser(u.id); // 200 s carried over, nothing charged
     }
     // Before: the same usage, charged by the sync the turn used to run itself.
     llm.spend(before.id, 'claude', 0.031);
-    usage.add(before.id, 300);
+    usage.add(before.id, 150);
     await syncUsageForUser(before.id);
 
     // Now: a real turn, billed by its job.
     llm.keySpendReads = 0;
     fake.state.agent = async (d, mcp) => {
       llm.spend(d.userId, 'claude', 0.031);
-      usage.add(d.userId, 300);
+      usage.add(d.userId, 150);
       await mcp('send_message', { text: 'done', session_key: d.sessionKey });
     };
     startBilling();
@@ -284,7 +284,7 @@ describe('what a turn costs, by who pays for the AI', () => {
     llm.spendLogReads = 0;
     llm.calls = [];
     fake.state.agent = async (d, mcp) => {
-      usage.add(d.userId, 1200); // 2 credits
+      usage.add(d.userId, 600); // 2 credits
       await mcp('send_message', { text: 'planned', session_key: d.sessionKey });
     };
     startBilling();
@@ -299,7 +299,7 @@ describe('what a turn costs, by who pays for the AI', () => {
 
     // A turn that fails on our side: its refund doesn't ask LiteLLM either.
     fake.state.agent = async (d) => {
-      usage.add(d.userId, 600, 0, Date.now());
+      usage.add(d.userId, 300, 0, Date.now());
       await new Promise((r) => setTimeout(r, 5)); // the turn ends after it
     };
     fake.state.turnErrorAfterAgent = { message: 'bridge crashed', platformFault: true };
@@ -324,7 +324,7 @@ describe('out of credits still holds', () => {
     expect(UNBILLED_TURNS_ALLOWED).toBe(1);
     const u = await customer(1);
     fake.state.agent = async (d, mcp) => {
-      usage.add(d.userId, 600); // 1 credit a turn
+      usage.add(d.userId, 300); // 1 credit a turn
       await mcp('send_message', { text: `echo: ${d.text}`, session_key: d.sessionKey });
     };
     // No billing runs at all (the system queue is stuck).

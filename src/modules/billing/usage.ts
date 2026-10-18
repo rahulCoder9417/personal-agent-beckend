@@ -41,8 +41,16 @@ export interface SyncResult {
 const usageKey = (userId: string, periodStart: Date) =>
   `usage:${userId}:${periodStart.toISOString()}`;
 
-/** Newly completed blocks when `add` seconds join `before` seconds (fractions carry over). */
-const blocks = (before: number, add: number, per: number) =>
+/**
+ * Newly completed blocks when `add` seconds join `before` seconds (fractions carry over).
+ *
+ * It is a difference at one rate, so a change of rate (awake time went from 600 to 300 seconds
+ * per credit on 18 Oct 2026) never charges seconds already charged: `before` (every awake second
+ * recorded so far) is only the starting mark, and only the blocks the new seconds complete are
+ * charged. Seconds left over at the old rate, which were never charged, count on at the new
+ * rate: up to 299 of them carry over and the rest are dropped. At most 1 credit either way, once.
+ */
+export const blocks = (before: number, add: number, per: number) =>
   Math.floor((before + add) / per) - Math.floor(before / per);
 
 export interface SyncOptions {

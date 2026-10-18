@@ -305,7 +305,7 @@ describe('app-action charge', () => {
 
   it('shows in the activity log, the credit history and usage', async () => {
     const u = await appUser();
-    vm.state.usage.set(u.id, { awakeSeconds: 600n, browserSeconds: 0n });
+    vm.state.usage.set(u.id, { awakeSeconds: 300n, browserSeconds: 0n });
     await u.run(LIST);
     await u.run(DRAFT);
     await u.run(DRAFT);

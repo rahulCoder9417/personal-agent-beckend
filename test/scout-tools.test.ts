@@ -1666,7 +1666,7 @@ describe('web_search: charging (1 credit per search)', () => {
   it('shows in the activity log, the credit history and usage (toolCredits, apart from browser time)', async () => {
     const u = await maxAgent();
     fakeSearch();
-    vm.state.usage.set(u.id, { awakeSeconds: 600n, browserSeconds: 60n });
+    vm.state.usage.set(u.id, { awakeSeconds: 300n, browserSeconds: 60n });
     for (let i = 0; i < 4; i++) await u.tool('web_search', { query: `q${i}` });
     await syncUsageForUser(u.id);
 

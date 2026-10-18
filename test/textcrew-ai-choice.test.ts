@@ -124,7 +124,7 @@ describe('PATCH /v1/agent/settings { aiPreference }', () => {
 
     // Own key: the AI part of a sync is free.
     llm.spend(u.id, ownModelName(u.id), 0.04); // would be 10 credits
-    vm.add(u.id, 600); // 1 credit of awake time
+    vm.add(u.id, 300); // 1 credit of awake time
     expect((await syncUsageForUser(u.id)).charged).toBe(1);
     expect(llm.remainingBudget(u.id)).toBeNull(); // no AI cap on an own key
 

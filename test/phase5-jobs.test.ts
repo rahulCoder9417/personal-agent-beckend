@@ -37,10 +37,10 @@ describe('onboarding', () => {
     const grants = await grantsOf(u.id);
     expect(grants).toHaveLength(1);
     expect(grants[0]).toMatchObject({ source: 'signup', amount: 100 });
-    // Every credit lasts 90 days from the grant.
+    // The sign-up credits last 14 days from the grant (every other credit 90).
     const days = (grants[0]!.expiresAt!.getTime() - Date.now()) / 86400_000;
-    expect(days).toBeGreaterThan(89.9);
-    expect(days).toBeLessThanOrEqual(90);
+    expect(days).toBeGreaterThan(13.9);
+    expect(days).toBeLessThanOrEqual(14);
     // A parallel onboarding may generate a second key; the loser deletes its own.
     expect([...llm.keys.values()].filter((k) => k.userId === u.id && !k.deleted)).toHaveLength(1);
     expect(llm.remainingBudget(u.id)).toBeCloseTo(0.4, 6);
@@ -129,7 +129,7 @@ describe('billing jobs', () => {
   it('sync-usage runs through the worker (all users, or one user after a turn)', async () => {
     const u = await member(100);
     llm.spend(u.id, 'cheap', 0.008); // 2 credits
-    vm.add(u.id, 600); // 1 credit
+    vm.add(u.id, 300); // 1 credit
     const workers = startWorkers(processors());
     try {
       const id = `sync-${randomUUID()}`;

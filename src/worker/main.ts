@@ -1,4 +1,5 @@
 import { reregisterAll } from '../modules/automations/automations.ts';
+import { queueRememberAccountEmails } from '../modules/billing/email-marks.ts';
 import { registerBillingSchedules } from '../modules/billing/jobs.ts';
 import { requeuePendingEvents } from '../modules/events/intake.ts';
 import { closeQueues } from '../modules/events/queues.ts';
@@ -25,6 +26,8 @@ const automations = await reregisterAll();
 await registerSystemSchedules();
 // Repeatable billing jobs: sync-usage every 5 min, expire-credits hourly.
 await registerBillingSchedules();
+// The inboxes of accounts made before sign-up credits went to one account per inbox.
+await queueRememberAccountEmails();
 log.info({ requeued, automations, queues: workers.map((w) => w.name) }, 'worker started');
 
 async function shutdown() {

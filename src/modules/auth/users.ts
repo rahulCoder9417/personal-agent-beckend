@@ -1,5 +1,5 @@
 import { createClerkClient } from '@clerk/backend';
-import { and, desc, eq, ilike, isNull, lt, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, isNull, lt, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { config } from '../../shared/config.ts';
 import { db, type Tx } from '../../shared/db/client.ts';
@@ -55,6 +55,18 @@ export async function getActiveUser(userId: string, tx: Tx = db()): Promise<User
     .from(users)
     .where(and(eq(users.id, userId), isNull(users.deletedAt)));
   return row;
+}
+
+/**
+ * Every account not deleted, oldest first: only its id and email. For billing's marks of the
+ * inboxes that had an account (billing/email-marks.ts), made once for the accounts from before.
+ */
+export async function listLiveUserEmails(): Promise<Array<{ id: string; email: string }>> {
+  return db()
+    .select({ id: users.id, email: users.email })
+    .from(users)
+    .where(isNull(users.deletedAt))
+    .orderBy(asc(users.createdAt), asc(users.id));
 }
 
 /** Users (not deleted) with this email, in any letter case. For the ops script only. */

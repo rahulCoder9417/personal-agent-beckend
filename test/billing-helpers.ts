@@ -9,14 +9,14 @@ import { db } from '../src/shared/db/client.ts';
 import { newId } from '../src/shared/ids.ts';
 import { waitFor } from './helpers.ts';
 
-export async function linkChat(userId: string): Promise<void> {
+export async function linkChat(userId: string, externalId: string = randomUUID()): Promise<void> {
   await db()
     .insert(channelLinks)
     .values({
       id: newId('lnk'),
       userId,
       channel: 'telegram',
-      externalId: randomUUID(),
+      externalId,
       displayId: '@test',
     });
 }

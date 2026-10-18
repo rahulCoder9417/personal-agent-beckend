@@ -18,7 +18,14 @@ import {
 } from '../src/modules/billing/credits.ts';
 import { freeCreditStats } from '../src/modules/billing/free-credits.ts';
 import { ensureLiteLLMKey } from '../src/modules/billing/litellm.ts';
-import { couponCodes, couponRedemptions, coupons } from '../src/modules/billing/schema.ts';
+import {
+  couponCodes,
+  couponRedeemerMarks,
+  couponRedemptions,
+  coupons,
+} from '../src/modules/billing/schema.ts';
+import { deleteUserLinks } from '../src/modules/auth/links.ts';
+import { scrubDeletedUser } from '../src/modules/auth/users.ts';
 import { resetConfig } from '../src/shared/config.ts';
 import { db } from '../src/shared/db/client.ts';
 import { AppError } from '../src/shared/errors.ts';
@@ -219,6 +226,34 @@ describe('coupons: redeem (HLD 7.7)', () => {
     expect(await attempt(a!.id, codes[1]!)).toBe(GENERIC); // same campaign
     expect(await attempt(b!.id, codes[1]!)).toBe('ok');
     expect(await attempt(c!.id, codes[2]!)).toBe('ok');
+  });
+
+  it('once per person: a new account with the same inbox or the same Telegram cannot redeem it again', async () => {
+    const { coupon, codes } = await campaign({ maxRedemptions: 10 });
+    const code = codes[0]!;
+    const telegram = randomUUID();
+    const first = await createUser({ email: 'Mo.Ali@gmail.com' });
+    await linkChat(first.id, telegram);
+    expect(await attempt(first.id, code)).toBe('ok');
+    // The account is deleted: its Telegram link and its email go with it.
+    await deleteUserLinks(first.id);
+    await scrubDeletedUser(first.id);
+    // A new account with the same Telegram (and a new inbox).
+    const sameChat = await createUser();
+    await linkChat(sameChat.id, telegram);
+    expect(await attempt(sameChat.id, code)).toBe(GENERIC);
+    // A new account with the same inbox under another spelling (and a new Telegram).
+    const sameInbox = await eligible({ email: 'moali+again@googlemail.com' });
+    expect(await attempt(sameInbox.id, code)).toBe(GENERIC);
+    // Nothing of those tries was kept: the code still has its uses for someone else.
+    expect(await attempt((await eligible()).id, code)).toBe('ok');
+    expect(
+      await db().select().from(couponRedemptions).where(eq(couponRedemptions.couponId, coupon.id)),
+    ).toHaveLength(2);
+    // Only keyed hashes are kept, never the email or the chat id.
+    const marks = JSON.stringify(await db().select().from(couponRedeemerMarks));
+    for (const plain of ['moali', 'mo.ali', telegram])
+      expect(marks.toLowerCase()).not.toContain(plain);
   });
 
   it('new-users-only and plan-restricted coupons', async () => {

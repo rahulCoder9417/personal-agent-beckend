@@ -8,6 +8,7 @@ import {
   handleSyncUsage,
 } from '../modules/billing/jobs.ts';
 import { handleAutoTopUp } from '../modules/billing/auto-topup.ts';
+import { handleRememberAccountEmails } from '../modules/billing/email-marks.ts';
 import { handleBillTurn } from '../modules/billing/turn-billing.ts';
 import {
   handleAutomationTurn,
@@ -97,6 +98,7 @@ export function processors(): Processors {
       'bill-turn': handleBillTurn,
       'refund-turn': handleRefundTurn,
       'expire-credits': handleExpireCredits,
+      'remember-account-emails': handleRememberAccountEmails,
       'auto-topup': handleAutoTopUp,
     },
   };

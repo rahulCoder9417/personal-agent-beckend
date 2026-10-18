@@ -1,5 +1,6 @@
 import { and, count, desc, eq, gt, isNull, lt, ne, sql } from 'drizzle-orm';
 import { db } from '../../shared/db/client.ts';
+import { normalizeEmail } from '../../shared/email.ts';
 import { notFound, rateLimited } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
 import { hit } from '../../shared/rate-limit.ts';
@@ -63,16 +64,7 @@ const DISPOSABLE = new Set([
 const clip = (v: string | null | undefined, max = 500) => (v ? v.slice(0, max) : null);
 
 /** Lowercase; for Gmail drop dots and +tags, so one inbox can't join many times. */
-export function normalizeEmail(email: string): string {
-  const e = email.trim().toLowerCase();
-  const at = e.lastIndexOf('@');
-  let local = e.slice(0, at);
-  let domain = e.slice(at + 1);
-  if (domain === 'googlemail.com') domain = 'gmail.com';
-  local = local.split('+')[0]!;
-  if (domain === 'gmail.com') local = local.replace(/\./g, '');
-  return `${local}@${domain}`;
-}
+export { normalizeEmail };
 
 async function logAttempt(
   req: RequestInfo,

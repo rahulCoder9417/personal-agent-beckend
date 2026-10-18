@@ -6,21 +6,24 @@
 //
 // Model: a `coupons` row is a campaign; its codes are in `coupon_codes`. `codeCount: 1` = one
 // shared code with `maxRedemptions` uses; `codeCount > 1` = that many single-use codes, and the
-// campaign's `maxRedemptions` still caps the total. One redemption per user per campaign.
-import { and, desc, eq, gt, lt, sql } from 'drizzle-orm';
+// campaign's `maxRedemptions` still caps the total. One redemption per person per campaign: per
+// account, and per inbox and linked chat (coupon_redeemer_marks), so a new account of the same
+// person can't redeem it again.
+import { and, desc, eq, gt, inArray, lt, sql } from 'drizzle-orm';
 import { randomString, sha256Hex } from '../../shared/crypto.ts';
 import { db } from '../../shared/db/client.ts';
 import { AppError } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
 import { enforce } from '../../shared/rate-limit.ts';
 import { audit } from '../admin/audit.ts';
-import { countChannelLinks } from '../auth/links.ts';
+import { listLinks } from '../auth/links.ts';
 import { getActiveUser } from '../auth/users.ts';
 import { createGrantInTx, getBalance, revokeGrantsInTx } from './credits.ts';
 import { afterCreditsAdded, afterCreditsRemoved } from './enforce.ts';
+import { chatMark, emailMark } from './email-marks.ts';
 import { freeCapAllows } from './free-credits.ts';
 import { CREDIT_EXPIRY_DAYS, type PlanId } from './plans.ts';
-import { couponCodes, couponRedemptions, coupons } from './schema.ts';
+import { couponCodes, couponRedeemerMarks, couponRedemptions, coupons } from './schema.ts';
 
 export type Coupon = typeof coupons.$inferSelect;
 
@@ -206,7 +209,16 @@ export async function redeemCoupon(
   // 2. Eligibility: verified email and at least one linked chat app (stops account farming).
   const user = await getActiveUser(input.userId);
   if (!user?.emailVerified) throw invalidOrExpiredCode();
-  if ((await countChannelLinks(user.id)) < 1) throw invalidOrExpiredCode();
+  const links = await listLinks(user.id);
+  if (links.length < 1) throw invalidOrExpiredCode();
+  // Who the person is beyond this account: the inbox and every linked chat (keyed hashes).
+  const marks = [
+    ...new Set(
+      [emailMark(user.email), ...links.map((l) => chatMark(l.channel, l.externalId))].filter(
+        (m): m is string => m !== null,
+      ),
+    ),
+  ];
 
   // 3. Hash → an active, unexpired coupon the user qualifies for.
   if (normalizeCode(input.code).length < 8) throw invalidOrExpiredCode();
@@ -251,6 +263,24 @@ export async function redeemCoupon(
         .returning({ id: coupons.id });
       if (!couponOk) throw new Rejected();
       if (!(await freeCapAllows(tx, coupon.credits, now))) throw new Rejected();
+      // Once per person: no other account (live or deleted) with this inbox or one of these chats
+      // has redeemed this coupon. A second account at the same moment waits here for the first.
+      await tx
+        .insert(couponRedeemerMarks)
+        .values(
+          marks.map((mark) => ({ couponId: coupon.id, mark, userId: user.id, createdAt: now })),
+        )
+        .onConflictDoNothing();
+      const owners = await tx
+        .select({ userId: couponRedeemerMarks.userId })
+        .from(couponRedeemerMarks)
+        .where(
+          and(
+            eq(couponRedeemerMarks.couponId, coupon.id),
+            inArray(couponRedeemerMarks.mark, marks),
+          ),
+        );
+      if (owners.some((o) => o.userId !== user.id)) throw new Rejected();
 
       const { grant, created } = await createGrantInTx(
         tx,

@@ -7,6 +7,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -164,6 +165,38 @@ export const couponRedemptions = pgTable(
     createdAt: ts().notNull().defaultNow(),
   },
   (t) => [uniqueIndex().on(t.couponId, t.userId), index().on(t.ip, t.createdAt)],
+);
+
+/**
+ * One row per inbox that ever had an account (email-marks.ts): a keyed hash (HMAC-SHA256 under
+ * the server's encryption key) of the normalized email, never the email itself. The sign-up
+ * credits go only to the first account of an inbox. Kept when the account is deleted, which is
+ * the point: deleting and signing up again gives no second 100.
+ */
+export const signupEmailMarks = pgTable('signup_email_marks', {
+  mark: text().primaryKey(),
+  /** The first account with this inbox. */
+  userId: text().notNull(),
+  createdAt: ts().notNull().defaultNow(),
+});
+
+/**
+ * Who redeemed a coupon, beyond the account (coupons.ts): keyed hashes of the account's inbox
+ * and of each chat linked to it (a Telegram chat id, a phone number). A coupon is once per person,
+ * so a new account with the same inbox or the same Telegram can't redeem it again. Kept when the
+ * account is deleted.
+ */
+export const couponRedeemerMarks = pgTable(
+  'coupon_redeemer_marks',
+  {
+    couponId: text()
+      .notNull()
+      .references(() => coupons.id),
+    mark: text().notNull(),
+    userId: text().notNull(),
+    createdAt: ts().notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.couponId, t.mark] })],
 );
 
 /** Each user's LiteLLM virtual key (the only AI credential their container gets). */

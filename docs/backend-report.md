@@ -914,7 +914,7 @@ A chat app sends a file as an id, not as the file itself. This section says how 
 
 1. The webhook holds only the file's id. It is saved with the event.
 2. The worker fetches each file before it saves the message. For Telegram, it asks Telegram where the file is, then downloads it. A file may be 25 MB at most (`MEDIA_MAX_BYTES`).
-3. The file is written to the server's attachments folder, one folder per user. A row is added to `attachments`.
+3. The file is written to the attachments folder (`ATTACHMENTS_DIR`, `/data/attachments` in the containers), one folder per user. That folder is a named Docker volume shared by the api and the worker, so files stay after a restart or a deploy (before 18 October they were inside the api container and were lost at each deploy). A row is added to `attachments`.
 4. If the file is audio, the worker sends it to the speech-to-text model through LiteLLM. The text is added to the message: "[Voice message] remind me to call the bank at five".
 5. The message is saved with its text and its list of files. A caption becomes the message text.
 6. A message with a file always goes to the agent as a task. The router is skipped.
@@ -923,7 +923,7 @@ A chat app sends a file as an id, not as the file itself. This section says how 
 ### From the web app
 
 1. The web app uploads the file first, with `POST /v1/attachments`. The limit is 10 MB.
-2. The api stores it and returns its id.
+2. The api stores it in the same attachments folder, under the user's id, and returns its id. A file is only read from inside its owner's folder; an id or path that tries to leave it is refused.
 3. The web app sends the message with that id. The api checks that the file belongs to the user.
 
 Voice is turned into text only for chat app messages. A file from the web app is handed over as it is.
@@ -3795,7 +3795,7 @@ There are three databases: the backend's, the vm-manager's and LiteLLM's. Each p
 | channels | `messages` | Every message in and out, with its channel, its conversation and its status. A message written during a turn keeps the turn's id. A copy sent to Telegram keeps the id of the message it copies. A message that carries a draft the agent proposed keeps the draft's id, for its card |
 | channels | `conversations` | One row per conversation: its chat, its kind (a chat, or the user's one Automations chat), its number in that chat, its title, its start and last-message times, if it is the active one, and the two times that say if it is unread: the agent's newest message and up to when the user read it (section 8) |
 | channels | `chat_epochs` | Each chat's counter: the highest conversation number given out in it. It only goes up, so a number is never used twice |
-| channels | `attachments` | Files uploaded in the web app or received in a chat |
+| channels | `attachments` | Files uploaded in the web app or received in a chat. The row holds the name, type, size and path; the file itself is on the `attachments` Docker volume, in a folder per user (section 11) |
 | orchestrator | `sandbox_tokens` | The hash of each container's token and the user it belongs to |
 | orchestrator | `agent_settings` | The chosen engine, the AI choice, when Claude was connected, and Claude Code's model and thinking effort for Tex and for each of the crew |
 | orchestrator | `approvals` | Risky actions waiting for a yes or no, with their exact details: an app's action, a crew job, one of Claude Code's commands, a git push, running a crew job again; and the automation whose run asked, if one did (section 15) |

@@ -48,6 +48,22 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 18 October 2026: Chat files now survive a restart or a deploy
+
+- **Where it is:** on branch `fix/attachments-volume`, not merged yet.
+- **Why:** files users attach (images, documents, voice notes) were saved inside the api and worker containers, in a folder that is wiped each time they are rebuilt. After every deploy, earlier attachments could no longer be opened or given to the agent.
+- **What the user notices:** files sent before a deploy are still there afterwards. Files sent before this change are already lost; their chat messages stay, but the file can no longer be fetched (the agent link now answers "not found" instead of failing).
+- **Backend:** files go to one folder (`ATTACHMENTS_DIR`, `/data/attachments` in the containers), one subfolder per user. In Docker Compose that folder is a named volume, `attachments`, mounted in both the api (web uploads, and serving files to the agent containers) and the worker (files from chat apps). All reading, writing and deleting of these files now goes through one small piece of code that accepts only plain ids (no `..`, no slashes) and only touches a file inside its own owner's folder. A file is served only when its stored path is in the folder of the user the row belongs to. Size limits are unchanged (10 MB for web uploads, 25 MB for chat apps). There was no automatic clean-up of old files before and there is none now; files are removed when a conversation or an account is deleted, as before, and that works on the new folder.
+- **Cost and speed:** none. The volume uses the server disk; no extra cost.
+- **Contracts:** none.
+- **Database:** none.
+- **How it was checked:** new tests: an upload is still readable (also through the agent's signed link) after the code is reloaded as in a restart; ids that climb out of the folder are refused; one user's file is not served under another user; deleting an account removes its files. The existing media, web chat and conversation tests, lint and type check pass.
+- **Still open:** no server step: `deploy.sh` creates the volume on its own. The volume is not in the nightly backup, which covers only the database. A cap on how much one user's files can use is not set.
+- **Docs updated:** backend-report sections 11 and 40.
+- **Commits:** the commits on `fix/attachments-volume`.
+
+---
+
 ### 18 October 2026: The wake fee is removed; waking the agent costs nothing extra
 
 - **Where it is:** `main` in the backend, the web app, the landing page and the admin panel; deployed to the test server.

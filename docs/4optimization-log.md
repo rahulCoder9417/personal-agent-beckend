@@ -48,6 +48,22 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 18 October 2026: A disk limit for each user's folder, and a guard for the whole server disk
+
+- **Where it is:** on a branch (`fix/disk-limit`) in the vm-manager, not merged or deployed yet.
+- **Why:** the audit of 17 October found no limit on how much a user (or a runaway agent) can write into their folder. The server has one 29 GB disk, about 80% full, so one user could fill it and stop everybody.
+- **What the user notices:** nothing for normal use. A user whose folder holds more than 2 GB cannot wake their agent: the message says the agent is busy and to try again, and it stays that way until the folder is cleaned (see Still open). If the server disk is over 90% full, nobody asleep can wake, until space is freed. Agents that are already awake are not touched.
+- **vm-manager:** before a sleeping container is woken, two checks run. First the server guard: if the disk is 90% full or more, the wake is refused and an alert line is logged. Second the user limit: Docker is asked how big the user's folder is, and if it is over the limit the wake is refused and an alert line names the user and the size. If either measurement itself fails, the wake goes ahead and a warning is logged, so a broken check cannot lock everyone out. The limits are settings: 2048 MB per user, 90 percent for the server, and 0 turns either one off. It is a soft limit: the disk cannot enforce it (the server disk is plain ext4, which has no per-folder quotas, and Docker's own size option needs a different disk type), so an agent that is already awake can go past 2 GB until it goes to sleep (idle agents sleep after 3 minutes). Existing users keep their folders and data as they are; there is nothing to migrate. A user with a folder under 2 GB sees no change.
+- **Cost and speed:** no new cost. Each wake of a sleeping agent asks Docker for its disk report, which takes a moment on a server with few users; not measured on the server.
+- **Contracts:** none changed. The proto has no code for "storage full", so both refusals use the existing "resource exhausted" answer that the backend already treats as busy and retries.
+- **Database:** none.
+- **How it was checked:** new tests: a user over the limit is refused and not marked broken; under the limit wakes; freeing space lets the wake work; the limit can be turned off; an awake agent is not checked again; the server guard refuses at 91.5% and allows 89.9%; a failed measurement lets the wake go; the guard can be turned off; the settings' defaults and bad values. Build, vet and all vm-manager tests pass. Not run on the test server.
+- **Still open:** (1) A user over the limit cannot clear their own folder, because their agent will not wake. Until a cleanup tool exists, an admin has to trim the folder on the server or raise the limit for a moment. (2) The 4.3 GB of old build cache on the server should still be deleted. (3) A true hard limit would need a separate disk image per user or a disk with quotas; worth it only if the soft limit proves too loose. (4) Nobody is told in the chat that the folder is full; that needs a new answer code in the proto.
+- **Docs updated:** none beyond the vm-manager's `.env.example`.
+- **Commits:** vm-manager `ce52948` (the check) and the commit after it (settings in `.env.example`).
+
+---
+
 ### 18 October 2026: Cancelling or keeping a plan now leaves a line in the activity log
 
 - **Where it is:** on a branch (`fix/billing-audit`) in the backend, not merged yet. The admin panel needed no change.

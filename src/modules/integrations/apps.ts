@@ -199,6 +199,94 @@ export async function refreshPendingConnections(
   return pending.length > 0;
 }
 
+// --- a connection that stopped working (the Composio audit of 17 October, M2) ------------------
+//
+// Composio's webhook tells us when a connection expires, but until 18 October nothing else did, so
+// a Gmail whose sign-in had expired still said "Connected" on the Apps page and to Tex. Now Composio
+// is also asked about the connection itself: when the Apps page is opened (a working connection
+// not checked in the last ACTIVE_CHECK_MS), and right after an action on it failed. When Composio
+// says it expired or failed, it is marked so: the Apps page says "Reconnect needed", and Tex is
+// told to send the user there.
+
+/** A working connection is asked about again when the Apps page is opened this long after. */
+export const ACTIVE_CHECK_MS = 15 * 60_000;
+/** After a failed action, the connection is asked about at most this often. */
+const AFTER_FAILURE_CHECK_MS = 60_000;
+
+/**
+ * Asks Composio about one working connection and copies an "expired" or "failed" answer. Returns
+ * its status now. Never throws: when Composio can't be asked, nothing changes.
+ */
+async function checkActiveConnection(row: Connection): Promise<Connection['status']> {
+  try {
+    const acc = await composio().account(row.composioAccountId);
+    const status = acc ? statusFromComposio(acc.status) : null;
+    const broken = status === 'expired' || status === 'error' ? status : null;
+    const [updated] = await db()
+      .update(connections)
+      .set(broken ? { status: broken, checkedAt: new Date() } : { checkedAt: new Date() })
+      .where(
+        and(
+          eq(connections.userId, row.userId),
+          eq(connections.id, row.id),
+          eq(connections.status, 'active'),
+        ),
+      )
+      .returning({ status: connections.status });
+    if (broken && updated)
+      logger().info(
+        { userId: row.userId, app: row.app, connectionId: row.id, status: broken },
+        'composio says the connection stopped working',
+      );
+    return updated?.status ?? row.status;
+  } catch (err) {
+    logger().warn(
+      { userId: row.userId, connectionId: row.id, err: String(err) },
+      'composio connection check failed',
+    );
+    return row.status;
+  }
+}
+
+/**
+ * The Apps page: asks Composio about the user's working connections not checked in the last
+ * ACTIVE_CHECK_MS (the newest REFRESH_AT_MOST, at the same time). True when one stopped working.
+ */
+export async function refreshActiveConnections(
+  userId: string,
+  rows: Connection[],
+  now = Date.now(),
+): Promise<boolean> {
+  const stale = rows
+    .filter(
+      (r) =>
+        r.userId === userId &&
+        r.status === 'active' &&
+        (!r.checkedAt || now - r.checkedAt.getTime() >= ACTIVE_CHECK_MS),
+    )
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+    .slice(0, REFRESH_AT_MOST);
+  const after = await Promise.all(stale.map(checkActiveConnection));
+  return after.some((status) => status !== 'active');
+}
+
+/**
+ * An action on this connection failed: is it because the connection stopped working? Asks
+ * Composio (at most once a minute per connection) and marks it. Returns what to tell the agent
+ * when it did stop working, or null.
+ */
+export async function connectionTroubleNote(row: Connection): Promise<string | null> {
+  if (row.status !== 'active') return null;
+  if (row.checkedAt && Date.now() - row.checkedAt.getTime() < AFTER_FAILURE_CHECK_MS) return null;
+  const status = await checkActiveConnection(row);
+  if (status !== 'expired' && status !== 'error') return null;
+  const name = findApp(row.app)?.name ?? row.app;
+  return (
+    `${name} needs to be connected again: its connection ${status === 'expired' ? 'expired' : 'failed'}. ` +
+    `Tell the user to reconnect it on the Integrations page (${appsPageUrl()}).`
+  );
+}
+
 /**
  * The Apps tab of the web app's Integrations page, where the user connects apps. (The web app
  * sends its old `/apps` address there too.)
@@ -399,10 +487,13 @@ export async function appCatalogFor(userId: string, plan: PlanId) {
     appSetups(),
     trialAppsFor(userId),
   ]);
-  // Read again only when a pending connection was asked about (it may have just finished).
-  const rows = (await refreshPendingConnections(userId, read))
-    ? await listConnections(userId)
-    : read;
+  // Read again only when a pending connection was asked about (it may have just finished), or a
+  // working one turned out to have stopped working.
+  const [pendingAsked, broke] = await Promise.all([
+    refreshPendingConnections(userId, read),
+    refreshActiveConnections(userId, read),
+  ]);
+  const rows = pendingAsked || broke ? await listConnections(userId) : read;
   return CATALOG.map((app) => ({
     slug: app.slug,
     name: app.name,

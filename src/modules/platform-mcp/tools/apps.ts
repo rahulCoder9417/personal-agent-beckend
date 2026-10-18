@@ -17,6 +17,7 @@ import {
   activeConnectionsOf,
   appActionChangesSomething,
   appActionNeedsApproval,
+  connectionTroubleNote,
   listConnections,
   newestActiveConnection,
   refreshPendingConnections,
@@ -728,12 +729,20 @@ async function runAppAction(userId: string, args: RunArgs, opts: { summary?: str
       );
     data = res.data;
   } catch (err) {
-    const failed =
+    const plainFailure =
       err instanceof ToolError
         ? err
         : new ToolError('The app is unavailable right now; tell the user and try later', {
             reason: "the app couldn't be reached",
           });
+    // Maybe the connection itself stopped working (an expired sign-in): Composio is asked, the
+    // connection is marked so ("Reconnect needed"), and Tex is told to send the user there.
+    const trouble = await connectionTroubleNote(conn);
+    const failed = trouble
+      ? new ToolError(`${plainFailure.message} ${trouble}`, {
+          reason: 'the app needs to be connected again',
+        })
+      : plainFailure;
     // Nothing happened: the approval is handed back, for one more try.
     if (consumedId)
       await finishApprovedRun(userId, consumedId, {
@@ -1002,15 +1011,24 @@ export async function runApprovedAppAction(
       arguments: args,
     });
     // The app's own error may quote the inputs: the log says only that it refused.
-    if (!res.successful)
+    if (!res.successful) {
+      // Maybe the connection stopped working: then it is marked so, and Tex is told.
+      const trouble = await connectionTroubleNote(conn);
       return await failed(
-        `the app refused it: ${res.error ?? 'unknown error'}`,
-        'the app refused the approved request, so nothing was done',
+        `the app refused it: ${res.error ?? 'unknown error'}${trouble ? `. ${trouble}` : ''}`,
+        trouble
+          ? 'the app needs to be connected again, so nothing was done'
+          : 'the app refused the approved request, so nothing was done',
       );
+    }
     data = res.data;
   } catch (err) {
     logger().warn({ userId, action, err: String(err) }, 'composio execute failed');
-    return failed("the app couldn't be reached", "the app couldn't be reached");
+    const trouble = await connectionTroubleNote(conn);
+    return failed(
+      `the app couldn't be reached${trouble ? `. ${trouble}` : ''}`,
+      trouble ? 'the app needs to be connected again' : "the app couldn't be reached",
+    );
   }
   const creditsCharged = changes ? await chargeRan(userId, action, a.id) : 0;
   data = await inlineAppFiles(action, data);

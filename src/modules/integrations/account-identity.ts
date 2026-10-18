@@ -112,6 +112,18 @@ function lookUpOnce(row: Connection, now: number): Promise<string | null> {
   return p;
 }
 
+/**
+ * Who this connection is signed in as, asked of the app now and waited for (no time limit but the
+ * app's own), and kept on it. For the clean-up after a reconnect (connection-replace.ts), which
+ * must know the new connection's account before it can tell whether an older one is the same.
+ * Null: the app has no "who am I" action, or did not say. Never throws.
+ */
+export async function lookUpAccountLabel(row: Connection): Promise<string | null> {
+  if (row.accountLabel) return row.accountLabel;
+  if (row.status !== 'active' || !findApp(row.app)?.identity) return null;
+  return lookUpOnce(row, Date.now());
+}
+
 /** The lookup's answer, or null when it takes longer than `ms` (it goes on in the background). */
 async function within(p: Promise<string | null>, ms: number): Promise<string | null> {
   let timer: NodeJS.Timeout | undefined;

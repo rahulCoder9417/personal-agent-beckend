@@ -228,7 +228,7 @@ describe('who runs and who pays (effectiveRuntime / aiAccess)', () => {
 
 describe('connecting a Claude plan', () => {
   it('start → Anthropic URL → complete with the right code → Claude Code runs', async () => {
-    const u = await createUser();
+    const u = await createUser({ credits: 100 });
     const start = await startLogin(u.token);
     expect(start.authorizeUrl).toMatch(/^https:\/\/claude\.ai\//);
     expect(new Date(start.expiresAt).getTime()).toBeGreaterThan(Date.now());
@@ -255,7 +255,7 @@ describe('connecting a Claude plan', () => {
   });
 
   it('a wrong code → 400 with the safe message; an unknown or foreign loginId → 404', async () => {
-    const u = await createUser();
+    const u = await createUser({ credits: 100 });
     const other = await createUser();
     const start = await startLogin(u.token);
 
@@ -296,22 +296,57 @@ describe('connecting a Claude plan', () => {
     );
   });
 
-  it('start is rate limited (10 per hour per user) and 503 when the container is unavailable', async () => {
-    const u = await createUser();
+  it('start is rate limited (3 per hour per user) and 503 when the server is full', async () => {
+    const u = await createUser({ credits: 100 });
     await expectContract(
       'startClaudeLogin',
       await call('/v1/agent/claude/login', { method: 'POST' }),
       401,
     );
+    // No awake place free, or 2 sign-ins already wait on the server (the vm-manager's limit).
     fake.state.claudeError = new ConnectError('server full', Code.ResourceExhausted);
-    await expectContract(
+    const full = await expectContract<{ error: { code: string; message: string } }>(
       'startClaudeLogin',
       await call('/v1/agent/claude/login', { method: 'POST', token: u.token }),
       503,
     );
-    for (let i = 0; i < 9; i++) await startLogin(u.token);
+    expect(full.error).toEqual({
+      code: 'unavailable',
+      message: 'The server is busy right now. Please try connecting again in a few minutes.',
+    });
+    // That try counted: two more starts this hour, and the 4th is refused.
+    for (let i = 0; i < 2; i++) await startLogin(u.token);
     const limited = await call('/v1/agent/claude/login', { method: 'POST', token: u.token });
     await expectContract('startClaudeLogin', limited, 429);
+    expect(fake.logins.size).toBe(2);
+  });
+
+  it('start needs credits, like a message: at zero nothing wakes (402), and the try does not count', async () => {
+    const u = await createUser(); // no credits
+    const refused = await expectContract<{ error: { code: string; message: string } }>(
+      'startClaudeLogin',
+      await call('/v1/agent/claude/login', { method: 'POST', token: u.token }),
+      402,
+    );
+    expect(refused.error.code).toBe('out_of_credits');
+    expect(fake.created).not.toContain(u.id); // no container made or woken
+    expect([...fake.logins.values()].some((l) => l.userId === u.id)).toBe(false);
+    // Credits arrive: the three starts of the hour are all still there.
+    const { createGrant } = await import('../src/modules/billing/credits.ts');
+    await createGrant({
+      userId: u.id,
+      source: 'admin',
+      amount: 5,
+      expiresAt: null,
+      idempotencyKey: `seed:${u.id}`,
+      description: 'test',
+    });
+    for (let i = 0; i < 3; i++) await startLogin(u.token);
+    await expectContract(
+      'startClaudeLogin',
+      await call('/v1/agent/claude/login', { method: 'POST', token: u.token }),
+      429,
+    );
   });
 
   it('the code never appears in logs, the audit log, events or messages', async () => {
@@ -324,7 +359,7 @@ describe('connecting a Claude plan', () => {
     });
     setLogger(buildLogger(sink, 'trace'));
     try {
-      const u = await createUser();
+      const u = await createUser({ credits: 100 });
       const start = await startLogin(u.token);
       const wrongCode = 'wrong-code-9f8e7d6c-secret';
       await expectContract(
@@ -365,7 +400,7 @@ describe('connecting a Claude plan', () => {
 
 describe('switching the agent and disconnecting', () => {
   it('PATCH runtime: claude_code without a plan → 409; with a plan it switches both ways', async () => {
-    const u = await createUser();
+    const u = await createUser({ credits: 100 });
     await expectContract(
       'updateAgentSettings',
       await call('/v1/agent/settings', {
@@ -422,7 +457,7 @@ describe('switching the agent and disconnecting', () => {
   });
 
   it('DELETE /v1/agent/claude signs Claude Code out and goes back to Hermes', async () => {
-    const u = await createUser();
+    const u = await createUser({ credits: 100 });
     await expectContract(
       'disconnectClaude',
       await call('/v1/agent/claude', { method: 'DELETE' }),
@@ -445,7 +480,7 @@ describe('switching the agent and disconnecting', () => {
     const audits = await db().select().from(auditLog).where(eq(auditLog.userId, u.id));
     expect(audits.map((a) => a.action)).toContain('claude_disconnected');
     // Without a container it still works (nothing to sign out of).
-    const fresh = await createUser();
+    const fresh = await createUser({ credits: 100 });
     await expectContract(
       'disconnectClaude',
       await call('/v1/agent/claude', { method: 'DELETE', token: fresh.token }),
@@ -462,7 +497,7 @@ describe('switching the agent and disconnecting', () => {
   });
 
   it('a new container is created with the runtime from the settings', async () => {
-    const u = await createUser();
+    const u = await createUser({ credits: 100 });
     await ensureSandbox(u.id);
     expect(fake.runtimes.get(u.id)).toBe(AgentRuntime.HERMES);
 
@@ -501,7 +536,7 @@ describe('turns', () => {
     const u = await chatUser();
     await connectClaude(u);
     fake.runtimes.set(u.id, AgentRuntime.HERMES); // drifted: the turn re-syncs after the wake
-    fake.state.usage.set(u.id, { awakeSeconds: 1200n, browserSeconds: 0n });
+    fake.state.usage.set(u.id, { awakeSeconds: 600n, browserSeconds: 0n }); // 10 minutes
 
     expect(await webTurn(u.id, 'plan my week')).toBe('done');
     expect(fake.deliveries.map((d) => d.text)).toEqual(['plan my week']);
@@ -582,7 +617,7 @@ describe('Claude Code model and effort', () => {
     };
 
   it('PATCH sets and clears them, with or without a Claude plan; GET lists the choices', async () => {
-    const u = await createUser();
+    const u = await createUser({ credits: 100 });
     // Saved while Hermes runs: they wait for the turns that run on Claude Code.
     const set = await expectContract<Settings>(
       'updateAgentSettings',

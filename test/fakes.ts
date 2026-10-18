@@ -332,7 +332,7 @@ export function installFakeVm(behaviour?: AgentBehaviour) {
       return {
         loginId,
         authorizeUrl: `https://claude.ai/oauth/authorize?code=true&state=${loginId}`,
-        expiresAtUnixMs: BigInt(Date.now() + 10 * 60_000),
+        expiresAtUnixMs: BigInt(Date.now() + 5 * 60_000), // CLAUDE_LOGIN_TTL
       };
     },
     async completeClaudeLogin(req: { userId: string; loginId: string; code: string }) {

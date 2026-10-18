@@ -1,5 +1,7 @@
 import { handleBackup } from '../modules/admin/backup.ts';
 import { handleHealthCheck } from '../modules/admin/health.ts';
+import { handleFounderAlert } from '../modules/admin/ops-alerts.ts';
+import { handleUsageCheck } from '../modules/admin/usage-alerts.ts';
 import { handleClerkEvent } from '../modules/auth/jobs.ts';
 import {
   handleExpireCredits,
@@ -93,6 +95,8 @@ export function processors(): Processors {
       cleanup: handleCleanup,
       backup: handleBackup,
       'health-check': handleHealthCheck,
+      'founder-alert': handleFounderAlert,
+      'usage-check': async () => handleUsageCheck(),
       'polar-event': handlePolarEvent,
       'sync-usage': handleSyncUsage,
       'bill-turn': handleBillTurn,

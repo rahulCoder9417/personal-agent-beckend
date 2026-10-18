@@ -37,6 +37,11 @@ export async function registerSystemSchedules(): Promise<void> {
     { every: 5 * 60 * 1000 },
     { name: 'health-check', data: {} },
   );
+  await system.upsertJobScheduler(
+    'usage-check',
+    { every: 60 * 1000 },
+    { name: 'usage-check', data: {} },
+  );
 }
 
 /**

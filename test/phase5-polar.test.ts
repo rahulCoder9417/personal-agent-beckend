@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { and, eq, like } from 'drizzle-orm';
 import { afterAll, describe, expect, it } from 'vitest';
+import { auditLog } from '../src/modules/admin/schema.ts';
 import { getUser } from '../src/modules/auth/users.ts';
 import { getBalance } from '../src/modules/billing/credits.ts';
 import {
@@ -475,5 +476,93 @@ describe('checkout + cancel', () => {
     await deliver(subscriptionEvent('subscription.canceled', { ...subC, cancelAtPeriodEnd: true }));
     await expect(resumeSubscription(c.id)).rejects.toMatchObject({ status: 409 });
     expect(polar.uncancelled).not.toContain(subC.subId);
+  });
+});
+
+/** The plan lines in a user's audit log, oldest first: [actor, action]. */
+async function planAudit(userId: string) {
+  const rows = await db()
+    .select()
+    .from(auditLog)
+    .where(and(eq(auditLog.userId, userId), like(auditLog.action, 'plan_%')))
+    .orderBy(auditLog.createdAt);
+  return rows.filter((r) => !['plan_activated', 'plan_renewed'].includes(r.action));
+}
+
+describe('plan changes leave audit lines', () => {
+  it('cancel writes one row (actor user); cancelling twice adds none; resume writes one', async () => {
+    const { u, sub } = await subscribed();
+    await cancelSubscription(u.id);
+    let rows = await planAudit(u.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ actor: 'user', action: 'plan_cancelled' });
+    expect(rows[0]!.summary).toMatch(/^Pro plan cancelled: stays until \d{1,2} \w{3}$/);
+    expect(rows[0]!.details).toMatchObject({
+      subscriptionId: sub.subId,
+      periodEnd: sub.end.toISOString(),
+    });
+    await cancelSubscription(u.id);
+    expect(await planAudit(u.id)).toHaveLength(1);
+    // Polar's echo of our own cancel adds nothing.
+    await deliver(subscriptionEvent('subscription.canceled', { ...sub, cancelAtPeriodEnd: true }));
+    expect(await planAudit(u.id)).toHaveLength(1);
+
+    await resumeSubscription(u.id);
+    rows = await planAudit(u.id);
+    expect(rows.map((r) => [r.actor, r.action])).toEqual([
+      ['user', 'plan_cancelled'],
+      ['user', 'plan_resumed'],
+    ]);
+    expect(rows[1]!.summary).toBe('Pro plan kept: renews again');
+    expect(rows[1]!.details).toMatchObject({ subscriptionId: sub.subId });
+    await deliver(subscriptionEvent('subscription.uncanceled', sub));
+    expect(await planAudit(u.id)).toHaveLength(2);
+  });
+
+  it('Polar-only canceled / uncanceled / past_due / revoked write one system row each, once', async () => {
+    const { u, sub } = await subscribed();
+    const canceled = { ...sub, cancelAtPeriodEnd: true };
+    await deliver(subscriptionEvent('subscription.canceled', canceled));
+    // A re-run of the same state (updated, or the same event again) adds nothing.
+    await deliver(subscriptionEvent('subscription.canceled', canceled));
+    await deliver(subscriptionEvent('subscription.updated', canceled));
+    expect((await planAudit(u.id)).map((r) => [r.actor, r.action])).toEqual([
+      ['system', 'plan_cancelled'],
+    ]);
+    await deliver(subscriptionEvent('subscription.uncanceled', sub));
+    await deliver(subscriptionEvent('subscription.uncanceled', sub));
+    await deliver(subscriptionEvent('subscription.past_due', { ...sub, status: 'past_due' }));
+    await deliver(subscriptionEvent('subscription.past_due', { ...sub, status: 'past_due' }));
+    await deliver(
+      subscriptionEvent('subscription.revoked', {
+        ...sub,
+        status: 'canceled',
+        endedAt: new Date(),
+      }),
+    );
+    await deliver(
+      subscriptionEvent('subscription.revoked', {
+        ...sub,
+        status: 'canceled',
+        endedAt: new Date(),
+      }),
+    );
+    const rows = await planAudit(u.id);
+    expect(rows.map((r) => [r.actor, r.action])).toEqual([
+      ['system', 'plan_cancelled'],
+      ['system', 'plan_resumed'],
+      ['system', 'plan_past_due'],
+      ['system', 'plan_ended'],
+    ]);
+    expect(rows[3]!.summary).toBe('Pro plan ended: now on Free');
+  });
+
+  it('the hourly safety net that ends a lapsed plan writes the plan_ended row once', async () => {
+    const { u, sub } = await subscribed();
+    await deliver(subscriptionEvent('subscription.canceled', { ...sub, cancelAtPeriodEnd: true }));
+    const late = new Date(sub.end.getTime() + 2000);
+    await endLapsedSubscriptions(late);
+    await endLapsedSubscriptions(late);
+    expect((await planAudit(u.id)).map((r) => r.action)).toEqual(['plan_cancelled', 'plan_ended']);
   });
 });

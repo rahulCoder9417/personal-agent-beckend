@@ -17,7 +17,13 @@ import { createGrantInTx } from './credits.ts';
 import { afterCreditsAdded, afterCreditsRemoved } from './enforce.ts';
 import { firePlanChanged } from './hooks.ts';
 import { PLANS, TOP_UPS, PLAN_IDS, creditExpiry, type PlanId } from './plans.ts';
-import { isTopUpProduct, planForProduct, type PolarWebhook } from './polar.ts';
+import {
+  auditDetails,
+  isTopUpProduct,
+  planForProduct,
+  shortDay,
+  type PolarWebhook,
+} from './polar.ts';
 import { creditGrants, payments } from './schema.ts';
 import {
   endSubscription,
@@ -172,6 +178,19 @@ async function startPeriod(
       ...(reopen ? { endedAt: null } : {}),
     });
     planChanged = await setPlan(userId, plan, tx);
+    // A renewal on a different plan (Pro ↔ Max): its own line, besides "renewed".
+    if (existing && !reopen && existing.plan !== plan) {
+      await audit(
+        {
+          userId,
+          actor: 'system',
+          action: 'plan_changed',
+          summary: `Plan changed from ${PLANS[existing.plan].name} to ${PLANS[plan].name}`,
+          details: { from: existing.plan, to: plan, subscriptionId: subId },
+        },
+        tx,
+      );
+    }
     // Every credit lasts 90 days from the grant, so unused monthly credits carry over (no
     // expiry at renewal). A late event still grants: the period was paid for.
     const { created } = await createGrantInTx(tx, {
@@ -259,10 +278,65 @@ async function syncSubscription(s: Data, event: PolarWebhook) {
     });
     // A plan change (Pro ↔ Max) applies now; its credits come with the next period.
     if (plan !== sub.plan) planChanged = await setPlan(sub.userId, plan, tx);
+    // One line per real change (our stored status or plan), so a re-run or an echo of the user's
+    // own web action adds nothing. The end of the plan is audited by endSubscription.
+    const lines = changeLines(sub, status, plan, date(s, 'current_period_end') ?? sub.periodEnd);
+    for (const line of lines) {
+      await audit(
+        {
+          userId: sub.userId,
+          actor: 'system',
+          ...line,
+          details: {
+            ...auditDetails({
+              polarSubscriptionId: sub.polarSubscriptionId,
+              periodEnd: date(s, 'current_period_end') ?? sub.periodEnd,
+            }),
+            ...(line.action === 'plan_changed' ? { from: sub.plan, to: plan } : {}),
+          },
+        },
+        tx,
+      );
+    }
   });
   if (plan !== sub.plan) await afterCreditsAdded(sub.userId);
   if (planChanged) await firePlanChanged(sub.userId);
   return { status, plan };
+}
+
+/** The audit lines for what changed between our stored subscription and Polar's. */
+function changeLines(
+  sub: { plan: PlanId; status: SubscriptionStatus },
+  status: SubscriptionStatus,
+  plan: PlanId,
+  periodEnd: Date | null,
+): { action: string; summary: string }[] {
+  const lines: { action: string; summary: string }[] = [];
+  const name = PLANS[plan].name;
+  if (status !== sub.status) {
+    if (status === 'cancel_at_period_end') {
+      lines.push({
+        action: 'plan_cancelled',
+        summary: `${name} plan cancelled in Polar: stays until ${shortDay(periodEnd)}`,
+      });
+    } else if (status === 'past_due') {
+      lines.push({ action: 'plan_past_due', summary: `${name} plan payment failed: past due` });
+    } else if (sub.status === 'cancel_at_period_end') {
+      lines.push({ action: 'plan_resumed', summary: `${name} plan kept in Polar: renews again` });
+    } else {
+      lines.push({
+        action: 'plan_payment_recovered',
+        summary: `${name} plan payment went through: active again`,
+      });
+    }
+  }
+  if (plan !== sub.plan) {
+    lines.push({
+      action: 'plan_changed',
+      summary: `Plan changed from ${PLANS[sub.plan].name} to ${name}`,
+    });
+  }
+  return lines;
 }
 
 async function orderPaid(d: Data, event: PolarWebhook) {

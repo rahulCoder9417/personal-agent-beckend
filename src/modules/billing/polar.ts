@@ -5,10 +5,11 @@
 import { Webhook } from 'standardwebhooks';
 import { config } from '../../shared/config.ts';
 import { badRequest, conflict, planLimit, unavailable } from '../../shared/errors.ts';
+import { audit } from '../admin/audit.ts';
 import { webhookUnauthorized } from '../auth/webhooks.ts';
 import type { User } from '../auth/users.ts';
 import { findWaitlistOffer } from '../auth/waitlist.ts';
-import { getTopUp, planLimits, type PlanId } from './plans.ts';
+import { getTopUp, PLANS, planLimits, type PlanId } from './plans.ts';
 import {
   getCurrentSubscription,
   getEndingSubscription,
@@ -380,7 +381,33 @@ export async function cancelSubscription(userId: string): Promise<Subscription> 
   const renewing = await getRenewingSubscription(userId);
   if (!renewing) throw conflict('No active paid subscription');
   await polar().cancelAtPeriodEnd(renewing.polarSubscriptionId);
-  return (await setSubscriptionStatus(renewing.id, 'cancel_at_period_end'))!;
+  const updated = (await setSubscriptionStatus(renewing.id, 'cancel_at_period_end'))!;
+  await audit({
+    userId,
+    actor: 'user',
+    action: 'plan_cancelled',
+    summary: `${PLANS[updated.plan].name} plan cancelled: stays until ${shortDay(updated.periodEnd)}`,
+    details: auditDetails(updated),
+  });
+  return updated;
+}
+
+/** "18 Nov" (UTC), or "the end of the period" when we do not know the date. */
+export function shortDay(d: Date | null | undefined): string {
+  return d
+    ? d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+    : 'the end of the period';
+}
+
+/** The subscription id and period end that every plan audit line carries. */
+export function auditDetails(sub: {
+  polarSubscriptionId: string;
+  periodEnd: Date | null;
+}): Record<string, unknown> {
+  return {
+    subscriptionId: sub.polarSubscriptionId,
+    periodEnd: sub.periodEnd ? sub.periodEnd.toISOString() : null,
+  };
 }
 
 /**
@@ -393,7 +420,15 @@ export async function resumeSubscription(userId: string): Promise<Subscription> 
   const ending = await getEndingSubscription(userId);
   if (!ending) throw conflict('No cancelled plan to keep');
   await polar().uncancel(ending.polarSubscriptionId);
-  return (await setSubscriptionStatus(ending.id, 'active'))!;
+  const updated = (await setSubscriptionStatus(ending.id, 'active'))!;
+  await audit({
+    userId,
+    actor: 'user',
+    action: 'plan_resumed',
+    summary: `${PLANS[updated.plan].name} plan kept: renews again`,
+    details: auditDetails(updated),
+  });
+  return updated;
 }
 
 // --- webhook ----------------------------------------------------------------------------------

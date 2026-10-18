@@ -3,10 +3,11 @@
 import { and, desc, eq, gt, inArray, isNull, lte, ne, or } from 'drizzle-orm';
 import { db, type Tx } from '../../shared/db/client.ts';
 import { newId } from '../../shared/ids.ts';
+import { audit } from '../admin/audit.ts';
 import { setPlan } from '../auth/users.ts';
 import { afterCreditsRemoved } from './enforce.ts';
 import { firePlanChanged } from './hooks.ts';
-import type { PlanId } from './plans.ts';
+import { PLANS, type PlanId } from './plans.ts';
 import { subscriptions } from './schema.ts';
 
 export type Subscription = typeof subscriptions.$inferSelect;
@@ -147,7 +148,22 @@ export async function endSubscription(sub: Subscription, now = new Date()): Prom
       )
       .orderBy(desc(subscriptions.updatedAt))
       .limit(1);
-    planChanged = await setPlan(sub.userId, other?.plan ?? 'free', tx);
+    const after = other?.plan ?? 'free';
+    planChanged = await setPlan(sub.userId, after, tx);
+    // The one line for the end of a paid plan (Polar's revoke or the hourly safety net).
+    await audit(
+      {
+        userId: sub.userId,
+        actor: 'system',
+        action: 'plan_ended',
+        summary: `${PLANS[sub.plan].name} plan ended: now on ${PLANS[after].name}`,
+        details: {
+          subscriptionId: sub.polarSubscriptionId,
+          periodEnd: sub.periodEnd ? sub.periodEnd.toISOString() : null,
+        },
+      },
+      tx,
+    );
     return true;
   });
   if (ended) await afterCreditsRemoved(sub.userId); // also updates the key's models

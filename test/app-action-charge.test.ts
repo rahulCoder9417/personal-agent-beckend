@@ -279,11 +279,27 @@ describe('app-action charge', () => {
     expect(await getBalance(u.id)).toBe(999);
   });
 
-  it('an unknown action is charged; one Composio marks read-only is free', async () => {
+  it('an unknown action asks first and is charged; one Composio marks read-only is free', async () => {
     const u = await appUser();
     composio.state.tags.set('GMAIL_THREAD_HISTORY', ['readOnlyHint']);
     expect(JSON.parse((await u.run('GMAIL_THREAD_HISTORY')).text).credits_charged).toBe(0);
-    expect(JSON.parse((await u.run('GMAIL_PROFILE_SYNC')).text).credits_charged).toBe(1);
+    // Since 18 October an action we can't place asks first, as it is charged.
+    const unasked = await u.run('GMAIL_PROFILE_SYNC');
+    expect(unasked.isError).toBe(true);
+    expect(unasked.text).toContain("needs the user's approval");
+    const asked = JSON.parse(
+      (
+        await mcpCall(u.mcp, 'request_approval', {
+          summary: 'Sync the profile',
+          action: 'GMAIL_PROFILE_SYNC',
+          arguments: ARGS,
+          session_key: 'web',
+        })
+      ).text,
+    ) as { approval_id: string };
+    await decideApproval(u.id, asked.approval_id, true, 'web');
+    const ran = await ranOnApproval(asked.approval_id);
+    expect(ran.runResult).toMatchObject({ state: 'done', creditsCharged: 1 });
     expect(await getBalance(u.id)).toBe(999);
   });
 

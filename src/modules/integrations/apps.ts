@@ -9,10 +9,12 @@ import { addJob } from '../events/queues.ts';
 import {
   actionChangesSomething,
   actionKindByName,
+  actionNeedsApproval,
   appAllowedOnPlan,
   appForToolkit,
   CATALOG,
   findApp,
+  isSafeChange,
   type CatalogApp,
 } from './catalog.ts';
 import {
@@ -555,6 +557,20 @@ export async function connectionForToolkit(
 export async function appActionChangesSomething(actionSlug: string): Promise<boolean> {
   if (actionKindByName(actionSlug) !== 'unknown') return actionChangesSomething(actionSlug);
   return actionChangesSomething(actionSlug, (await toolTags(actionSlug)) ?? []);
+}
+
+/**
+ * Does this action, with these inputs, ask the user first (catalog.ts, "Which actions ask first")?
+ * The name and the short list of harmless changes decide; Composio is asked for the action's tags
+ * only when the name says nothing (kept once asked), and when it can't be asked the action asks.
+ */
+export async function appActionNeedsApproval(
+  actionSlug: string,
+  args: Record<string, unknown>,
+): Promise<boolean> {
+  if (isSafeChange(actionSlug) || actionKindByName(actionSlug) !== 'unknown')
+    return actionNeedsApproval(actionSlug, { args });
+  return actionNeedsApproval(actionSlug, { args, tags: (await toolTags(actionSlug)) ?? [] });
 }
 
 /**

@@ -219,7 +219,7 @@ const reviewArgs = (owner: string, repo: string, over: Record<string, unknown> =
 });
 
 describe('what needs approval on GitHub', () => {
-  it('writing a comment or a review does; reading them, and other actions, are as before', () => {
+  it('writing a comment or a review does; reading them does not', () => {
     for (const a of [
       REVIEW,
       ISSUE_COMMENT,
@@ -238,14 +238,17 @@ describe('what needs approval on GitHub', () => {
       'GITHUB_GET_AN_ISSUE_COMMENT',
       'GITHUB_GET_A_REVIEW_FOR_A_PULL_REQUEST',
       'GITHUB_LIST_REVIEWS_FOR_A_PULL_REQUEST',
+    ])
+      expect(actionNeedsApproval(a), a).toBe(false);
+    // Since 18 October every change asks, these too (approval-rules.test.ts).
+    for (const a of [
       'GITHUB_CREATE_A_PULL_REQUEST',
       'GITHUB_CREATE_AN_ISSUE',
       'GITHUB_REQUEST_REVIEWERS_FOR_A_PULL_REQUEST',
-      // Other apps' comment actions are unchanged.
       'LINEAR_CREATE_COMMENT',
       'NOTION_CREATE_COMMENT',
     ])
-      expect(actionNeedsApproval(a), a).toBe(false);
+      expect(actionNeedsApproval(a), a).toBe(true);
   });
 
   it('prCommentTarget: four actions by exact name, on a named pull request, never approve', () => {

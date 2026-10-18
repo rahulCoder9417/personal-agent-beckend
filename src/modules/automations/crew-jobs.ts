@@ -14,6 +14,7 @@ import { db } from '../../shared/db/client.ts';
 import { conflict, notFound } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
 import { logger } from '../../shared/logger.ts';
+import { redis } from '../../shared/redis.ts';
 import { audit } from '../admin/audit.ts';
 import { listLinks } from '../auth/links.ts';
 import { getConversation, startConversationAside } from '../channels/conversations.ts';
@@ -813,6 +814,58 @@ export async function releaseCrewJobComment(userId: string, jobId: string): Prom
     .update(crewJobs)
     .set({ postedAt: null })
     .where(and(eq(crewJobs.userId, userId), eq(crewJobs.id, jobId)));
+}
+
+/** The GitHub actions a brief can be the user's yes for, besides the one review above. */
+const OPEN_PULL_REQUEST = 'GITHUB_CREATE_A_PULL_REQUEST';
+const OPEN_ISSUE = 'GITHUB_CREATE_AN_ISSUE';
+/** How long the "already opened in this run" mark is kept: longer than any job's turn. */
+const OPENED_MARK_SECONDS = 24 * 3600;
+const openedKey = (jobId: string, action: string) => `crew-opened:${jobId}:${action}`;
+
+const sameName = (a: unknown, b: string) =>
+  typeof a === 'string' && a.trim().toLowerCase() === b.toLowerCase();
+
+/**
+ * Since 18 October 2026 every GitHub action that changes something asks first, and opening a pull
+ * request or an issue is one. A crew job's brief is the user's yes for two of them, once each,
+ * during the job's run:
+ *   - Byte's pull request (the brief says "open a pull request"): in the job's repository, from
+ *     the job's own branch (`head`, alone or as "owner:branch");
+ *   - the report as a new issue (the brief says "open an issue"): in the job's repository.
+ * Returns the job's id, or null (then the action asks, like any other). Marked in Redis in the
+ * same step, so a second one in the same run asks; `releaseCrewJobGithubAction` frees it when the
+ * app refused.
+ */
+export async function claimCrewJobGithubAction(
+  userId: string,
+  action: string,
+  args: Record<string, unknown>,
+): Promise<string | null> {
+  const slug = action.toUpperCase();
+  if (slug !== OPEN_PULL_REQUEST && slug !== OPEN_ISSUE) return null;
+  const [job] = await db()
+    .select()
+    .from(crewJobs)
+    .where(inProgress(userId))
+    .orderBy(desc(crewJobs.startedAt))
+    .limit(1);
+  if (!job || !sameName(args.owner, job.owner) || !sameName(args.repo, job.repo)) return null;
+  if (slug === OPEN_PULL_REQUEST) {
+    if (job.member !== 'byte' || job.finish === 'branch') return null;
+    const head = typeof args.head === 'string' ? args.head.trim() : '';
+    const at = head.indexOf(':');
+    const branch = at >= 0 ? head.slice(at + 1) : head;
+    const owner = at >= 0 ? head.slice(0, at) : job.owner;
+    if (branch !== crewBranchName(job) || !sameName(owner, job.owner)) return null;
+  } else if (!job.reportIssue) return null;
+  const marked = await redis().set(openedKey(job.id, slug), '1', 'EX', OPENED_MARK_SECONDS, 'NX');
+  return marked === 'OK' ? job.id : null;
+}
+
+/** The pull request or issue the brief allowed did not open (the app refused it): free again. */
+export async function releaseCrewJobGithubAction(jobId: string, action: string): Promise<void> {
+  await redis().del(openedKey(jobId, action.toUpperCase()));
 }
 
 // --- what the brief does not cover ---------------------------------------------------------------

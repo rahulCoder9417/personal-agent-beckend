@@ -191,7 +191,7 @@ async function startPeriod(
         tx,
       );
     }
-    // Every credit lasts 90 days from the grant, so unused monthly credits carry over (no
+    // Monthly credits last 90 days from the grant, so unused ones carry over (no
     // expiry at renewal). A late event still grants: the period was paid for.
     const { created } = await createGrantInTx(tx, {
       userId,

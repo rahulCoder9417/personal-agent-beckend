@@ -59,7 +59,7 @@ export const adminRoutes = [
       userId: user.id,
       amount: body.amount,
       reason: body.reason,
-      // Omitted: 90 days like every grant; explicit null: never expires (admin's choice).
+      // Omitted: 90 days, like monthly and top-up credits; null: never expires (admin's choice).
       expiresAt:
         body.expiresAt === undefined
           ? creditExpiry()

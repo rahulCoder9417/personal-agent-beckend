@@ -10,6 +10,8 @@ export interface JobContext {
   pickedUpAt: number;
   /** 1 for the first try. */
   attempt: number;
+  /** How many tries the job has in all; the try numbered this is the last. Left out: not known. */
+  maxAttempts?: number;
 }
 
 const store = new AsyncLocalStorage<JobContext>();

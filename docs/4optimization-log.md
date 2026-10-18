@@ -48,6 +48,19 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 18 October 2026: the user is told when the server is full
+
+- **Where it is:** on the branch `fix/launch-ux` of the backend, not merged.
+- **Why:** when every awake place was busy, the wake was retried 5 times (5 seconds, 30 seconds, 2 minutes, 10 minutes) and then the message died with no word. The go-live check marked this "fix before launch".
+- **What the user notices:** after the last failed try, one plain reply on the channel they wrote from: "Tex is busy right now and couldn't start your request. Please send it again in a few minutes." The message shows as failed in the web app, where it can be sent again.
+- **Backend:** the worker now tells the turn which try it is and how many there are. On the last try, a wake that fails because the server is full ends the turn: the message is marked failed, one `server_busy` audit line is written and one reply is queued. A key per message makes a re-run of the job send nothing more. Only messages from a person are affected; automations and crew jobs keep their own handling. The storage-full case (`disk_limit:`) is unchanged.
+- **Cost and speed:** nothing charged for the reply; no change in speed.
+- **Contracts:** none (the failed status already existed).
+- **Database:** none.
+- **How it was checked:** a new test (`test/server-busy.test.ts`): after 5 failed wakes exactly one busy reply, the message failed, one audit line, and a re-run adds neither. `test/storage-full.test.ts` still passes. Lint and typecheck pass. Not run on the test server.
+- **Docs updated:** `backend-report.md`, the failure lists in sections 9 and 43.
+
+
 ### 18 October 2026: Chat files now survive a restart or a deploy
 
 - **Where it is:** on branch `fix/attachments-volume`, not merged yet.

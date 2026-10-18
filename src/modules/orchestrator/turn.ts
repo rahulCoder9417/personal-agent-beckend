@@ -1,12 +1,14 @@
 // One agent turn: credit check → routing → wake → deliver (stream until turn done). HLD 5.2.
 import { Code, ConnectError } from '@connectrpc/connect';
 import { config } from '../../shared/config.ts';
+import { currentJob } from '../../shared/job-context.ts';
 import { logger } from '../../shared/logger.ts';
 import { redis } from '../../shared/redis.ts';
 import { alert } from '../admin/alerts.ts';
 import { audit } from '../admin/audit.ts';
 import { getActiveUserCached, isSuspended } from '../auth/users.ts';
 import { conversationFor, isAutomationsChat } from '../channels/conversations.ts';
+import { MAX_ATTEMPTS } from '../events/queues.ts';
 import { signedFileUrl } from '../channels/files.ts';
 import { setMessageStatus } from '../channels/messages.ts';
 import { queueOutbound } from '../channels/outbound.ts';
@@ -184,6 +186,9 @@ const KIND: Record<TurnKind, DeliverKind> = {
 /** Retryable: the job waits (server full, vm-manager down). */
 export class RetryableTurnError extends Error {}
 
+/** The wake found every awake place busy (or the vm-manager unreachable): retried, then the user is told. */
+export class WakeBusyError extends RetryableTurnError {}
+
 /** The vm-manager's fixed prefixes on a ResourceExhausted wake (its grpcserver). Never match a sentence. */
 export const DISK_LIMIT_MARKER = 'disk_limit:';
 export const DISK_GUARD_MARKER = 'disk_guard:';
@@ -219,6 +224,44 @@ async function storageFullNotice(
     'NX',
   );
   if (first === 'OK') await queueOutbound({ userId, ...said, text: storageFullText() });
+}
+
+export function serverBusyText(): string {
+  return "Tex is busy right now and couldn't start your request. Please send it again in a few minutes.";
+}
+
+/** One day: far longer than the retries (about 13 minutes) that lead to the notice. */
+const SERVER_BUSY_NOTICE_SECONDS = 24 * 3600;
+
+/**
+ * The last try to wake the agent failed because every awake place is busy. The message is marked
+ * failed (the web app then offers "Send again"), one audit line is written and the user gets one
+ * plain reply on the channel they wrote from. A re-run of the job sends no second reply (a key per
+ * message, in Redis).
+ */
+async function serverBusyNotice(
+  input: TurnInput,
+  said: ReturnType<typeof turnSays>,
+  reason: string,
+): Promise<void> {
+  const { userId } = input;
+  if (input.inboundMessageId) await setMessageStatus(input.inboundMessageId, 'failed');
+  const first = await redis().set(
+    `server-busy-notice:${userId}:${input.deliveryId}`,
+    '1',
+    'EX',
+    SERVER_BUSY_NOTICE_SECONDS,
+    'NX',
+  );
+  if (first !== 'OK') return;
+  await audit({
+    userId,
+    actor: 'system',
+    action: 'server_busy',
+    summary: 'The agent could not be started after all tries: every awake place was busy',
+    details: { deliveryId: input.deliveryId, channel: input.channel, reason },
+  });
+  await queueOutbound({ userId, ...said, text: serverBusyText() });
 }
 
 // --- the engine of the turn in progress (HLD 5.1) ----------------------------------------------
@@ -653,7 +696,7 @@ async function wakeContainer(
       err instanceof ConnectError &&
       [Code.ResourceExhausted, Code.Unavailable, Code.DeadlineExceeded].includes(err.code)
     ) {
-      throw new RetryableTurnError(`wake failed: ${err.message}`);
+      throw new WakeBusyError(`wake failed: ${err.message}`);
     }
     throw err;
   }
@@ -748,6 +791,19 @@ async function turnSteps(given: TurnInput, timer: TurnTimer): Promise<TurnOutcom
   try {
     awake = await wake();
   } catch (err) {
+    // Out of tries and still no room: the user is told, once, instead of silence. Only for a
+    // message from a person (automations and crew jobs keep their own failure handling).
+    const job = currentJob();
+    if (
+      err instanceof WakeBusyError &&
+      input.inboundMessageId &&
+      job &&
+      job.attempt >= (job.maxAttempts ?? MAX_ATTEMPTS)
+    ) {
+      timer.route = 'server_busy';
+      await serverBusyNotice(input, said, err.message);
+      return 'error';
+    }
     if (!(err instanceof StorageFullError)) throw err;
     timer.route = 'storage_full';
     await storageFullNotice(input, said);

@@ -71,7 +71,12 @@ export function startWorkers(processors: Processors, opts: RunnerOptions = {}): 
         }
         try {
           const result = await runInJob(
-            { queuedAt, pickedUpAt: Date.now(), attempt: job.attemptsMade + 1 },
+            {
+              queuedAt,
+              pickedUpAt: Date.now(),
+              attempt: job.attemptsMade + 1,
+              maxAttempts: job.opts.attempts ?? 1,
+            },
             () => handler(job),
           );
           const eventId = (job.data as { eventId?: string }).eventId;

@@ -781,7 +781,7 @@ A message sent from the New automation page says so (`purpose: automation_draft`
 
 ### What can go wrong
 
-- **The server is full, or the vm-manager cannot be reached.** The job fails and is retried with the usual waits.
+- **The server is full, or the vm-manager cannot be reached.** The job fails and is retried with the usual waits. After the 5th try fails, the user gets one plain reply on the channel they wrote from ("Tex is busy right now and couldn't start your request. Please send it again in a few minutes."), the message is marked failed (the web app then offers Send again) and an audit line `server_busy` is written. A re-run of the job sends no second reply.
 - **The connection ends with no result.** The job is retried. If the agent had not yet taken the message, it is delivered again. The container remembers the event id, so the turn does not run twice. If the agent had taken it, the retry stops and the user gets nothing (section 43).
 - **The turn runs too long.** The container cuts it off at 15 minutes.
 - **The Claude sign-in stopped working.** The account goes back to the standard agent, and the user is told.
@@ -3976,7 +3976,7 @@ These were found by reading the code while this report was written. Each is desc
 - **When LiteLLM cannot say what a failed turn's AI cost on any of 5 tries, the AI is not refunded,** although the user was told they were not charged. Awake time, browser time, app actions and paid tools are still given back (section 25).
 - **A turn that breaks after the agent took the message is not run again.** The message is then `processing`. A retried job sees that it is no longer `queued` and stops, and the event is marked `done`. So the user gets no reply, and the message stays `processing`. This is what made the failed refund of 8 October silent (sections 9 and 25).
 - **LiteLLM no longer reports a key's spend per model** (checked on version 1.104.2). So on Pro and Max all Textcrew AI counts as "other models", and credits with the "cheap model only" mark never pay for it, even on the cheap model (sections 23 and 25).
-- **When the server is full, the user is told nothing.** The job tries 5 times over about 13 minutes, then fails with an alert (section 33).
+- **When the server is full, the user is told once, after the last try.** The job tries 5 times over about 13 minutes; the user then gets one "Tex is busy" reply and the message is marked failed (section 9).
 - **Users' files are not copied off the server by the nightly backup.** The upload command gets only the database dump (section 37).
 - **Coupon credits last 30 days when the admin gives no length,** not 90 (section 29).
 - **An approval's details are compared only if the agent gave details when it asked.** Without them, only the action's name is checked (section 15).

@@ -44,6 +44,9 @@ volumes:
   pgdata: {}
   redisdata: {}
   caddydata: {}
+  # Chat files (images, documents, voice notes). The api writes uploads, the worker writes files
+  # from chat apps, and the api serves them to the containers. Survives restarts and deploy.sh.
+  attachments: {}
 
 services:
   caddy:
@@ -204,7 +207,10 @@ services:
     restart: unless-stopped
     command: ['node', '--import', 'tsx', 'src/api/main.ts']
     env_file: [../.env]
+    volumes:
+      - attachments:/data/attachments
     environment:
+      ATTACHMENTS_DIR: /data/attachments
       DATABASE_URL: ${BACKEND_DATABASE_URL:-postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/agent}
       REDIS_URL: redis://redis:6379
       VM_MANAGER_URL: http://vm-manager:9090
@@ -223,7 +229,9 @@ services:
     env_file: [../.env]
     volumes:
       - ${BACKUP_HOST_DIR:-./.backups}:/var/backups/personal-agent
+      - attachments:/data/attachments
     environment:
+      ATTACHMENTS_DIR: /data/attachments
       DATABASE_URL: ${BACKEND_DATABASE_URL:-postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent}@postgres:5432/agent}
       REDIS_URL: redis://redis:6379
       VM_MANAGER_URL: http://vm-manager:9090

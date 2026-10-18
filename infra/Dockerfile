@@ -18,4 +18,7 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY . .
+# Chat files (ATTACHMENTS_DIR). Made here and owned by node so the named volume mounted on it
+# starts out writable by the node user.
+RUN mkdir -p /data/attachments && chown node:node /data/attachments
 USER node

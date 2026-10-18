@@ -17,7 +17,7 @@
 // one, so the user's next message never goes into it unless they write in it. The user cannot
 // delete it (the orchestrator refuses), and the retention clean-up leaves it: it goes only with
 // the account.
-import { rm } from 'node:fs/promises';
+import { removeAttachmentFile } from './attachment-store.ts';
 import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm';
 import { db, type Tx } from '../../shared/db/client.ts';
 import { badRequest } from '../../shared/errors.ts';
@@ -474,7 +474,7 @@ export async function deleteConversation(
               )`,
             ),
           )
-          .returning({ path: attachments.path })
+          .returning({ userId: attachments.userId, path: attachments.path })
       : [];
     await tx.delete(conversations).where(mine(userId, id));
 
@@ -508,7 +508,7 @@ export async function deleteConversation(
     return { deleted, nowActive, files };
   });
   if (!result) return null;
-  for (const f of result.files) await rm(f.path, { force: true });
+  for (const f of result.files) await removeAttachmentFile(f);
   await publish(userId, 'conversation.deleted', { id });
   if (result.nowActive) await announce(result.nowActive);
   return { deleted: result.deleted, nowActive: result.nowActive };

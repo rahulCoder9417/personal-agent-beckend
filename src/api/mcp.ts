@@ -3,6 +3,7 @@ import { Readable } from 'node:stream';
 import type { Hono } from 'hono';
 import { z } from 'zod';
 import { isSuspended } from '../modules/auth/users.ts';
+import { readableAttachmentPath } from '../modules/channels/attachment-store.ts';
 import { getAttachment, verifyFileSignature } from '../modules/channels/files.ts';
 import { checkGate, GATED_TOOLS } from '../modules/orchestrator/gate.ts';
 import { touch, userIdForMcpToken } from '../modules/orchestrator/sandbox.ts';
@@ -51,7 +52,9 @@ export function mountMcp(app: Hono<AppEnv>): void {
       return c.json({ error: { code: 'forbidden', message: 'Bad signature' } }, 403);
     const file = await getAttachment(id);
     if (!file) return c.json({ error: { code: 'not_found', message: 'Not found' } }, 404);
-    return new Response(Readable.toWeb(createReadStream(file.path)) as ReadableStream, {
+    const path = await readableAttachmentPath(file);
+    if (!path) return c.json({ error: { code: 'not_found', message: 'Not found' } }, 404);
+    return new Response(Readable.toWeb(createReadStream(path)) as ReadableStream, {
       headers: {
         'content-type': file.mimeType,
         'content-disposition': `attachment; filename="${encodeURIComponent(file.name)}"`,

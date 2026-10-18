@@ -412,9 +412,9 @@ export async function lastInboundSession(userId: string): Promise<string | null>
 /** Account deletion: remove the user's messages and files, then their conversations. */
 export async function deleteUserChannelData(userId: string): Promise<void> {
   const { attachments } = await import('./schema.ts');
-  const { rm } = await import('node:fs/promises');
+  const { removeAttachmentFile } = await import('./attachment-store.ts');
   const files = await db().select().from(attachments).where(eq(attachments.userId, userId));
-  for (const f of files) await rm(f.path, { force: true });
+  for (const f of files) await removeAttachmentFile(f);
   await db().delete(attachments).where(eq(attachments.userId, userId));
   await db().delete(messages).where(eq(messages.userId, userId));
   await deleteUserConversations(userId);

@@ -360,7 +360,8 @@ export const configSchema = z.object({
   GIT_COMMIT: optional,
   /** Requests per minute per IP on every endpoint (specific endpoints have stricter limits). */
   RATE_LIMIT_PER_IP_PER_MIN: z.coerce.number().int().positive().default(600),
-  ATTACHMENTS_DIR: z.string().default('.tmp/attachments'),
+  /** Where chat files live: one folder per user. In the containers it is a Docker volume (survives deploys). */
+  ATTACHMENTS_DIR: z.string().min(1).default('/data/attachments'),
   /** Largest chat media file the worker downloads (Whisper's limit is 25 MB). */
   MEDIA_MAX_BYTES: z.coerce
     .number()

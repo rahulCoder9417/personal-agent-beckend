@@ -1,5 +1,3 @@
-import { mkdir, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
 import { streamSSE } from 'hono/streaming';
 import {
   findActiveConversation,
@@ -8,6 +6,7 @@ import {
   markConversationRead,
   toApiConversation,
 } from '../../modules/channels/conversations.ts';
+import { saveAttachmentFile } from '../../modules/channels/attachment-store.ts';
 import { listMessages, toApiMessage } from '../../modules/channels/messages.ts';
 import { attachments } from '../../modules/channels/schema.ts';
 import {
@@ -25,7 +24,6 @@ import {
   webChatStartedAt,
 } from '../../modules/orchestrator/chats.ts';
 import { sendWebMessage } from '../../modules/orchestrator/process-message.ts';
-import { config } from '../../shared/config.ts';
 import { db } from '../../shared/db/client.ts';
 import { AppError, badRequest, notFound } from '../../shared/errors.ts';
 import { newId } from '../../shared/ids.ts';
@@ -143,10 +141,7 @@ export const chatRoutes = [
     if (file.size > MAX_ATTACHMENT_BYTES)
       throw new AppError(413, 'invalid_request', 'File too large (max 10 MB)');
     const id = newId('att');
-    const dir = resolve(config().ATTACHMENTS_DIR, user.id);
-    await mkdir(dir, { recursive: true });
-    const path = join(dir, id);
-    await writeFile(path, Buffer.from(await file.arrayBuffer()));
+    const path = await saveAttachmentFile(user.id, id, Buffer.from(await file.arrayBuffer()));
     const name = file.name.slice(0, 200) || 'file';
     const mimeType = file.type || 'application/octet-stream';
     await db()

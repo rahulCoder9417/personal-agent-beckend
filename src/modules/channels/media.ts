@@ -1,12 +1,11 @@
 // Chat media (HLD 0.3): the worker downloads photos, files and voice notes into
 // ATTACHMENTS_DIR/<userId>/<id>, saves an `attachments` row (so the container can fetch it via a
 // signed URL) and turns voice into text with LiteLLM's /v1/audio/transcriptions.
-import { mkdir, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
 import { config } from '../../shared/config.ts';
 import { sha256Hex } from '../../shared/crypto.ts';
 import { db } from '../../shared/db/client.ts';
 import { logger } from '../../shared/logger.ts';
+import { saveAttachmentFile } from './attachment-store.ts';
 import { downloadWhatsappMedia } from './adapters/whatsapp.ts';
 import { telegramApi } from './adapters/telegram.ts';
 import { getInboundByEvent } from './messages.ts';
@@ -97,10 +96,7 @@ async function storeMedia(
   const mimeType =
     (generic ? baseMime(file.mimeType) : declared) || declared || 'application/octet-stream';
   const id = `att_${sha256Hex(key).slice(0, 26)}`;
-  const dir = resolve(config().ATTACHMENTS_DIR, userId);
-  await mkdir(dir, { recursive: true });
-  const path = join(dir, id);
-  await writeFile(path, file.data);
+  const path = await saveAttachmentFile(userId, id, file.data);
   await db()
     .insert(attachments)
     .values({ id, userId, name: media.name, mimeType, sizeBytes: file.data.length, path })

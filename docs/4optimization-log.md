@@ -48,9 +48,35 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 18 October 2026: Free credits last 14 days, awake time costs more, a fee for each wake, and two free-credit loopholes closed
+
+- **Where it is:** merged to `main` in the backend, the vm-manager and the web app; deployed to the test server with the disk limit below.
+- **Why:** the free-credits audit of 17 October. The founder decided: free credits should run out sooner, awake time should cost more, and the loopholes that give free credits or free awake time should close.
+- **What the user notices:**
+  1. The 100 credits at sign-up last 14 days (they lasted 90). Credits from a plan, a top-up or a coupon still last 90 days.
+  2. Awake time costs 1 credit per 5 minutes (it was 10).
+  3. Each time the agent wakes up to do work, that costs 1 credit, on top of the time. Work means a message, an automation or reminder run, a crew job or an approved action. A message while the agent is already awake costs no fee. The web app waking the agent early because the chat was opened costs only its time, unless a message follows. Starting a Claude sign-in costs only its time.
+  4. Connecting a Claude plan now needs credits. At zero it is refused, and nothing wakes. A user may start it 3 times an hour. A sign-in waits 5 minutes for its code (it was 10). At most 2 sign-ins may wait at once on the server, so they can't fill the 8 awake places.
+  5. One inbox gets the 100 sign-up credits once. The same Gmail with dots or a +tag, a googlemail.com address, or an account deleted and made again gets no second 100. The account is made normally, and an audit line says why no credits came. A coupon is now once per person too, checked by inbox and linked chats.
+  Example: a typical active day (6 to 8 wakes, about 45 minutes awake, a few app actions) uses about 18 to 22 credits, so the 100 free credits last about 4 to 6 days of real use.
+- **The change of rate:** each usage sync charges only the 5-minute blocks the new seconds complete. Time already charged at the old rate is never charged again. At most 1 extra credit can come from the switch itself, once per user.
+- **How the wake fee is counted:** the vm-manager already says on each wake whether the container was asleep. That starts a new awake period. The first turn that hands work to the container in that period charges the fee, with a key made of the user and the period, so a retried job never charges twice. The usage list shows it as its own line ("waking your agent").
+- **Backend:** sign-up credits 14 days; awake 300 seconds per credit; wake fee; Claude sign-in credit check and 3 starts an hour; normalized-email marks; coupons once per person.
+- **vm-manager:** at most 2 Claude sign-ins waiting at once (a setting, `CLAUDE_LOGINS_MAX`); a sign-in waits 5 minutes. The Bridge's sign-in wait is 5 minutes too (needs the agent image rebuilt, which the deploy does).
+- **Web app:** credit costs, the pricing "how credits work" box, Help, automations and the credits chart show the new numbers and the wake line; the demo data follows.
+- **Contracts:** `openapi.yaml`: the Claude sign-in can answer 402 (no credits) and 429 (too many starts); usage and the admin's day show wake credits; the new numbers in the descriptions.
+- **Database:** migration `0036_credits_abuse_marks`: a table of hashed, normalized inbox marks owned by billing. Only a hash is kept, never the email itself, and it stays when an account is deleted.
+- **Cost and speed:** no new cost. Each first turn of an awake period does one extra small credit charge.
+- **How it was checked:** new tests for each rule: sign-up grant 14 days; 300 seconds per credit with no double charge across the switch; the wake fee charged once per awake period, never while already awake, never for a prewarm alone, once for a prewarm then a message, never twice on a retry; Claude sign-in refused at zero and on the 4th start in an hour; at most 2 sign-ins waiting (vm-manager); email normalization; a repeated inbox gets no sign-up credits. Backend full suite, lint and type check; vm-manager build, vet, tests and the Bridge's 293 tests; web lint, type check, tests and build.
+- **Still open:** throwaway email sites and catch-all domains can still make new inboxes; Clerk has dashboard switches to block those. A monthly cap on free credits for the whole server (`FREE_CREDITS_MONTHLY_CAP`) is not set. The admin panel and the landing page still state the old numbers until they are updated.
+- **Docs updated:** backend-report sections 23 to 26 and section 30 (the Claude sign-in wait); hld-mvp sections 6 and 7.
+- **Commits:** backend `076bf2f` to `f43e325` and `5f3d147`; vm-manager `5a368ae` `0a882b7`; web `f222a16` `1c9a74e`; this entry in the commit that adds it.
+
+---
+
 ### 18 October 2026: A disk limit for each user's folder, and a guard for the whole server disk
 
-- **Where it is:** on a branch (`fix/disk-limit`) in the vm-manager, not merged or deployed yet.
+- **Where it is:** merged to `main` (vm-manager and backend) on 18 October; deployed to the test server together with the credits changes above.
 - **Why:** the audit of 17 October found no limit on how much a user (or a runaway agent) can write into their folder. The server has one 29 GB disk, about 80% full, so one user could fill it and stop everybody.
 - **What the user notices:** nothing for normal use. A user whose folder holds more than 2 GB cannot wake their agent. They get one clear reply on the channel they wrote from: the storage is full (over 2 GB), Tex can't start, write to support@textcrew.in. The reply is sent at most once an hour per user; their message is marked failed and is not retried, and an audit line (by the system) appears in the admin panel each time. If the server disk is over 90% full, nobody asleep can wake, until space is freed. Agents that are already awake are not touched.
 - **vm-manager:** before a sleeping container is woken, two checks run. First the server guard: if the disk is 90% full or more, the wake is refused and an alert line is logged. Second the user limit: Docker is asked how big the user's folder is, and if it is over the limit the wake is refused and an alert line names the user and the size. If either measurement itself fails, the wake goes ahead and a warning is logged, so a broken check cannot lock everyone out. The limits are settings: 2048 MB per user, 90 percent for the server, and 0 turns either one off. It is a soft limit: the disk cannot enforce it (the server disk is plain ext4, which has no per-folder quotas, and Docker's own size option needs a different disk type), so an agent that is already awake can go past 2 GB until it goes to sleep (idle agents sleep after 3 minutes). Existing users keep their folders and data as they are; there is nothing to migrate. A user with a folder under 2 GB sees no change.

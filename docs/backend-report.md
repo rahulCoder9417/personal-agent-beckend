@@ -2497,7 +2497,7 @@ A plan decides how many credits a user gets each month and what they may use. Th
 | Textcrew AI models | Cheap model only | All models | All models |
 
 - **Launch prices.** Pro and Max have a launch price (what a checkout charges, $19 and $30) and a regular price ($30 and $50). The plans list in the API gives both (`priceCents` and `regularPriceCents`; Free has no regular price). From 17 October the web app and the website show the regular price crossed out beside the launch price, with a small "Launch price" tag, because it has never been charged (until then it was plain words, never struck out). This is display only: the charges and Polar are unchanged. Polar's products are priced at the launch price, and the Polar check compares them with it. Set on 16 October, to be looked at again later.
-- **Sign-up credits.** Every new account gets 100 credits once. They last 90 days. They are given when the account is set up, together with the user's LiteLLM key. If the monthly cap on free credits is reached, they are not given (see "Coupon codes").
+- **Sign-up credits.** Every new account gets 100 credits once. They last 14 days (90 until 18 October 2026). They are given when the account is set up, together with the user's LiteLLM key. If the monthly cap on free credits is reached, they are not given (see "Coupon codes").
 - **Automations:** a repo with pull-request review switched on counts as one.
 - **An own MCP server** is a tool server the user adds to their agent.
 - **Queue priority** works in two places. Incoming messages of Max users are handled first, then Pro, then Free. When the server has no room for another awake container, the vm-manager stops an idle one, Free first and Max last.
@@ -2826,7 +2826,7 @@ The sign-in happens inside the user's container, in the unchanged Claude Code pr
 1. The user starts the connection in the web app. At most 10 starts per hour.
 2. The api makes sure the user has a container and asks the vm-manager to start the sign-in. The container is woken.
 3. Claude Code in the container starts its own sign-in. It gives back an address on Anthropic's site.
-4. The api returns that address. The sign-in stays open for 10 minutes.
+4. The api returns that address. The sign-in stays open for 5 minutes (10 until 18 October 2026).
 5. The user opens the address, signs in with Anthropic, gets a code, and pastes it in the web app.
 6. The api hands the code to the vm-manager, which hands it to Claude Code. The code is not logged and not stored.
 7. Claude Code saves its own sign-in file.

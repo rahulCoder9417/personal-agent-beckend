@@ -152,7 +152,7 @@ Picture: GoDraw, page 1, "The big picture".
 
 1. The user signs up in the web app. Clerk handles the sign-in.
 2. Clerk tells our server that a new user exists.
-3. The worker creates the account and gives it 100 credits.
+3. The worker creates the account and gives it 100 credits, which last 14 days. An inbox that already had an account (the same Gmail with dots or a +tag, or one deleted and made again) gets no second 100.
 4. The worker asks the vm-manager to create the user's container. It is created but not started.
 5. In the web app the user asks for a link code. It looks like `LINK-ABCD-EFGH`, works once, and lasts 10 minutes.
 6. The user sends that code to our Telegram bot.
@@ -385,7 +385,8 @@ The launch prices were set on 16 October, to be looked at again later. A checkou
 | Thing | Price |
 |---|---|
 | Textcrew AI | Its real cost times 2.5 |
-| The container being awake | 1 credit per 10 minutes |
+| The container waking to do work | 1 credit each time |
+| The container being awake | 1 credit per 5 minutes |
 | An app action that changes something | 1 credit |
 | Scout's browser | 2 credits per minute |
 | A web search through Textcrew | 1 credit |
@@ -395,7 +396,7 @@ Free: reading and searching in apps, reading a web page, and the web search buil
 ### The rules for credits
 
 - 1 credit is $0.01 of price.
-- Credits arrive in batches. Each batch lasts 90 days.
+- Credits arrive in batches. Each batch lasts 90 days, except the 100 sign-up credits, which last 14 days.
 - The batch that ends soonest is spent first.
 - We never store one "balance" number. The balance is worked out each time from the batches and the list of charges.
 - Every charge is written once, even if a job runs twice.
@@ -425,7 +426,7 @@ When it is on:
 - After 2 declined cards in a row it turns itself off, and the user is told in the web chat and on Telegram. With no saved card, or when Polar refuses for another reason, it turns off at once and says so.
 - With the setting on, Pricing and Help no longer say that nothing is ever charged at zero.
 
-**Still open:** you want Free users to run out sooner, so that they buy a plan. The choices are fewer sign-up credits, a shorter life for them, or higher prices for everyone. Nothing is changed yet.
+**Decided on 18 October:** sign-up credits last 14 days (they lasted 90), awake time costs 1 credit per 5 minutes (it was 10), and each time the container wakes to do work costs 1 more credit. A typical active day now uses about 18 to 22 credits, so the 100 free credits last about 4 to 6 days of real use.
 
 ---
 
@@ -457,7 +458,7 @@ One exception to rule 6, by decision: a Max user's container with Scout's browse
 | Audience | Developers and tech founders who manage a team. First use case: pull-request review |
 | Channels | Telegram and the web app. WhatsApp and iMessage are built and switched off |
 | AI | Three ways: own API key, own Claude plan (labelled beta), Textcrew AI on credits |
-| Plans | Free $0, Pro $19 (launch price, regular $30), Max $30 (launch price, regular $50), top-up $10 for 800 credits. Credits last 90 days. From 17 October the regular prices are shown crossed out with a "Launch price" tag (display only) |
+| Plans | Free $0, Pro $19 (launch price, regular $30), Max $30 (launch price, regular $50), top-up $10 for 800 credits. Credits last 90 days; the 100 sign-up credits last 14 days. From 17 October the regular prices are shown crossed out with a "Launch price" tag (display only) |
 | The crew | Tex, Byte, Patch, Scout |
 | Web search | Only Scout searches. The engine's own search first; Brave on Max otherwise |
 | The browser | Max plan. It runs inside the user's own container, not at an outside provider |

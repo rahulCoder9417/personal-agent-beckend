@@ -58,7 +58,8 @@ Each entry has a heading with the date and the name of the feature, then the par
 - **Contracts:** `openapi.yaml` descriptions only (the prewarm, the admin wake, the Claude sign-in, `wakeCredits`); no field removed.
 - **Database:** none.
 - **How it was checked:** the wake-fee tests now check that no wake charge is written for a work wake, a second wake after sleep, or a prewarm then a message. The billing, browser, pull-request review and dev-user tests expect one credit less where the fee used to be. Backend full suite (two unrelated flaky tests passed on a re-run), lint and type check; web lint, tests, build and type check; landing lint and build; admin panel lint, type check and tests.
-- **Still open:** run the refund script on the server after the deploy.
+- **Refund run:** the script ran on the test server after the deploy and found 0 wake charges: no one was charged while the fee was live, so nothing had to be given back.
+- **Still open:** nothing.
 - **Docs updated:** hld-mvp sections 7 (cost table, the 18 October decision); backend-report sections 24 to 26 (the wake fee marked removed, the example without it).
 - **Commits:** the commit that adds this entry, in each repo.
 

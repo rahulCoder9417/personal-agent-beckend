@@ -1159,10 +1159,11 @@ A provider such as Google reviews our own sign-in app before everyone may use it
 
 ### How the platform checks that the connection became active
 
-A connection becomes `active`, `expired` or `error` in one of four ways. The first one to happen wins.
+A connection becomes `active`, `expired` or `error` in one of these ways. The first one to happen wins.
 
 - **Composio's webhook.** A webhook is a message a service sends to our server when something happens. Composio sends one when the status changes. The only one Composio documents is "expired".
-- **The app list.** When the web app lists the apps and a connection is still pending, the api asks Composio. With nothing pending it does not ask. So a connection that expires later is learned from Composio's webhook only.
+- **The app list.** When the web app lists the apps and a connection is still pending, the api asks Composio. Since 18 October it also asks about each working connection it has not asked about in the last 15 minutes (the ten newest at most, at the same time). When Composio says one expired or failed, it is marked so, and the page says "Reconnect needed". When Composio can't be asked, nothing changes and the page still loads. Before, a connection that expired later was learned from Composio's webhook only, and that webhook never reached us (the audit of 17 October), so an expired Gmail kept saying "Connected".
+- **An action that failed.** Since 18 October, when an action in an app fails, the api asks Composio about that connection (at most once a minute). When Composio says it expired or failed, it is marked so, and Tex is told: "Gmail needs to be connected again: its connection expired. Tell the user to reconnect it on the Integrations page." The same goes for an approved action the server runs.
 - **The agent's own look.** When the agent calls `get_profile` or `list_app_actions`, or runs an action of an app that is not active, the api asks Composio about the pending connections first. So an app that just finished connecting can be used in the same turn.
 - **The check job.** The worker asks Composio by itself. The first check runs 15 seconds after the link is made. The next ones come 30 seconds, then 1, 2, 4 and 8 minutes later.
 - That is six checks in about 16 minutes. They stop as soon as the connection is no longer pending. After the last one, the other ways can still finish it.
@@ -1176,7 +1177,7 @@ Each connection keeps the time the platform last heard from Composio about it: a
 A user connects an app again with the same account: to move to our own sign-in app, or after the connection expired (Reconnect). The older connection must then go, and what was made on it must follow.
 
 1. Whenever a connection becomes active, in any of the four ways above, the api or the worker adds a job named `settle-connection` to the system queue. One job per connection.
-2. The job looks for the user's older connections of the same app to the same account. "The same account" means the same account label, in any letter case: who the account is (next part). A label we don't have yet is asked of Composio and kept. Composio's record gives none in practice, so the job only finds a match once the app itself has said who both accounts are (next part).
+2. The job looks for the user's older connections of the same app to the same account. "The same account" means the same account label, in any letter case: who the account is (next part). A label we don't have yet is asked of Composio and kept. Composio's record gives none in practice, so since 18 October the job then asks the app itself, with its "who am I" action (next part), for a connection that still works, and keeps the answer. So right after a Reconnect the new connection says who it is, and an older one whose account was known is found. Before, the app was asked only when Tex looked at the apps, after this job had already run, so the job found no match: the old connection stayed, with its automations on it (the audit of 17 October). An old connection that expired before anyone learned who it is still can't be matched: the app can't be asked through it any more.
 3. For each one, the user's app-event automations of that app move to the new connection. The automations module makes a new trigger on the new connection, points the automation at it, then removes the old trigger. Which automations watch the old connection is asked of Composio.
 4. Then the old connection is removed at Composio, and in our table.
 
@@ -1231,7 +1232,7 @@ Each connection keeps who it is signed in as: the user's GitHub username, their 
 
 - An action that changes something costs 1 credit when it succeeds. Reading is free. A failed action costs nothing.
 - At zero credits, a changing action is refused before it reaches Composio. Reading still works.
-- The platform decides by the words in the action's name. CREATE or SEND means a change. GET or LIST means reading. An action it cannot place counts as a change.
+- The platform decides by the words in the action's name. CREATE or SEND means a change. GET or LIST means reading. An action whose name says neither is a change, unless Composio's own description of it says it only reads (`readOnlyHint`). When Composio can't be asked, it counts as a change. Every change asks the user first, but a few harmless ones (section 15).
 - **Composio's keys stay on the server.** The Composio key is a setting of the api and the worker only. No container gets it.
 - The app sign-ins are kept by Composio. Our `connections` table holds only Composio's account id, the status and a label (who the account is, section 14, "Who an app is connected as").
 
@@ -1244,7 +1245,7 @@ Each connection keeps who it is signed in as: the user's GitHub username, their 
 - **Composio is down while a user connects, or will not make a setup** (for example, the Composio key may not make setups). The api answers 503: "Gmail can't be connected right now". Nothing is saved, and the next try asks again.
 - **Composio cannot remove a connected account.** On Disconnect, by the user or an admin, the failure is only written to the server log, and our row is deleted anyway. The account then stays at Composio, with the app's sign-in, and nothing tries again. On account deletion it is different: the row stays and the deletion job fails, so it tries again (section 33).
 - **Two users connect a new app at the same moment.** Each may make a setup at Composio. The first one saved is used by everyone. The other stays unused at Composio, with no connections on it.
-- **Two connections of the same app stay after connecting again.** Composio gave no email for the account, so the server can't tell it from a second account. Since 17 October GitHub and Gmail say who the account is, but only once the agent has looked at the apps, which is usually after the clean-up job has run for the new connection. The agent uses the newer one; the user can remove the old one with Disconnect.
+- **Two connections of the same app stay after connecting again.** The server could not tell the old one from a second account: nobody had learned who the old account was while it still worked (Composio gives no name, and an app other than GitHub and Gmail has no "who am I" action here). Since 18 October every new GitHub or Gmail connection is asked who it is as soon as it is active, so this only happens to a connection made before that, or of another app. The agent uses the newer one; the user can remove the old one with Disconnect.
 - **A trial setting is damaged.** The api and the worker don't start after the restart, and the log says which value is wrong.
 - **Which permissions does an app's sign-in ask for?** Our server sets none; each app uses Composio's default set, which Composio does not publish. The dev-user script's `scopes` command prints it: the setup's own scopes, the ones Composio's sign-in always asks for, Composio's narrowest and smallest sets for the app's actions, and for a Google app each scope's class at Google (basic, non-sensitive, sensitive or restricted). It only reads, and of a setup it reads the scopes only, never the client id or secret beside them. `docs/composio.md`, section 9.
 - **A GitHub organization's private repositories are missing.** GitHub lets an organization keep out sign-in apps it has not approved, and Composio's GitHub sign-in is such an app. The user's own private repositories are there (on 16 October the founder's private `personal-agent-beckend` was read through his connection), but an organization's are not until an owner of the organization approves the app, on GitHub under the organization's settings, "Third-party access". Nothing on our side can change that. Asking Tex "list my repositories" shows what the connection can see.
@@ -1256,29 +1257,60 @@ An approval is the user's yes before the agent does something that other people 
 
 ### Which actions need a yes first
 
-| Kind of action | Words that mark it |
-|---|---|
-| Sending to others | SEND, REPLY, FORWARD, POST, PUBLISH, TWEET, SHARE, INVITE |
-| Deleting | DELETE, REMOVE, TRASH, ARCHIVE |
-| Paying | PAY, PAYMENT, TRANSFER, CHARGE, REFUND |
-| Changing what exists | UPDATE, MOVE, MERGE, CLOSE, CANCEL, ACCEPT, DECLINE |
-| Putting an event in a calendar | CREATE_EVENT (other people may be invited) |
-| GitHub comments and reviews | COMMENT or REVIEW, in a GitHub action that writes |
+**Every action that changes something, since 18 October.** Until then an action asked only when its name had a word such as SEND, DELETE, UPDATE or MERGE. Composio names its actions in many other ways, so the audit of 17 October counted about 900 actions that change or share things and ran without asking, 414 of them in the ten Free apps: delete every event of a calendar, share a Drive file with anyone, make a Gmail filter, add a collaborator or a deploy key to a GitHub repository, add an email address to the user's GitHub account, commit straight to the main branch, start a workflow, make a public gist, delete or schedule a Slack message. Now it is the other way round:
 
-The platform decides by these words in the action's name. There are three exceptions. Pull-request review is one (section 19). A crew job whose brief says "post it on the pull request" is another (section 20). The third is the user's own skip rule for that action ("Don't ask again", below).
+1. An action on the short list of harmless changes (below) runs without asking.
+2. Any other action whose name has a word that changes (send, create, add, update, delete, share, edit, clear, replace…) asks first.
+3. An action whose name only reads (GET, LIST, SEARCH, FETCH…) does not ask.
+4. An action whose name says neither asks, unless Composio's own description of it says it only reads (`readOnlyHint`, and not `destructiveHint`). When Composio can't be asked, it asks.
+
+So an action the platform can't place asks, never the other way round. `list_app_actions` and `describe_app_action` say for each action whether it asks (`requires_approval`), from the same rules.
+
+**The short list of harmless changes.** Each one only adds something new that only the user sees, or tidies the user's own mail, and can be undone. Each still costs 1 credit.
+
+| Action | Why it needs no yes |
+|---|---|
+| Gmail: create a draft | It stays in Drafts. Sending a draft asks |
+| Gmail: create a label | A new, empty label. No mail moves |
+| Gmail: add or remove labels on one email, or on one conversation | Marks it read or unread, starred, or labelled. With Inbox, Trash or Spam among the labels (archiving, trashing, marking as spam) it asks, like moving to Trash |
+| Google Docs: create a document (also from Markdown) | A new, private document |
+| Google Sheets: create a spreadsheet | A new, empty, private spreadsheet |
+| Google Drive: create a folder | A new, empty folder. Nothing moves or is shared |
+| Todoist: create a task | A new task in the user's own list |
+
+Relabelling many emails at once, a new Notion page (it takes the sharing of the page it is put in), a reaction and a star are not on the list: they ask.
+
+**The exceptions.** Pull-request review is one (section 19). A crew job's brief is another (section 20): its one review on the pull request, and since 18 October also Byte's pull request from the job's own branch in the job's repository, and the report as a new issue in it, each once during the job's run (opening a pull request or an issue asked from then on, so the brief must say yes for them). The third is the user's own skip rule for that action ("Don't ask again", below).
 
 ### The life of an approval
 
 1. The agent calls `request_approval` with a short summary, the action's name and its exact inputs. The tool asks for the summary as what the agent will do, starting with the verb: "Send the notes to priya@example.com".
 2. For an app's action, the api first checks the inputs against the action's own list of inputs, which Composio gives (next part). Inputs that don't fit are refused at once, and the user sees nothing.
 3. The api saves it in the table `approvals` as `pending`, with its inputs. It expires after 24 hours.
-4. The api sends Tex's question to the chat the request came from. It is made from the summary, so it is there at once and costs nothing: no model is asked. "I'd like to " goes before the summary, its first word in small letters, and the way to answer goes after it: "I'd like to send the notes to priya@example.com. Approve or Deny below." In web chat the message carries the approval, and the web app shows the Approve and Deny card right under it, with the inputs under the action's own names. Telegram and WhatsApp show two buttons, Approve and Deny. iMessage has no buttons, so the line "Reply YES to approve or NO to deny." is added instead of "Approve or Deny below.". A summary that does not start with a common verb ("send", "delete", "pay", "create" and about 50 more) is kept as written: "I'd like your OK for this: ...". When an automation's run asked, the same question can also go to the user's Telegram chat, with the same two buttons and a last line: "Asked by one of your automations. Tex carries on in the web app after your answer." (next part). A question asked in the web app stays there.
+4. The api sends Tex's question to the chat the request came from. It is made from the summary, so it is there at once and costs nothing: no model is asked. "I'd like to " goes before the summary, its first word in small letters, and the way to answer goes after it: "I'd like to send the notes to priya@example.com. Approve or Deny below." For an app's action a second line comes between the two, written by the server from the action and its real inputs, never from Tex's words (next part): "What will run: Gmail – send email · To: priya@example.com · Subject: Notes". In web chat the message carries the approval, and the web app shows the Approve and Deny card right under it: the same facts under "What will run", always unfolded, and all the inputs under the action's own names behind "Show the details". Telegram and WhatsApp show two buttons, Approve and Deny. iMessage has no buttons, so the line "Reply YES to approve or NO to deny." is added instead of "Approve or Deny below.". A summary that does not start with a common verb ("send", "delete", "pay", "create" and about 50 more) is kept as written: "I'd like your OK for this: ...". When an automation's run asked, the same question can also go to the user's Telegram chat, with the same two buttons and a last line: "Asked by one of your automations. Tex carries on in the web app after your answer." (next part). A question asked in the web app stays there.
 5. The tool answers "pending" at once, with the question the user now sees. It tells the agent to end its turn and not to repeat the question or say it is waiting: the user already sees both. The agent never waits inside a turn. The card is the message: with nothing else to say, Tex's final answer is the word `NO_REPLY`, which the container never sends, so no line pointing at the card comes after it (since 17 October; before, Tex wrote "The approval card is waiting for you above — approve or deny it there.", which stayed under the card after the yes). In the web app the turn has paused: the "working" sign stops and a line under the card says "Waiting for your OK".
 6. The user taps a button, types "yes" or "no", or decides in the web app. A typed answer goes to the newest waiting approval in that chat.
 7. The api records the answer, and in the same database step the event that will wake the agent, so a message the user sends right after the answer is queued after it. For an app action the yes also starts the action at once (next part). The answer goes into the activity log ("Approved: ..." or "Denied: ...").
 8. A job then wakes the agent with a new message, in the conversation the approval was asked in, not the one that is open now. After a yes to an app action: "The user APPROVED ... It is DONE: Textcrew ran it ... Don't run it again. The result: ...", and the agent says how it went. After a no: "The user REJECTED ... Don't do it. Tell them in one short sentence that you won't." In the web app Tex shows as working again from the tap until it answers.
 
-**Example.** Rahul texts "email Priya the notes". He gets "I'd like to send the notes to priya@example.com. Approve or Deny below.", with the two buttons, and nothing else. He taps Approve. The email goes at once; then Tex says it was sent. 1 credit is charged.
+**Example.** Rahul texts "email Priya the notes". He gets "I'd like to send the notes to priya@example.com.", then "What will run: Gmail – send email · To: priya@example.com · Subject: Notes", then "Approve or Deny below.", with the two buttons, and nothing else. He taps Approve. The email goes at once; then Tex says it was sent. 1 credit is charged.
+
+### What will run: the facts from the inputs (since 18 October)
+
+**Why.** Until 18 October the question on Telegram, WhatsApp and iMessage was Tex's own summary only; the real inputs were behind "Show the details" in the web app. A wrong or tricked Tex (it reads emails, web pages and pull requests written by strangers) could write "Send the notes to Priya" while the email went to someone else, and get a yes with one tap (the audit of 17 October, problem 3).
+
+**What the line says.** The server writes it from the action and its inputs, in this order, and only what the inputs hold:
+
+- the app and the action, in words: "Gmail – send email", "GitHub – add a repository collaborator";
+- where it acts: the repository (owner/repo) for GitHub, the calendar, the file, the folder, the document, the event, the branch;
+- who it goes to (every to, cc, bcc, guest, channel), or who gets access and with which rights (a person, an email address, "anyone with the link", "everyone (public)");
+- whether it makes something public ("public: anyone can see it");
+- the labels it adds or removes, a filter's rule and what it then does, where a webhook sends to;
+- the subject or the title, and the first words of the text (100 characters at most);
+- a commit's files (how many, and their names);
+- last, under "Other inputs", the names of any inputs not shown, so nothing is hidden by being left out.
+
+Each value is cut short (80 characters, five people or items and "and 3 more"), and the line at 600 characters. A value is never shown when its input is a password, a token, a key or a secret, or when it looks like one (a GitHub or Slack token, a private key and the like): it reads "(hidden)". Tex's summary stays above the line. The API gives the same facts with each approval (`facts`), and the web app shows them on the card and on the Approvals page. The platform's own kinds (a command, a push, a crew job) have no such line: their title is already written by the server.
 
 ### Approved means done (since 17 October)
 
@@ -1316,11 +1348,15 @@ Picking one saves the rule and approves this card, in that order. A rule is for 
 
 **What is never skipped.** Whatever a rule says, also one written straight into the database. The server checks this every time an action is about to run, not only when the rule is made:
 
-- deleting: DELETE, REMOVE, TRASH and ARCHIVE (also DESTROY, PURGE, ERASE and WIPE, should an action be named so);
+- deleting: DELETE, REMOVE, TRASH and ARCHIVE (also DESTROY, PURGE, ERASE and WIPE, should an action be named so, and Slack's "DELETES"); CLEAR, since 18 October (a calendar's events, a sheet's cells); and a Gmail label change that archives, trashes or marks as spam;
 - paying: PAY, PAYMENT, TRANSFER, CHARGE, REFUND, PURCHASE and BUY;
-- merging a pull request (MERGE). A merge writes to the target branch, usually the default one, which may put a change live; it can't simply be taken back, and our git gateway never lets the agent write to a default branch by itself either;
+- merging a pull request (MERGE). A merge writes to the target branch, usually the default one, which may put a change live; it can't simply be taken back, and our git gateway never lets the agent write to a default branch by itself either. Since 18 October writing files or moving a branch straight through GitHub's own actions (a commit, a file's contents, a branch reference) is treated the same: it can write to the default branch too;
+- since 18 October, giving someone access to the account or its things, or sending its data elsewhere for good: collaborators, members and invitations, permissions and sharing, keys, secrets and tokens, webhooks, mail forwarding, delegates and filters (a filter can delete or forward every email that matches); on GitHub also an email address and anything else on the user's own account (adding an email to a GitHub account is a way to take it over with a password reset);
+- since 18 October, making something public: an action with PUBLIC or VISIBILITY in its name, or inputs that make it public (a gist with `public` true, a repository with `private` false or `visibility` public, a share with "anyone");
 - a GitHub review that approves or asks for changes. Only a plain comment review may be skipped: an approval can start an automatic merge;
 - Tex's own kinds: commands and file changes in its container, pushes, crew jobs and running a crew job again.
+
+Sending (an email, a message, a scheduled Slack message), ordinary changes (an event, an issue, a page) and starting a workflow may still be skipped, only by the user's own choice on a card.
 
 The card shows no "Don't ask again" for these, and the API answers `not_skippable`.
 
@@ -1417,7 +1453,7 @@ The agent must name an earlier request of the same user for the same action; any
 - **Never answered.** After 24 hours an hourly job marks it `expired`. The agent is not woken. Nothing runs.
 - **A late tap on an old button.** The user gets "That approval was already answered or has expired.", or for a replaced one "That request was replaced by a newer one. Please answer the newest request." Since 16 October the buttons go once a request is answered, so this is rare: a tap in the second before the edit.
 - **Telegram can't be reached when the buttons should go.** The job tries again, up to 5 times. If it never gets through, the buttons stay, and a tap gets the line above.
-- **A risky action with no approval.** Refused. The message tells the agent to use the approval's id if the user already said yes, and otherwise to ask first.
+- **A risky action with no approval.** Refused. The message tells the agent to use the approval's id if the user already said yes, and otherwise to ask first. Since 18 October that is any action that changes something, but the short list above.
 - **The agent changes the email after the yes.** Refused, because the inputs differ. The approval still works: with no inputs sent, the approved ones run.
 - **The agent asks with inputs the action doesn't have.** Refused before the user sees anything, with the action's real inputs (above).
 - **The app refuses the approved action.** Nothing happens and nothing is charged. The agent is told in the message about the yes. It may try once more, or ask again with the corrected inputs; the earlier request is then replaced (above).
@@ -1425,7 +1461,7 @@ The agent must name an earlier request of the same user for the same action; any
 - **The worker stops in the middle of an approved action.** It is never run again, and Tex tells the user to check in the app (above).
 - **A skip rule covers some recipients but not all.** It asks, with a card, as if there were no rule. The card offers to add the others to the list, or "Anyone".
 - **The user removes a rule while Tex is working.** A request after that asks. One already running finishes, and stays in the log as auto-approved.
-- **A rule for a deleting or paying action ends up in the database anyway** (by hand, or an old bug). It is ignored: the action asks.
+- **A rule for a deleting or paying action ends up in the database anyway** (by hand, or an old bug). It is ignored: the action asks. The same for every kind that is never skipped (above), for example a rule for "Anyone" on adding a GitHub collaborator.
 - **The account is deleted.** Every approval of the user goes, in any state, with the inputs saved with it, and every skip rule with the addresses it holds. A job that still holds one of their ids finds nothing and does nothing.
 
 ### Approvals for the agent's own actions

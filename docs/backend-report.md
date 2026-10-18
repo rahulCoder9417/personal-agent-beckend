@@ -2185,7 +2185,7 @@ A grant is one batch of credits given to one user. It is one row in the table `c
 
 | Source | Amount | How long it lasts |
 |---|---|---|
-| Sign-up | 100, once per account | 90 days |
+| Sign-up | 100, once per inbox (below) | 14 days |
 | Monthly plan | 1,500 (Pro) or 4,500 (Max) | 90 days |
 | Top-up | 800 for $10 | 90 days |
 | Coupon | Set by the coupon | Set by the coupon |
@@ -2194,7 +2194,15 @@ A grant is one batch of credits given to one user. It is one row in the table `c
 
 The ledger is the list of every change to a user's credits. It is the table `credit_ledger`. Rows are only added, and the database refuses to edit one. Each row says which user, which grant, how many credits went in or out, the reason and a short text. The user sees this list as their credit history.
 
-**The 90-day life.** Every credit lasts 90 days from the day it is granted. Only a coupon or an admin can set another length. Unused monthly credits carry over: they do not end at renewal, and they do not end when the plan ends. An expired grant stops counting in the balance at once. A job runs every hour, sets what is left of expired grants to zero, and writes a ledger row "Credits expired".
+**How long credits last.** Credits last 90 days from the day they are granted, except the 100 sign-up credits, which last 14 days. That changed on 18 October 2026; sign-up credits given before keep their 90 days. Only a coupon or an admin can set another length. Unused monthly credits carry over: they do not end at renewal, and they do not end when the plan ends. An expired grant stops counting in the balance at once. A job runs every hour, sets what is left of expired grants to zero, and writes a ledger row "Credits expired".
+
+**One sign-up grant per inbox.** Since 18 October 2026 the 100 sign-up credits go to the first account of an email inbox only. The email is put in a normal form first: small letters; anything after a `+` in the name dropped (`ann+shop@example.com` is `ann@example.com`); for Gmail also the dots in the name dropped, and `googlemail.com` counted as `gmail.com` (`A.nn@googlemail.com` is `ann@gmail.com`). If an account, live or deleted, ever had the same inbox, the new account is made as usual, with its container and its LiteLLM key, but gets no sign-up credits. The activity log then says "Sign-up credits not granted: another account had this email (or a spelling of the same inbox) before".
+
+- The inbox is kept only as a fingerprint: a keyed hash of the normal form, made with the server's encryption key, in the table `signup_email_marks`. The email itself is never stored there, and the fingerprint cannot be turned back into it.
+- The fingerprint is written when the sign-up credits are decided, and again when an account is deleted, while its email is still there. It is kept after the account is gone: that is what stops "delete and sign up again".
+- Accounts made before 18 October get their fingerprints from a small job that runs when the worker starts. It is safe to run again; an inbox keeps the account that had it first.
+- An account with no email at all gets the credits as before. With today's sign-in (Google, or an email that must be confirmed with a code) every account has one.
+- What it does not stop: many real inboxes, such as a domain that takes every address, or throwaway email sites. Clerk can refuse throwaway sites and +tags at sign-up, a setting in its dashboard that is off today.
 
 ### Why no balance number is stored
 
@@ -2232,6 +2240,7 @@ An idempotency key is a unique name for one change. The ledger refuses a second 
 | Change | The key is built from |
 |---|---|
 | Sign-up credits | The user |
+| Wake fee | The user and the awake period |
 | Monthly credits | The subscription and the start of the paid period |
 | Top-up, refund, chargeback | The order id or refund id from Polar, the payment company |
 | Coupon | The coupon and the user |
@@ -2247,14 +2256,16 @@ This section lists everything that is charged, its price, and how it is measured
 | Thing | Price | How it is measured |
 |---|---|---|
 | Textcrew AI | Real cost × 2.5, rounded up | LiteLLM's cost for the user's key |
-| Awake time | 1 credit per 10 minutes | Seconds the container was awake |
+| Awake time | 1 credit per 5 minutes | Seconds the container was awake |
+| Waking the agent (the wake fee) | 1 credit each time the container wakes from sleep to do work | Once per awake period, when its first work starts |
 | App action that changes something | 1 credit per successful action | Counted when the action runs |
 | Browser time (Max only) | 2 credits per minute | Seconds the browser was in use |
 | Web search through Textcrew (Max only) | 1 credit per successful search | Counted when the search runs |
 | Other paid tools | Their set cost × 2.5 | Counted when the tool runs. None exist yet |
 
 - **Textcrew AI** is the AI that Textcrew rents and sells on. LiteLLM is the gateway all model calls go through. Example: a turn uses $0.031 of AI. That is 7.75 credits, charged as 8.
-- **Awake time** counts every second the user's container runs. The container is the closed-off computer the agent lives in. The idle minutes after a turn, before it is stopped, count too.
+- **Awake time** counts every second the user's container runs. The container is the closed-off computer the agent lives in. The idle minutes after a turn, before it is stopped, count too. It was 1 credit per 10 minutes until 18 October 2026.
+- **The wake fee** is 1 credit each time the container wakes from sleep to do work: a message (web or Telegram), an automation or reminder run, a crew job, the turn that tells Tex an approved action ran. It is paid once per awake period: more messages while the container is awake pay none. A wake with no work pays only its awake time: the web app waking the container ahead of a message that never comes, or connecting a Claude plan. If such a wake is followed by a message while the container is still awake, that message pays the fee, once. A turn that fails because of us pays no fee. It started on 18 October 2026.
 - **An app action** is one thing the agent does in a connected app, such as sending an email.
 - **Browser time** is charged on top of awake time. Both run while the browser is open.
 - **Quick replies.** A simple message can be answered by the cheap model without the container. Its cost is part of the AI cost.
@@ -2332,21 +2343,36 @@ App actions and web searches are not in this job: they are charged at the moment
 
 On the user's Claude plan, Claude Code does not use LiteLLM, so the turn has no AI on our side to charge. The job does not ask LiteLLM for anything, and it leaves the LiteLLM key's budget to the 5-minute sync. The refund of a failed Claude-plan turn does not ask LiteLLM either. Leaving LiteLLM out can never lose an AI charge: AI is charged as the difference from the total saved last time, so any AI on the key is charged by the next sync that asks.
 
-Example: Rahul, on Textcrew AI, asks "email Priya the notes". The reply arrives, and about a second and a half later his lock is free. He sends "and cc Asha", and that turn starts at once. Meanwhile the first turn's billing job charges 9 credits, "Usage: AI 8, awake time 1". His balance in the web app drops by 9 a moment after the first reply. On his Claude plan the same turn would cost only the awake time, 1 credit, and LiteLLM would not be asked.
+Example: Rahul, on Textcrew AI, asks "email Priya the notes". His container was already awake. The reply arrives, and about a second and a half later his lock is free. He sends "and cc Asha", and that turn starts at once. Meanwhile the first turn's billing job charges 9 credits, "Usage: AI 8, awake time 1". His balance in the web app drops by 9 a moment after the first reply. On his Claude plan the same turn would cost only the awake time, 1 credit, and LiteLLM would not be asked.
 
 ### Whole blocks and carried-over remainders
 
-Awake time is charged in blocks of 10 minutes (600 seconds). The system adds up all awake seconds ever recorded for the user. Each time the total passes another 600, one credit is charged. A remainder is never lost and never rounded up.
+Awake time is charged in blocks of 5 minutes (300 seconds). The system adds up all awake seconds ever recorded for the user. Each time the total passes another 300, one credit is charged. A remainder is never lost and never rounded up.
 
 | Sync | Awake in this period | Total so far | Blocks reached | Charged now |
 |---|---|---|---|---|
 | 1 | 4 minutes (240 s) | 240 s | 0 | 0 |
-| 2 | 7 minutes (420 s) | 660 s | 1 | 1 |
-| 3 | 25 minutes (1,500 s) | 2,160 s | 3 | 2 |
+| 2 | 7 minutes (420 s) | 660 s | 2 | 2 |
+| 3 | 25 minutes (1,500 s) | 2,160 s | 7 | 5 |
 
 In sync 1 a turn kept the container awake for 4 minutes. Nothing is charged yet. The 240 seconds wait for the next sync. Browser time works the same way, with blocks of 30 seconds. Example: the browser was in use for 33 seconds. 1 credit is charged and 3 seconds are carried over. AI cost has no blocks. It is rounded up at each sync that has AI cost.
 
-Full example: a Pro user on Textcrew AI sends a message. The AI costs $0.031, which is 7.75 credits, charged as 8. The container is awake for 5 minutes, and 400 awake seconds were carried over from before. 400 + 300 = 700 seconds, so one block is reached: 1 credit, and 100 seconds are carried over. The charge is 9 credits. The credit history shows "Usage: AI 8, awake time 1".
+Full example: a Pro user on Textcrew AI sends a message while the container is awake. The AI costs $0.031, which is 7.75 credits, charged as 8. The container is awake for 2.5 minutes, and 200 awake seconds were carried over from before. 200 + 150 = 350 seconds, so one block is reached: 1 credit, and 50 seconds are carried over. The charge is 9 credits. The credit history shows "Usage: AI 8, awake time 1". Had the container been asleep, the message would also pay the wake fee, 1 credit, as its own line "Waking your agent".
+
+**The change from 10 to 5 minutes (18 October 2026).** The charge of each sync is "the blocks the new seconds complete", worked out at one rate: the total before the period is only the starting mark. So time charged at the old rate is never charged again, whatever the total. Seconds left over at the old rate, never charged, count on at the new rate: up to 4 minutes 59 seconds of them carry over and the rest are dropped. And the seconds not yet charged when the new code starts (at most the 5 minutes since the last sync) are charged at the new rate. Each of these is at most 1 credit, once per user.
+
+### The wake fee
+
+1 credit each time the container wakes to do work (section 24). How it is found and charged:
+
+1. The vm-manager's answer to a wake says whether the container was asleep (`was_stopped`). Each wake the backend asks for writes down, in Redis, that a new awake period began, under a name: the turn's own event when a turn woke it, or a fresh name for the web app's prewarm or an admin's wake.
+2. When a turn is about to hand its work to the container, it looks whether the current period has paid its fee. If not, this turn is its first work: the turn's billing job gets the period's name, and the period is marked paid.
+3. The billing job charges 1 credit first, with the idempotency key "the user and the period", then the usage. The ledger row reads "Waking your agent". A second run of the job, a second job naming the same period, or a turn tried again after the container slept meanwhile (its wake has the same name: the turn's event) charges nothing more.
+4. The check before a turn sees the fee too: when two earlier turns still wait for their billing, the worker charges their fees with their usage.
+5. A turn that fails because of us passes no period. The period stays unpaid, so the next work in it pays the fee.
+6. Any grant may pay it, like awake time. The usage report shows it apart, as `wakeCredits`, and the admin's view of a user shows today's.
+
+What it can miss: when Redis is down or loses the note, no fee is charged (never two). A wake the vm-manager makes by itself, for a Claude sign-in or sign-out, writes nothing down: a message in such an awake period pays the fee only if the period before it ended unpaid.
 
 ### Why a re-run cannot charge twice
 
@@ -2408,12 +2434,14 @@ When a message arrives or an automation fires, the worker first checks that the 
 
 On Telegram, a coupon code sent as a message is still redeemed at zero credits. That check comes before the credit check.
 
+Connecting a Claude plan wakes the container too, so it needs credits the same way: at zero the start is refused with `out_of_credits` and nothing wakes (section 30).
+
 **The turn before may not be billed yet.** A turn's credits are charged by its billing job, a moment after the turn (section 25). So the check can come before the last turn's charge is in. One turn that waits for its billing is allowed: that is the usual case, a second message sent right after a reply. Two are not. If two earlier turns still wait for their billing when a turn starts, the worker bills them itself first, then checks the balance. So a user is never more than one turn ahead of their charges, also when the system queue is slow or stopped. What that one turn cost beyond the balance becomes a small debt (section 23), as awake time already could.
 
 - In web chat the api's own check does not see an unbilled turn. When it lets a message through that the worker then refuses, the out-of-credits reply comes in the chat.
 - The look at the waiting turns is one read in Redis: it adds no trip to the database to a turn.
 
-Example: Asha has 1 credit, and each of her turns keeps the container awake 10 minutes, which is 1 credit. Her first message runs. Her second, sent right after, runs too: the first turn is not billed yet, and the balance still shows 1. Before her third message the worker bills the first two turns itself: 2 credits. Her balance is -1, and she gets the out-of-credits reply. The two billing jobs run later and charge nothing more.
+Example: Asha has 1 credit, and each of her turns keeps the container awake 5 minutes, which is 1 credit. Her first message runs and wakes her container: 1 credit more, the wake fee. Her second, sent right after, runs too: the first turn is not billed yet, and the balance still shows 1. Before her third message the worker bills the first two turns itself: 3 credits (2 for the time, 1 for the wake). Her balance is -2, and she gets the out-of-credits reply. The two billing jobs run later and charge nothing more.
 
 ### A turn that is already running
 

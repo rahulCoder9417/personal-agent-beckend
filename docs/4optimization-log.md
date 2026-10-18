@@ -48,6 +48,22 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 18 October 2026: Cancelling or keeping a plan now leaves a line in the activity log
+
+- **Where it is:** on a branch (`fix/billing-audit`) in the backend, not merged yet. The admin panel needed no change.
+- **Why:** while testing Polar payments live, you pressed "Cancel plan" and then "Keep my plan". Both worked, but neither wrote anything to the activity log, so the admin panel could not show who cancelled or resumed, or when.
+- **What the user notices:** nothing on screen. In the activity log (and so in the admin panel) there is now a line for each action, for example "Pro plan cancelled: stays until 18 Nov" and "Pro plan kept: renews again", with the subscription and the period end kept inside the row.
+- **Backend:** pressing Cancel plan or Keep my plan writes one line, as done by the user. Pressing Cancel twice writes one line, because the second press changes nothing. Changes that come only from Polar now also write one line each, as done by the system: cancelled or kept in Polar's own customer portal, a failed payment (past due), payment going through again, and a move between Pro and Max. A line is written only when our stored state really changes, so a repeated webhook, a re-run job, or Polar echoing the user's own button press adds nothing. The end of a paid plan (back to Free) now writes one "plan ended" line, whether Polar revokes it or the hourly safety net ends it; before this it wrote none.
+- **Cost and speed:** one small database write per real change. Nothing measured.
+- **Contracts:** none changed.
+- **Database:** none (the existing activity log table).
+- **How it was checked:** three new tests in the Polar test file: cancel writes one line, cancel twice and Polar's echo add none, Keep my plan writes one; Polar-only cancel, un-cancel, past due and revoke write one line each, and repeats add none; the hourly safety net writes the "plan ended" line once. The Polar test files and the other tests that end subscriptions pass; lint and type check are clean. Not run on the test server.
+- **Still open:** nothing. Older cancels and resumes (before this change) have no line and cannot be recovered.
+- **Docs updated:** none. `backend-report.md` section 28 does not list the activity lines.
+- **Commits:** backend `e6583f1` (this entry follows in the next commit).
+
+---
+
 ### 17 October 2026: "Don't ask again": skip rules, logged as auto-approved
 
 - **Where it is:** merged to main in the backend and the web app, and live on the test server and app.textcrew.in since 17 October (evening). Migration 0035 is applied on Neon; the backend went out before the web app, as it must.

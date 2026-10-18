@@ -125,9 +125,12 @@ describe('Phase 4: approvals + Composio', () => {
     const ask = await waitFor(async () =>
       tg.sent.find((m) => m.chatId === String(alice.chatId) && m.buttons),
     );
-    // Tex says what it wants to do, from the approval's own summary, and how to answer.
+    // Tex says what it wants to do, from the approval's own summary, then what will really run
+    // (from the inputs, not from Tex), and how to answer.
     expect(ask.text).toBe(
-      'I\'d like to email priya@acme.com: "Report delayed to Monday". Approve or Deny below.',
+      'I\'d like to email priya@acme.com: "Report delayed to Monday".\n' +
+        'What will run: Gmail – send email · To: priya@acme.com · Subject: Report · Text: Delayed to Monday\n' +
+        'Approve or Deny below.',
     );
     expect(ask.buttons!.map((b) => b.text)).toEqual(['✅ Approve', '❌ Deny']);
     await waitFor(async () => tg.sent.find((m) => m.text === 'Drafted it. Waiting for your OK.'));

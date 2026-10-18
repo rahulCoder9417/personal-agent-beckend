@@ -55,6 +55,7 @@ import {
 } from '../../integrations/catalog.ts';
 import { audit } from '../../admin/audit.ts';
 import { composio } from '../../integrations/composio.ts';
+import { approvalFacts } from '../../orchestrator/approval-facts.ts';
 import { approvalAskText, channelOfSession } from '../../orchestrator/approval-text.ts';
 import {
   autoApprovedText,
@@ -400,7 +401,7 @@ defineTool({
       approval_id: a.id,
       status: 'pending',
       expires_at: a.expiresAt.toISOString(),
-      shown_to_user: approvalAskText(a.summary, channelOfSession(sessionKey)),
+      shown_to_user: approvalAskText(a.summary, channelOfSession(sessionKey), approvalFacts(a)),
       ...(step ? { step_id: step.stepId } : {}),
       ...(inputsNote ? { inputs_note: inputsNote } : {}),
       ...(replaced

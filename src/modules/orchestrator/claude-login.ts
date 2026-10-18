@@ -12,7 +12,7 @@ import {
   type AgentSettingsView,
 } from './agent-settings.ts';
 import { ensureSandbox } from './sandbox.ts';
-import { userHasCredits } from './turn.ts';
+import { DISK_LIMIT_MARKER, storageFullText, userHasCredits } from './turn.ts';
 import { vm } from './vm.ts';
 
 /**
@@ -62,6 +62,13 @@ export async function startClaudeLogin(userId: string): Promise<ClaudeLoginStart
       expiresAt: new Date(Number(res.expiresAtUnixMs)),
     };
   } catch (err) {
+    // The user's folder is over its size limit: the container can't wake for anything.
+    if (
+      err instanceof ConnectError &&
+      err.code === Code.ResourceExhausted &&
+      err.rawMessage.startsWith(DISK_LIMIT_MARKER)
+    )
+      throw new AppError(503, 'unavailable', storageFullText());
     // No awake place free, or 2 sign-ins already wait on the server (the vm-manager's limit).
     if (err instanceof ConnectError && err.code === Code.ResourceExhausted)
       throw new AppError(

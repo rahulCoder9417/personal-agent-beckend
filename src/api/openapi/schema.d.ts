@@ -1276,7 +1276,14 @@ export interface paths {
          * Start connecting the user's Claude plan (official Claude Code sign-in)
          * @description Wakes the user's container and starts the unmodified Claude Code sign-in there. Open
          *     `authorizeUrl` (Anthropic's own page), sign in, then send the code Anthropic shows to the
-         *     complete endpoint. We never see or store Claude credentials. Rate limited.
+         *     complete endpoint. We never see or store Claude credentials.
+         *
+         *     The container is awake while the sign-in waits, and awake time is charged, so the start
+         *     needs credits, like a message: at zero or below it answers 402 `out_of_credits` and wakes
+         *     nothing. At most 3 starts per user per hour (429 after that). A sign-in waits at most 5
+         *     minutes for its code (`expiresAt`); then it ends and the container may sleep. At most 2
+         *     sign-ins may wait at once on the whole server, so they never take more than 2 of the
+         *     awake places: a start beyond that answers 503 `unavailable`, try again in a few minutes.
          */
         post: operations["startClaudeLogin"];
         delete?: never;
@@ -2308,7 +2315,7 @@ export interface paths {
          * @description The same wake a turn makes: the container is made first if the user has none, then started
          *     and checked for ready; afterwards the engine and the browser switch are set again if they
          *     differ. It needs the user to have credits, because awake time is charged to them (1 credit
-         *     per 10 minutes; the idle stop puts it back to sleep after 3 quiet minutes).
+         *     per 5 minutes; the idle stop puts it back to sleep after 3 quiet minutes).
          */
         post: operations["adminWakeContainer"];
         delete?: never;
@@ -3998,6 +4005,9 @@ export interface components {
              */
             monthlyCredits: number;
             /**
+             * @description Credits given once when the account is made. They last 14 days (every other credit
+             *     lasts 90). Not given when an account with the same email, or a variant of it (letter
+             *     case, Gmail dots, a +tag, googlemail.com), had or has an account already.
              * @example 100
              * @example 0
              * @example 0
@@ -4963,7 +4973,10 @@ export interface components {
              * @description Anthropic's sign-in page
              */
             authorizeUrl: string;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description When the sign-in stops waiting for its code (5 minutes after the start).
+             */
             expiresAt: string;
         };
         ActivityEntry: {
@@ -7094,8 +7107,12 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            402: components["responses"]["OutOfCredits"];
             429: components["responses"]["RateLimited"];
-            /** @description The agent container is unavailable right now; retry */
+            /**
+             * @description The agent container is unavailable right now, the server has no awake place free, or
+             *     2 other sign-ins are already waiting; retry in a few minutes
+             */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -7754,7 +7771,7 @@ export interface operations {
                     reason: string;
                     /**
                      * Format: date-time
-                     * @description Omitted = 90 days from now (like every grant); null = never expires.
+                     * @description Omitted = 90 days from now (like monthly and top-up credits); null = never expires.
                      */
                     expiresAt?: string | null;
                     idempotencyKey: string;

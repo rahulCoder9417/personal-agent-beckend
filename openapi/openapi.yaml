@@ -1954,7 +1954,14 @@ paths:
       description: |
         Wakes the user's container and starts the unmodified Claude Code sign-in there. Open
         `authorizeUrl` (Anthropic's own page), sign in, then send the code Anthropic shows to the
-        complete endpoint. We never see or store Claude credentials. Rate limited.
+        complete endpoint. We never see or store Claude credentials.
+
+        The container is awake while the sign-in waits, and awake time is charged, so the start
+        needs credits, like a message: at zero or below it answers 402 `out_of_credits` and wakes
+        nothing. At most 3 starts per user per hour (429 after that). A sign-in waits at most 5
+        minutes for its code (`expiresAt`); then it ends and the container may sleep. At most 2
+        sign-ins may wait at once on the whole server, so they never take more than 2 of the
+        awake places: a start beyond that answers 503 `unavailable`, try again in a few minutes.
       responses:
         "201":
           description: Sign-in started
@@ -1962,9 +1969,12 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ClaudeLoginStart" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "402": { $ref: "#/components/responses/OutOfCredits" }
         "429": { $ref: "#/components/responses/RateLimited" }
         "503":
-          description: The agent container is unavailable right now; retry
+          description: |
+            The agent container is unavailable right now, the server has no awake place free, or
+            2 other sign-ins are already waiting; retry in a few minutes
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -2535,7 +2545,7 @@ paths:
                 expiresAt:
                   type: [string, "null"]
                   format: date-time
-                  description: Omitted = 90 days from now (like every grant); null = never expires.
+                  description: Omitted = 90 days from now (like monthly and top-up credits); null = never expires.
                 idempotencyKey: { type: string }
       responses:
         "200":
@@ -3619,7 +3629,7 @@ paths:
         The same wake a turn makes: the container is made first if the user has none, then started
         and checked for ready; afterwards the engine and the browser switch are set again if they
         differ. It needs the user to have credits, because awake time is charged to them (1 credit
-        per 10 minutes; the idle stop puts it back to sleep after 3 quiet minutes).
+        per 5 minutes; the idle stop puts it back to sleep after 3 quiet minutes).
       parameters:
         - { name: userId, in: path, required: true, schema: { type: string } }
       requestBody:
@@ -5830,7 +5840,13 @@ components:
             regular $30"), never struck out. `null` when the plan has no launch price (Free).
         interval: { type: [string, "null"], enum: [month, null] }
         monthlyCredits: { type: integer, examples: [0, 1500, 4500] }
-        signupCredits: { type: integer, examples: [100, 0, 0] }
+        signupCredits:
+          type: integer
+          examples: [100, 0, 0]
+          description: |
+            Credits given once when the account is made. They last 14 days (every other credit
+            lasts 90). Not given when an account with the same email, or a variant of it (letter
+            case, Gmail dots, a +tag, googlemail.com), had or has an account already.
         limits:
           type: object
           required: [apps, automations, ownMcpServers, topUps, models, browser]
@@ -6822,7 +6838,10 @@ components:
       properties:
         loginId: { type: string }
         authorizeUrl: { type: string, format: uri, description: "Anthropic's sign-in page" }
-        expiresAt: { type: string, format: date-time }
+        expiresAt:
+          type: string
+          format: date-time
+          description: When the sign-in stops waiting for its code (5 minutes after the start).
 
     ActivityEntry:
       type: object

@@ -48,6 +48,20 @@ Each entry has a heading with the date and the name of the feature, then the par
 
 ## 3. The log
 
+### 20 October 2026: The live Telegram bot is now @TextcrewBot ("Tex")
+
+- **Where it is:** on the server since 20 October 2026.
+- **Why:** the launch bot replaces the test bot `@TestingtexBot`, with the name Tex and the Tex face as its picture.
+- **What the user notices:** the bot is `@TextcrewBot`, shown as "Tex". The "Link Telegram" button and its instructions name the new bot. Someone already linked stays linked, because Telegram gives a person the same chat id in every bot, but must open the new bot and press Start once before it can write to them. The old bot no longer answers. Founder alerts come from the new bot.
+- **Backend:** no code change. Only settings: the bot's token and username in the server's `.env`, then a deploy. The bot's command menu is set by the api when it starts. The new bot's webhook points at the same address with the same secret; the old bot's webhook was removed so its messages no longer arrive. Telegram refused the webhook six times with "failed to resolve host", although Cloudflare, Google and both the old and new nameservers all answered `18.188.34.91`. So the webhook now also names that IP, which tells Telegram where to send without looking the name up; the certificate is still checked against `api.textcrew.in`. The IP is the server's fixed Elastic IP.
+- **Cost and speed:** none.
+- **Contracts:** none.
+- **Database:** none.
+- **How it was checked:** Telegram's own checks: the new token answers as `@TextcrewBot`, its webhook shows our address and IP with no error, its command menu (`/new`, `/help`) was set by the api on start, and the old bot has no webhook. The deploy passed and the api answered `/healthz`.
+- **Still open:** you press Start on `@TextcrewBot` once, so the bot and the founder alerts can reach you. If the server's IP ever changes, the webhook must be set again with the new IP. The old bot can be deleted in BotFather once nobody needs it.
+- **Docs updated:** `aws-setup.md` sections 6, 9 and 15.
+- **Commits:** the docs commit of 20 October.
+
 ### 18 October 2026: Every app change asks first; the approval says what will really run; a broken connection says so
 
 - **Where it is:** branch `fix/composio-approvals` in the backend and the web app, not merged or deployed yet.
